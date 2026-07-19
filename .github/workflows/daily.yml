@@ -63,7 +63,7 @@ jobs:
               },
               "AI": {
                   "name": "Искусственный Интеллект", "icon": "🤖", "news_ticker": "NVDA", "il_fund": "5140744", 
-                  "il_name": "מגדл AI בינה מלאכותית", "il_name_eng": "Migdal AI",
+                  "il_name": "מגדл AI בינה מלאכותิต", "il_name_eng": "Migdal AI",
                   "tickers": ["NVDA", "MSFT", "AMD", "AVGO", "PLTR", "GOOGL", "AMZN", "TSM", "BOTZ", "AIQ", "ROBO", "IRBO"]
               },
               "Gaming": {
@@ -78,7 +78,7 @@ jobs:
               },
               "Banking": {
                   "name": "Банковский сектор", "icon": "🏦", "news_ticker": "JPM", "il_fund": "5132337", 
-                  "il_name": "מיטб מחקה Banks US", "il_name_eng": "Meitav Banks US",
+                  "il_name": "מיטב מחקה Banks US", "il_name_eng": "Meitav Banks US",
                   "tickers": ["JPM", "BAC", "GS", "MS", "WFC", "XLF", "KBE"]
               },
               "Biotech": {
@@ -218,6 +218,9 @@ jobs:
           def format_pct(val: float) -> str:
               return f"🟢 +{val:.2f}%" if val > 0 else (f"🔴 {val:.2f}%" if val < 0 else f"{val:.2f}%")
 
+          def format_pct_no_emoji(val: float) -> str:
+              return f"+{val:.2f}%" if val > 0 else f"{val:.2f}%"
+
           def format_pct_arrow(val: float) -> str:
               return f"+{val:.2f}% ⤴️" if val > 0 else (f"{val:.2f}% 🔻" if val < 0 else f"{val:.2f}%")
 
@@ -234,21 +237,19 @@ jobs:
               for i, s in enumerate(sorted_sectors):
                   status_icon = "🟢" if s['avg_change'] > 0.5 else ("🔴" if s['avg_change'] < -0.5 else "🟡")
                   
-                  # Открываем сворачиваемый блок ДО названия индустрии, чтобы вся строка была заголовком-шторкой
-                  lines.append("<blockquote expandable>")
-                  lines.append(f"{i+1}. {s['icon']} <b>{s['name_eng'].upper()}</b> {status_icon} {format_pct_arrow(s['avg_change'])}")
+                  # Исправлено: Валидный тег expandable с аргументом. Из заголовка убраны конфликтующие теги форматирования
+                  lines.append('<blockquote expandable="true">')
+                  lines.append(f"{i+1}. {s['icon']} {s['name_eng'].upper()} {status_icon} {format_pct_arrow(s['avg_change'])}")
                   
-                  # Контент внутри шторки
-                  lines.append("  📰 <b>Новости:</b>")
+                  lines.append("  📰 Новости:")
                   for n in s['news']: 
                       lines.append(f"    {n}")
                   
-                  lines.append("  📊 <b>Активы секторов (US):</b>")
+                  lines.append("  📊 Активы секторов (US):")
                   for t in s['tickers_subset']:
                       p_data = s['market_data'].get(t, {"price": 0.0, "change": 0.0})
-                      lines.append(f"    • {t}: <code>{p_data['price']}</code> ({format_pct(p_data['change'])})")
+                      lines.append(f"    • {t}: {p_data['price']} ({format_pct_no_emoji(p_data['change'])})")
                   
-                  # Закрываем скрытый блок для текущей индустрии
                   lines.append("</blockquote>")
                   
               lines.append("\n🇮🇱 <b>TA STOCK MARKET (МЕСТНЫЙ РЫНОК ФОНДОВ)</b>")
@@ -256,10 +257,13 @@ jobs:
               
               for s in sorted_sectors:
                   display_change = s['il_fund_data']['change'] if s['il_fund_data']['price'] > 0 else s['avg_change']
-                  pct_str = format_pct(display_change)
-                  lines.append(f"{s['icon']}{s['il_name_eng']} | <code>{s['il_id']}</code> | <code>{pct_str}</code>")
+                  
+                  # Исправлено: Эмодзи-маркер вынесен за пределы тега code, чтобы не ломать парсинг сущностей Telegram
+                  emoji_marker = "🟢" if display_change > 0 else ("🔴" if display_change < 0 else "")
+                  clean_pct = f"+{display_change:.2f}%" if display_change > 0 else f"{display_change:.2f}%"
+                  
+                  lines.append(f"{s['icon']}{s['il_name_eng']} | <code>{s['il_id']}</code> | {emoji_marker} <code>{clean_pct}</code>")
 
-              # Полностью удален жесткий нижний блок детализации ТОП-3
               lines.append("\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎\n")
               lines.append("@oil_tracker_pavel_bot")
               return "\n".join(lines)
