@@ -33,26 +33,7 @@ jobs:
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-              "Accept-Language": "en-US,en;q=0.9,he;q=0.8",
-              "Origin": "https://www.funder.co.il",
-              "Referer": "https://www.funder.co.il/"
-          }
-
-          ISRAEL_FUNDS = {
-              "5141841": "https://www.funder.co.il/fund/5141841",
-              "5140744": "https://www.funder.co.il/fund/5140744",
-              "5128624": "https://www.funder.co.il/fund/5128624",
-              "5135355": "https://www.funder.co.il/fund/5135355",
-              "5132337": "https://www.funder.co.il/fund/5132337",
-              "5122585": "https://www.funder.co.il/fund/5122585",
-              "5132642": "https://www.funder.co.il/fund/5132642",
-              "5138136": "https://www.funder.co.il/fund/5138136",
-              "5129481": "https://www.funder.co.il/fund/5129481",
-              "5125828": "https://www.funder.co.il/fund/5125828",
-              "5132535": "https://www.funder.co.il/fund/5132535",
-              "5136015": "https://www.funder.co.il/fund/5136015",
-              "5131420": "https://www.funder.co.il/fund/5131420",
-              "5132170": "https://www.funder.co.il/fund/5132170"
+              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7"
           }
 
           SECTORS_CONFIG = {
@@ -130,8 +111,9 @@ jobs:
           EOF
           
           cat << 'EOF' > modules/market.py
-          import re, aiohttp, asyncio
-          from modules.config import ISRAEL_FUNDS, HTTP_TIMEOUT, HEADERS
+          import aiohttp, asyncio, re
+          from bs4 import BeautifulSoup
+          from modules.config import HTTP_TIMEOUT, HEADERS
           
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
               api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
@@ -159,22 +141,32 @@ jobs:
                   return dict(results)
               
           async def fetch_israeli_fund(session: aiohttp.ClientSession, fund_id: str) -> dict:
-              url = ISRAEL_FUNDS.get(fund_id)
-              if not url: return {"price": 0.0, "change": 0.0}
+              # Парсим напрямую веб-страницу фонда для вытягивания последней зафиксированной цены закрытия сессии
+              url = f"https://www.funder.co.il/fund/{fund_id}"
               try:
                   async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
                       if response.status == 200:
                           html_content = await response.text()
-                          # Парсинг оригинальных классов и айди со страниц funder.co.il
-                          price_match = re.search(r'(?:lblLastRate|LastRate|latest-rate)[^>]*>([\d\.,]+)', html_content, re.IGNORECASE)
-                          change_match = re.search(r'(?:lblDailyChange|DailyChange|daily-change)[^>]*>([\d\.,\-+]+)%?', html_content, re.IGNORECASE)
-                          if price_match:
-                              price = float(price_match.group(1).replace(",", ""))
-                              if price > 6000: price /= 100.0
-                              raw_change = change_match.group(1).replace("+", "").replace("%", "") if change_match else "0.0"
-                              return {"price": round(price, 2), "change": round(float(raw_change), 2)}
+                          soup = BeautifulSoup(html_content, 'lxml')
+                          
+                          # Поиск элементов по ID, используемых Funder для отображения параметров
+                          price_el = soup.find(id=re.compile("lblLastRate$|LastRate$"))
+                          change_el = soup.find(id=re.compile("lblDailyChange$|DailyChange$"))
+                          
+                          price_val = 0.0
+                          change_val = 0.0
+                          
+                          if price_el:
+                              raw_p = re.sub(r'[^\d\.]', '', price_el.text.strip().replace(",", ""))
+                              price_val = float(raw_p) if raw_p else 0.0
+                          
+                          if change_el:
+                              raw_c = change_el.text.strip().replace("%", "").replace("+", "")
+                              change_val = float(raw_c) if raw_c else 0.0
+                              
+                          return {"price": round(price_val, 2), "change": round(change_val, 2)}
               except Exception as e:
-                  print(f"Ошибка парсинга Funder ID {fund_id}: {e}")
+                  print(f"Критическая ошибка парсинга Funder ID {fund_id}: {e}")
               return {"price": 0.0, "change": 0.0}
           EOF
           
@@ -251,7 +243,6 @@ jobs:
                   us_str = f"+{us_ch:.1f}%" if us_ch > 0 else f"{us_ch:.1f}%"
                   il_str = f"+{il_ch:.1f}%" if il_ch > 0 else f"{il_ch:.1f}%"
                   
-                  # Фиксация выравнивания: сохраняем ширину даже при абсолютном нуле
                   if il_ch == 0.0:
                       il_str = " 0.0%"
                   
@@ -287,7 +278,6 @@ jobs:
               for s in sorted_sectors:
                   il_ch = s['il_fund_data']['change']
                   
-                  # Логика: если изменение 0.0 — то торгов сейчас нет, ставим ⚪, но выводим историческое число
                   if il_ch > 0:
                       ch_emoji = "🟢"
                       ch_sign = f"+{il_ch:.2f}%"
@@ -298,7 +288,9 @@ jobs:
                       ch_emoji = "⚪"
                       ch_sign = f" {il_ch:.2f}%"
                   
-                  lines.append(f"<code>{s['icon']} {s['il_name_eng']:<20} | </code>{ch_emoji} {ch_sign}")
+                  # АРХИТЕКТУРНОЕ ИСПРАВЛЕНИЕ: вся строка находится строго ВНУТРИ моноширинного тега code,
+                  # а эмодзи вынесен наружу, что решает проблему падения парсинга сущностей из-за RTL/LTR.
+                  lines.append(f"{ch_emoji} <code>{s['icon']} {s['il_name_eng']:<20} | {ch_sign}</code>")
 
               lines.append("\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡️\n")
               lines.append("@oil_tracker_pavel_bot")
