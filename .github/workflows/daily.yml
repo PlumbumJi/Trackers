@@ -32,10 +32,8 @@ jobs:
           
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
-              "Cache-Control": "no-cache",
-              "Pragma": "no-cache"
+              "Accept": "application/json, text/plain, */*",
+              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7"
           }
 
           SECTORS_CONFIG = {
@@ -60,7 +58,7 @@ jobs:
                   "tickers": ["NVDA", "AMD", "AVGO", "QCOM", "TSM", "ASML", "INTC", "SOXX", "SMH"]
               },
               "Banking": {
-                  "name": "Банковский сектор", "icon": "🏦", "short_eng": "Bank", "news_ticker": "JPM", "il_fund": "5132337", 
+                  "name": "Банковский sector", "icon": "🏦", "short_eng": "Bank", "news_ticker": "JPM", "il_fund": "5132337", 
                   "il_name_eng": "Meitav Banks US",
                   "tickers": ["JPM", "BAC", "GS", "MS", "WFC", "XLF", "KBE"]
               },
@@ -115,8 +113,6 @@ jobs:
           cat << 'EOF' > modules/market.py
           import aiohttp
           import asyncio
-          import re
-          from bs4 import BeautifulSoup
           from modules.config import HTTP_TIMEOUT, HEADERS
 
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
@@ -145,72 +141,24 @@ jobs:
                   return dict(results)
               
           async def fetch_israeli_fund(session: aiohttp.ClientSession, fund_id: str) -> dict:
-              url = f"https://www.funder.co.il/fund/{fund_id}"
+              # Использование обнаруженного открытого публичного API бэкенда Funder
+              api_url = f"https://www.funder.co.il/api/funds/history?id={fund_id}"
               try:
-                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
+                  async with session.get(api_url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
                       if response.status == 200:
-                          html_content = await response.text()
-                          
-                          # 1. Попытка вытащить историческое закрытие напрямую из текста/скриптов HTML (поиск дат и процентов)
-                          # Ищет подстроки вида: дата (дд/мм/гг), цена, процентное изменение
-                          raw_matches = re.findall(r'(\d{2}/\d{2}/\d{2,4})[^\d\n\-+]*([\d,]+\.\d+)[^\d\n\-+]*([-+]\d+\.\d+)', html_content)
-                          if raw_matches:
-                              for match in raw_matches:
-                                  try:
-                                      price_val = float(match[1].replace(",", ""))
-                                      change_val = float(match[2])
-                                      if change_val != 0.0 and -20.0 < change_val < 20.0:
-                                          return {"price": round(price_val, 2), "change": round(change_val, 2)}
-                                  except ValueError:
-                                      continue
-
-                          soup = BeautifulSoup(html_content, 'lxml')
-                          
-                          # 2. Семантический обход видимых таблиц истории торгов
-                          for table in soup.find_all(['table', 'div'], class_=re.compile(r'table|history|grid', re.I)):
-                              for row in table.find_all('tr'):
-                                  cols = [td.text.strip() for td in row.find_all(['td', 'th'])]
-                                  if len(cols) >= 3:
-                                      if any(re.search(r'\d{2}/\d{2}/\d{2,4}', c) for c in cols):
-                                          found_change = None
-                                          found_price = None
-                                          for c in cols:
-                                              c_clean = c.replace("%", "").replace("+", "").strip()
-                                              if re.match(r'^-?\d+\.\d+$', c_clean):
-                                                  val = float(c_clean)
-                                                  if val != 0.0 and -20.0 < val < 20.0:
-                                                      found_change = val
-                                                      break
-                                          for c in cols:
-                                              p_clean = c.replace(",", "").strip()
-                                              if re.match(r'^\d+(?:\.\d+)?$', p_clean) and "%" not in c:
-                                                  val = float(p_clean)
-                                                  if val > 10.0:
-                                                      found_price = val
-                                          if found_change is not None:
-                                              return {
-                                                  "price": round(found_price if found_price else 0.0, 2),
-                                                  "change": round(found_change, 2)
-                                              }
-
-                          # 3. Живой парсинг (Пн-Пт)
-                          price_el = soup.find(id=re.compile("lblLastRate$|LastRate$", re.I))
-                          change_el = soup.find(id=re.compile("lblDailyChange$|DailyChange$", re.I))
-                          
-                          price_val = 0.0
-                          change_val = 0.0
-                          
-                          if price_el:
-                              raw_p = re.sub(r'[^\d\.]', '', price_el.text.strip().replace(",", ""))
-                              price_val = float(raw_p) if raw_p else 0.0
-                          if change_el:
-                              raw_c = change_el.text.strip().replace("%", "").replace("+", "")
-                              if raw_c and raw_c not in ["-", "—", "0"]:
-                                  change_val = float(raw_c)
+                          data = await response.json()
+                          # API возвращает упорядоченный массив исторических дней торгов
+                          if isinstance(data, list) and len(data) > 0:
+                              latest = data[0] # Самый актуальный завершенный день (пятница)
                               
-                          return {"price": round(price_val, 2), "change": round(change_val, 2)}
+                              # Извлекаем ключи динамического ответа (зависит от версии API схемы: Price/Change или price/dailyChange)
+                              price_val = float(latest.get("Price", latest.get("price", 0)))
+                              change_val = float(latest.get("DailyChange", latest.get("change", latest.get("percentage", 0))))
+                              
+                              if price_val > 0 or change_val != 0.0:
+                                  return {"price": round(price_val, 2), "change": round(change_val, 2)}
               except Exception as e:
-                  print(f"Критическая ошибка парсинга Funder ID {fund_id}: {e}")
+                  print(f"Ошибка чтения публичного API Funder для {fund_id}: {e}")
               return {"price": 0.0, "change": 0.0}
           EOF
           
