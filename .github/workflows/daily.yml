@@ -235,11 +235,10 @@ jobs:
                   "<b>🌍 GLOBAL HEAT MAP MATRIX</b>",
               ]
               
-              # Шапка таблицы с вашими точными эмодзи стран и структуры
-              # Эмодзи флагов и портфеля в начале моноширинной строки Telegram могут сбивать отступы, 
-              # поэтому пробелы выровнены с математической точностью до символа.
-              lines.append("<code>💼 Name    🇺🇸     🇮🇱    Рейтинг</code>")
-              lines.append("<code>" + "-" * 32 + "</code>")
+              # Оптимизированная шапка таблицы без сложных эмодзи-флагов для предотвращения переносов строк
+              # Разметка: Портфель (1) Пробел (1) Имя (6) Пробел (1) US (5) Пробел (1) IL (5) Пробел (2) Рейтинг (9)
+              lines.append("<code>💼 Name     US     IL     Рейтинг</code>")
+              lines.append("<code>" + "-" * 33 + "</code>")
               
               lines.append("<code>")
               for s in sorted_sectors:
@@ -250,18 +249,19 @@ jobs:
                   us_ch = s['avg_change']
                   il_ch = s['il_fund_data']['change'] if s['il_fund_data']['price'] > 0 else us_ch
                   
-                  # Округляем до 1 знака ради сохранения компактности и предотвращения переноса строки
                   us_str = f"+{us_ch:.1f}%" if us_ch > 0 else f"{us_ch:.1f}%"
                   il_str = f"+{il_ch:.1f}%" if il_ch > 0 else f"{il_ch:.1f}%"
                   
-                  score_str = f"{s['score']}/100"
+                  # Объединяем эмодзи статуса и цифровой балл силы сектора в одну финальную колонку
+                  score_str = f"{tag_emoji}{s['score']:>3}/100"
                   
-                  # Динамическая сборка строки под жесткий лимит ширины (без переносов)
-                  row = f"{icon}{name:<6} {us_str:>5} {il_str:>5}  {score_str:>7}"
+                  # Моноширинная сборка с жестким выравниванием
+                  # Иконка визуально занимает 2 пробела, компенсируем отступы для ровных рядов
+                  row = f"{icon}{name:<6} {us_str:>5} {il_str:>5}  {score_str}"
                   lines.append(row)
               lines.append("</code>")
               
-              # Раскрывающийся блок с новостями
+              # Раскрывающийся блок аналитики
               lines.append('\n<blockquote expandable>')
               lines.append("🔍 <b>ДЕТАЛЬНАЯ АНАЛИТИКА И ДВИЖЕНИЕ АКТИВОВ</b>\n")
               
@@ -283,9 +283,9 @@ jobs:
                   
               lines.append("</blockquote>")
               
-              # Блок с названиями израильских фондов
+              # Блок израильского фондового рынка
               lines.append("\n🇮🇱 <b>TA STOCK MARKET (ФОНДЫ ИНДУСТРИЙ)</b>")
-              lines.append("<code>" + "-" * 32 + "</code>")
+              lines.append("<code>" + "-" * 33 + "</code>")
               
               for s in sorted_sectors:
                   display_change = s['il_fund_data']['change'] if s['il_fund_data']['price'] > 0 else s['avg_change']
