@@ -33,7 +33,9 @@ jobs:
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7"
+              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+              "Cache-Control": "no-cache",
+              "Pragma": "no-cache"
           }
 
           SECTORS_CONFIG = {
@@ -114,7 +116,6 @@ jobs:
           import aiohttp
           import asyncio
           import re
-          from datetime import datetime
           from bs4 import BeautifulSoup
           from modules.config import HTTP_TIMEOUT, HEADERS
 
@@ -149,42 +150,50 @@ jobs:
                   async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
                       if response.status == 200:
                           html_content = await response.text()
+                          
+                          # 1. Попытка вытащить историческое закрытие напрямую из текста/скриптов HTML (поиск дат и процентов)
+                          # Ищет подстроки вида: дата (дд/мм/гг), цена, процентное изменение
+                          raw_matches = re.findall(r'(\d{2}/\d{2}/\d{2,4})[^\d\n\-+]*([\d,]+\.\d+)[^\d\n\-+]*([-+]\d+\.\d+)', html_content)
+                          if raw_matches:
+                              for match in raw_matches:
+                                  try:
+                                      price_val = float(match[1].replace(",", ""))
+                                      change_val = float(match[2])
+                                      if change_val != 0.0 and -20.0 < change_val < 20.0:
+                                          return {"price": round(price_val, 2), "change": round(change_val, 2)}
+                                  except ValueError:
+                                      continue
+
                           soup = BeautifulSoup(html_content, 'lxml')
                           
-                          # Универсальный семантический сканер таблиц для выходных дней
-                          for table in soup.find_all('table'):
+                          # 2. Семантический обход видимых таблиц истории торгов
+                          for table in soup.find_all(['table', 'div'], class_=re.compile(r'table|history|grid', re.I)):
                               for row in table.find_all('tr'):
                                   cols = [td.text.strip() for td in row.find_all(['td', 'th'])]
                                   if len(cols) >= 3:
-                                      # Проверяем, содержит ли строка дату (ДД/ММ/ГГГГ)
                                       if any(re.search(r'\d{2}/\d{2}/\d{2,4}', c) for c in cols):
                                           found_change = None
                                           found_price = None
-                                          
                                           for c in cols:
-                                              # Ищем процентное изменение (например: -1.23%, +0.4%, 2.5)
                                               c_clean = c.replace("%", "").replace("+", "").strip()
                                               if re.match(r'^-?\d+\.\d+$', c_clean):
                                                   val = float(c_clean)
-                                                  if -25.0 < val < 25.0 and val != 0.0:
+                                                  if val != 0.0 and -20.0 < val < 20.0:
                                                       found_change = val
                                                       break
-                                          
                                           for c in cols:
-                                              # Ищем цену закрытия (обычно это число от 50 до 50000 без знаков процента)
                                               p_clean = c.replace(",", "").strip()
-                                              if re.match(r'^\d+(?:\.\d+)?$', p_clean):
+                                              if re.match(r'^\d+(?:\.\d+)?$', p_clean) and "%" not in c:
                                                   val = float(p_clean)
-                                                  if val > 10.0 and "%" not in c:
+                                                  if val > 10.0:
                                                       found_price = val
-                                          
                                           if found_change is not None:
                                               return {
                                                   "price": round(found_price if found_price else 0.0, 2),
                                                   "change": round(found_change, 2)
                                               }
 
-                          # Резервный режим (Пн-Пт) если таблицы истории не оказалось
+                          # 3. Живой парсинг (Пн-Пт)
                           price_el = soup.find(id=re.compile("lblLastRate$|LastRate$", re.I))
                           change_el = soup.find(id=re.compile("lblDailyChange$|DailyChange$", re.I))
                           
@@ -194,10 +203,10 @@ jobs:
                           if price_el:
                               raw_p = re.sub(r'[^\d\.]', '', price_el.text.strip().replace(",", ""))
                               price_val = float(raw_p) if raw_p else 0.0
-                          
                           if change_el:
                               raw_c = change_el.text.strip().replace("%", "").replace("+", "")
-                              change_val = float(raw_c) if raw_c else 0.0
+                              if raw_c and raw_c not in ["-", "—", "0"]:
+                                  change_val = float(raw_c)
                               
                           return {"price": round(price_val, 2), "change": round(change_val, 2)}
               except Exception as e:
@@ -321,7 +330,7 @@ jobs:
                       ch_sign = f"{il_ch:.2f}%"
                   else:
                       ch_emoji = "⚪"
-                      ch_sign = f" {il_ch:.2f}%"
+                      ch_sign = f"  0.00%"
                   
                   lines.append(f"{ch_emoji} <code>{s['icon']} {s['il_name_eng']:<20} | {ch_sign}</code>")
 
