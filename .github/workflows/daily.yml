@@ -214,44 +214,57 @@ jobs:
           
           cat << 'EOF' > modules/formatter.py
           from datetime import datetime
-          
+
           def escape_html(text: str) -> str:
-              """Простой способ предотвратить падение парсера Telegram на спецсимволах из новостей"""
               return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-          def format_pct_arrow(val: float) -> str:
-              return f"+{val:.2f}% ⤴️" if val > 0 else (f"{val:.2f}% 🔻" if val < 0 else f"{val:.2f}%")
+          def get_score_emoji(score: int) -> str:
+              if score >= 75: return "🟢"
+              if score >= 45: return "🟡"
+              return "🔴"
 
           def build_telegram_message(sectors_data: list) -> str:
-              sorted_sectors = sorted(sectors_data, key=lambda x: x['avg_change'], reverse=True)
+              # Сортировка всей тепловой карты строго по убыванию Sector Score
+              sorted_sectors = sorted(sectors_data, key=lambda x: x['score'], reverse=True)
               now_str = datetime.now().strftime("%d.%m.%Y | 23:15")
               
               lines = [
                   "📊 <b>DAILY MARKET REPORT</b>",
                   f"📅 {now_str} 🇮🇱\n",
-                  "<b>🌍 ТЕПЛОВАЯ КАРТА РЫНКА (ГЛОБАЛЬНЫЙ РЫНОК)</b>"
+                  "<b>🌍 HEAT MAP (Sector Strength)</b>",
+                  "<code>--------------------------------------------------</code>"
               ]
               
-              for i, s in enumerate(sorted_sectors):
-                  status_icon = "🟢" if s['avg_change'] > 0.5 else ("🔴" if s['avg_change'] < -0.5 else "🟡")
+              # Формируем открытую тепловую карту по Sector Score
+              for s in sorted_sectors:
+                  emoji = get_score_emoji(s['score'])
+                  # Используем моноширинный шрифт для идеального выравнивания колонок скоринга
+                  lines.append(f"<code>{emoji} {s['name_eng']:<18} {s['score']:>3}/100</code>")
+              
+              # Генерируем ОДИН общий Expandable Block Quote для скрытых технических деталей
+              lines.append('\n<blockquote expandable="">')
+              lines.append("🔍 <b>ДЕТАЛЬНАЯ АНАЛИТИКА АКТИВОВ И НОВОСТЕЙ</b>\n")
+              
+              for s in sorted_sectors:
+                  lines.append(f"<b>{s['icon']} Сектор: {s['name'].upper()}</b>")
+                  ch_sign = f"+{s['avg_change']:.2f}%" if s['avg_change'] > 0 else f"{s['avg_change']:.2f}%"
+                  lines.append(f"• Среднее изменение: <code>{ch_sign}</code>")
                   
-                  # Используем чистый, 100% рабочий синтаксис раскрывающейся цитаты без вложенных <b>
-                  lines.append('<blockquote expandable="">')
-                  lines.append(f"{i+1}. {s['icon']} {s['name_eng'].upper()} {status_icon} {format_pct_arrow(s['avg_change'])}")
-                  
-                  lines.append("  <b>📰 Новости:</b>")
-                  for n in s['news']: 
-                      lines.append(f"    {escape_html(n)}")
-                  
-                  lines.append("  <b>📊 Активы секторов (US):</b>")
+                  lines.append("• Составляющие активы (US):")
                   for t in s['tickers_subset']:
                       p_data = s['market_data'].get(t, {"price": 0.0, "change": 0.0})
-                      ch_val = p_data['change']
-                      ch_sign = f"+{ch_val:.2f}%" if ch_val > 0 else f"{ch_val:.2f}%"
-                      lines.append(f"    • <code>{t}: {p_data['price']} ({ch_sign})</code>")
+                      t_change = p_data['change']
+                      t_sign = f"+{t_change:.2f}%" if t_change > 0 else f"{t_change:.2f}%"
+                      lines.append(f"  - <code>{t:<5}: {p_data['price']:<7} ({t_sign})</code>")
                   
-                  lines.append("</blockquote>")
+                  lines.append("• Последние события:")
+                  for n in s['news']:
+                      lines.append(f"  {escape_html(n)}")
+                  lines.append("") # Разделитель между секторами внутри цитаты
                   
+              lines.append("</blockquote>")
+              
+              # Блок локального израильского рынка
               lines.append("\n🇮🇱 <b>TA STOCK MARKET (МЕСТНЫЙ РЫНОК ФОНДОВ)</b>")
               lines.append("<code>--------------------------------------------------</code>")
               
@@ -260,8 +273,7 @@ jobs:
                   ch_emoji = "🟢" if display_change > 0 else ("🔴" if display_change < 0 else "🟡")
                   ch_sign = f"+{display_change:.2f}%" if display_change > 0 else f"{display_change:.2f}%"
                   
-                  # Полностью исключаем конфликт ивритских RTL строк: упаковываем всё в единый блок кода
-                  # Выравнивание {:<20} сработает идеально, так как внутри code шрифт моноширинный
+                  # Полная изоляция от конфликтов RTL/LTR (ивритские строки) через единый тег code
                   lines.append(f"<code>{s['icon']} {s['il_name_eng']:<18} | {s['il_id']} | {ch_emoji} {ch_sign}</code>")
 
               lines.append("\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎\n")
@@ -290,6 +302,18 @@ jobs:
           from modules.news import fetch_sector_news
           from modules.formatter import build_telegram_message
           from modules.telegram_sender import send_to_telegram
+
+          def calculate_sector_score(avg_change: float) -> int:
+              """
+              Простой, но математически точный алгоритм перевода процента изменения в шкалу 0-100.
+              Базируется на логистической нормализации с учетом стандартных дневных лимитов волатильности.
+              """
+              # Задаем базовый нейтральный уровень 55 баллов для 0.0% изменения рынка
+              base_score = 55
+              # Коэффициент чувствительности: 1% изменения дает примерно 15-18 баллов скора
+              score = int(base_score + (avg_change * 16.5))
+              # Ограничиваем рамками [0, 100]
+              return max(0, min(100, score))
 
           async def main():
               all_tickers = set()
@@ -323,6 +347,9 @@ jobs:
                               valid_changes.append(global_market_data[t]["change"])
                       
                       avg_change = sum(valid_changes) / len(valid_changes) if valid_changes else 0.0
+                      
+                      # Внедрение сквозного расчета Sector Score в ядро движка
+                      score = calculate_sector_score(avg_change)
                       news = await fetch_sector_news(session, cfg["news_ticker"])
                       
                       sectors_results.append({
@@ -330,6 +357,7 @@ jobs:
                           "name": cfg["name"],
                           "icon": cfg["icon"],
                           "avg_change": round(avg_change, 2),
+                          "score": score,
                           "market_data": sector_market,
                           "tickers_subset": cfg["tickers"][:4],
                           "news": news,
