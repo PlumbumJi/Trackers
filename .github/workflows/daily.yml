@@ -185,7 +185,6 @@ jobs:
               text = re.sub(r'\s*[:—-]\s*(Yahoo Finance|Reuters|Bloomberg|CNBC|Motley Fool|MarketWatch|MT Newswires|Zacks|Barrons\.com|24/7 Wall St\.).*$', '', text, flags=re.IGNORECASE)
               text = text.strip()
               if not text.endswith('.'): text += '.'
-              # Принудительное ограничение длины одной новости для жесткой экономии лимитов Telegram
               if len(text) > 130:
                   text = text[:127] + "..."
               return text
@@ -241,13 +240,22 @@ jobs:
                   emoji = get_score_emoji(s['score'])
                   lines.append(f"<code>{emoji} {s['name_eng']:<18} {s['score']:>3}/100</code>")
               
-              # Оптимизированный раскрываемый блок с ключевыми новостями без перегрузки лимита символов
               lines.append('\n<blockquote expandable>')
-              lines.append("🔍 <b>ГЛАВНЫЕ СОБЫТИЯ ПО СЕКТОРАМ</b>\n")
+              lines.append("🔍 <b>ДЕТАЛЬНАЯ АНАЛИТИКА И ДВИЖЕНИЕ АКТИВОВ</b>\n")
               
               for s in sorted_sectors:
                   ch_sign = f"+{s['avg_change']:.2f}%" if s['avg_change'] > 0 else f"{s['avg_change']:.2f}%"
                   lines.append(f"<b>{s['icon']} {s['name'].upper()}</b> ({ch_sign})")
+                  
+                  # Генерация ультра-компактной строки топ-активов, менявшихся сильнее всего
+                  if s.get('top_movers'):
+                      mover_tokens = []
+                      for ticker, ch in s['top_movers']:
+                          m_emoji = "📈" if ch >= 0 else "📉"
+                          m_sign = f"+{ch:.2f}%" if ch > 0 else f"{ch:.2f}%"
+                          mover_tokens.append(f"{m_emoji}{ticker}({m_sign})")
+                      lines.append("  " + "  ".join(mover_tokens))
+                  
                   for n in s['news']:
                       lines.append(f"  {escape_html(n)}")
                   lines.append("") 
@@ -333,16 +341,26 @@ jobs:
                   
                   for key, cfg in SECTORS_CONFIG.items():
                       valid_changes = []
-                      sector_market = {}
+                      ticker_movers = []
                       
                       for t in cfg["tickers"]:
                           if t in global_market_data and global_market_data[t]["price"] > 0:
-                              sector_market[t] = global_market_data[t]
-                              valid_changes.append(global_market_data[t]["change"])
+                              ch_val = global_market_data[t]["change"]
+                              valid_changes.append(ch_val)
+                              ticker_movers.append((t, ch_val))
                       
                       avg_change = sum(valid_changes) / len(valid_changes) if valid_changes else 0.0
                       score = calculate_sector_score(avg_change)
                       news = await fetch_sector_news(session, cfg["news_ticker"])
+                      
+                      # Сортируем активы по абсолютному или прямому значению изменения, чтобы выбрать 2 экстремума
+                      # Берем самый растущий и самый падающий активы сектора
+                      top_movers = []
+                      if ticker_movers:
+                          sorted_movers = sorted(ticker_movers, key=lambda x: x[1], reverse=True)
+                          top_movers.append(sorted_movers[0]) # Максимальный рост
+                          if len(sorted_movers) > 1:
+                              top_movers.append(sorted_movers[-1]) # Максимальное падение (или наименьший рост)
                       
                       sectors_results.append({
                           "name_eng": key,
@@ -350,7 +368,7 @@ jobs:
                           "icon": cfg["icon"],
                           "avg_change": round(avg_change, 2),
                           "score": score,
-                          "market_data": sector_market,
+                          "top_movers": top_movers,
                           "news": news,
                           "il_id": cfg["il_fund"],
                           "il_name_eng": cfg["il_name_eng"],
