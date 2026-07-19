@@ -185,6 +185,9 @@ jobs:
               text = re.sub(r'\s*[:—-]\s*(Yahoo Finance|Reuters|Bloomberg|CNBC|Motley Fool|MarketWatch|MT Newswires|Zacks|Barrons\.com|24/7 Wall St\.).*$', '', text, flags=re.IGNORECASE)
               text = text.strip()
               if not text.endswith('.'): text += '.'
+              # Принудительное ограничение длины одной новости для жесткой экономии лимитов Telegram
+              if len(text) > 130:
+                  text = text[:127] + "..."
               return text
 
           async def translate_text(session: aiohttp.ClientSession, text: str) -> str:
@@ -209,7 +212,7 @@ jobs:
                                   translated = await translate_text(session, short_title)
                                   news_list.append(f"• {translated}")
               except: pass
-              return news_list or ["• Значимых новостей за последние 24 часа не зафиксировано."]
+              return news_list or ["• Значимых новостей не зафиксировано."]
           EOF
           
           cat << 'EOF' > modules/formatter.py
@@ -234,35 +237,23 @@ jobs:
                   "<code>--------------------------------------------------</code>"
               ]
               
-              # Формируем открытую тепловую карту по Sector Score
               for s in sorted_sectors:
                   emoji = get_score_emoji(s['score'])
                   lines.append(f"<code>{emoji} {s['name_eng']:<18} {s['score']:>3}/100</code>")
               
-              # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Строгий валидный синтаксис Telegram для раскрываемых цитат
+              # Оптимизированный раскрываемый блок с ключевыми новостями без перегрузки лимита символов
               lines.append('\n<blockquote expandable>')
-              lines.append("🔍 <b>ДЕТАЛЬНАЯ АНАЛИТИКА АКТИВОВ И НОВОСТЕЙ</b>\n")
+              lines.append("🔍 <b>ГЛАВНЫЕ СОБЫТИЯ ПО СЕКТОРАМ</b>\n")
               
               for s in sorted_sectors:
-                  lines.append(f"<b>{s['icon']} Сектор: {s['name'].upper()}</b>")
                   ch_sign = f"+{s['avg_change']:.2f}%" if s['avg_change'] > 0 else f"{s['avg_change']:.2f}%"
-                  lines.append(f"• Среднее изменение: {ch_sign}")
-                  
-                  lines.append("• Составляющие активы (US):")
-                  for t in s['tickers_subset']:
-                      p_data = s['market_data'].get(t, {"price": 0.0, "change": 0.0})
-                      t_change = p_data['change']
-                      t_sign = f"+{t_change:.2f}%" if t_change > 0 else f"{t_change:.2f}%"
-                      lines.append(f"  - <code>{t:<5}</code>: {p_data['price']} ({t_sign})")
-                  
-                  lines.append("• Последние события:")
+                  lines.append(f"<b>{s['icon']} {s['name'].upper()}</b> ({ch_sign})")
                   for n in s['news']:
                       lines.append(f"  {escape_html(n)}")
                   lines.append("") 
                   
               lines.append("</blockquote>")
               
-              # Блок локального израильского рынка
               lines.append("\n🇮🇱 <b>TA STOCK MARKET (МЕСТНЫЙ РЫНОК ФОНДОВ)</b>")
               lines.append("<code>--------------------------------------------------</code>")
               
@@ -271,7 +262,6 @@ jobs:
                   ch_emoji = "🟢" if display_change > 0 else ("🔴" if display_change < 0 else "🟡")
                   ch_sign = f"+{display_change:.2f}%" if display_change > 0 else f"{display_change:.2f}%"
                   
-                  # Изолируем структуру вывода
                   lines.append(f"<code>{s['icon']} {s['il_name_eng']:<18} | {s['il_id']} | </code>{ch_emoji} {ch_sign}")
 
               lines.append("\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎\n")
@@ -361,7 +351,6 @@ jobs:
                           "avg_change": round(avg_change, 2),
                           "score": score,
                           "market_data": sector_market,
-                          "tickers_subset": cfg["tickers"][:4],
                           "news": news,
                           "il_id": cfg["il_fund"],
                           "il_name_eng": cfg["il_name_eng"],
