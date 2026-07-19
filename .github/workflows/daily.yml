@@ -229,44 +229,44 @@ jobs:
               sorted_sectors = sorted(sectors_data, key=lambda x: x['score'], reverse=True)
               now_str = datetime.now().strftime("%d.%m.%Y | 23:15")
               
-              # Шапка отчета
               lines = [
-                  "📊 <b>MARKET ANALYTICS REPORT</b>",
+                  "📊 <b>MARKET ANALYTICS MATRIX</b>",
                   f"📅 {now_str} 🇮🇱\n",
-                  "<b>🌍 GLOBAL & IL HEAT MAP MATRIX</b>",
-                  "<code>" + "-" * 42 + "</code>"
+                  "<b>🌍 GLOBAL HEAT MAP & SECTOR RATING</b>",
               ]
               
-              # Отрисовка объединенной 5-колоночной таблицы в блоке моноширинного шрифта
+              # Шапка таблицы из 5 структурированных колонок
+              # Инд (2) | Название (12) | Метка (2) | США (7) | ИЛ (7) | Рейтинг (7)
+              lines.append("<code>🎯 Инд.Название     М   США     ИЛ      Рейтинг</code>")
+              lines.append("<code>" + "-" * 47 + "</code>")
+              
               lines.append("<code>")
               for s in sorted_sectors:
                   # 1. Эмодзи индустрии
                   icon = s['icon']
                   
-                  # 2. Название индустрии (до 13 символов)
-                  name = s['name_eng'][:13]
+                  # 2. Название индустрии (до 12 символов)
+                  name = s['name_eng'][:12]
                   
-                  # 3. Тепловая метка 
+                  # 3. Тепловая метка
                   tag_emoji = get_score_emoji(s['score'])
                   
-                  # 4. Показатель США / Показатель Израиля
+                  # 4. Показатель США и Показатель Израильского фонда отдельно
                   us_ch = s['avg_change']
                   il_ch = s['il_fund_data']['change'] if s['il_fund_data']['price'] > 0 else us_ch
                   
-                  us_sign = f"+{us_ch:.1f}" if us_ch > 0 else f"{us_ch:.1f}"
-                  il_sign = f"+{il_ch:.1f}" if il_ch > 0 else f"{il_ch:.1f}"
-                  perf_str = f"{us_sign}/{il_sign}%"
+                  us_str = f"+{us_ch:.2f}%" if us_ch > 0 else f"{us_ch:.2f}%"
+                  il_str = f"+{il_ch:.2f}%" if il_ch > 0 else f"{il_ch:.2f}%"
                   
-                  # 5. Рейтинг (Сила сектора)
-                  score_str = f"{s['score']:>3}/100"
+                  # 5. Рейтинг силы
+                  score_str = f"{s['score']}/100"
                   
-                  # Сборка строки с фиксированной шириной колонок
-                  # Эмодзи занимает визуально 2 символа, настраиваем отступы
-                  row = f"{icon} {name:<13} {tag_emoji} {perf_str:<12} {score_str}"
+                  # Строим ровную строку
+                  row = f"{icon} {name:<12} {tag_emoji} {us_str:<7} {il_str:<7} {score_str:>7}"
                   lines.append(row)
               lines.append("</code>")
               
-              # Раскрываемый блок с триггерами движения и новостями
+              # Раскрывающийся блок аналитики (новости и топ движения)
               lines.append('\n<blockquote expandable>')
               lines.append("🔍 <b>ДЕТАЛЬНАЯ АНАЛИТИКА И ДВИЖЕНИЕ АКТИВОВ</b>\n")
               
@@ -274,7 +274,6 @@ jobs:
                   ch_sign = f"+{s['avg_change']:.2f}%" if s['avg_change'] > 0 else f"{s['avg_change']:.2f}%"
                   lines.append(f"<b>{s['icon']} {s['name'].upper()}</b> ({ch_sign})")
                   
-                  # Компактный вывод активов
                   if s.get('top_movers'):
                       mover_tokens = []
                       for ticker, ch in s['top_movers']:
@@ -289,7 +288,18 @@ jobs:
                   
               lines.append("</blockquote>")
               
-              lines.append("⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎\n")
+              # Нижний блок локального рынка фондов (TA STOCK MARKET) сохранен полностью!
+              lines.append("\n🇮🇱 <b>TA STOCK MARKET (МЕСТНЫЙ РЫНОК ФОНДОВ)</b>")
+              lines.append("<code>" + "-" * 47 + "</code>")
+              
+              for s in sorted_sectors:
+                  display_change = s['il_fund_data']['change'] if s['il_fund_data']['price'] > 0 else s['avg_change']
+                  ch_emoji = "🟢" if display_change > 0 else ("🔴" if display_change < 0 else "🟡")
+                  ch_sign = f"+{display_change:.2f}%" if display_change > 0 else f"{display_change:.2f}%"
+                  
+                  lines.append(f"<code>{s['icon']} {s['il_name_eng']:<18} | {s['il_id']} | </code>{ch_emoji} {ch_sign}")
+
+              lines.append("\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎\n")
               lines.append("@oil_tracker_pavel_bot")
               return "\n".join(lines)
           EOF
