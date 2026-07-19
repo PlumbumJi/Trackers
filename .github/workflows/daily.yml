@@ -235,30 +235,27 @@ jobs:
                   status_icon = "🟢" if s['avg_change'] > 0.5 else ("🔴" if s['avg_change'] < -0.5 else "🟡")
                   lines.append(f"  {i+1}. {s['icon']} {s['name_eng']:<15} {status_icon} {format_pct_arrow(s['avg_change'])}")
                   
+                  # Сворачиваемый блок цитат для каждой из 14 индустрий в тепловой карте
+                  lines.append("<blockquote expandable>")
+                  lines.append(f"<b>{s['name'].upper()}</b>")
+                  lines.append("📰 <b>Новости:</b>")
+                  for n in s['news']: 
+                      lines.append(f"  {n}")
+                  
+                  lines.append("📊 <b>Активы секторов (US):</b>")
+                  for t in s['tickers_subset']:
+                      p_data = s['market_data'].get(t, {"price": 0.0, "change": 0.0})
+                      lines.append(f"  • {t}: <code>{p_data['price']}</code> ({format_pct(p_data['change'])})")
+                  lines.append("</blockquote>")
+                  
               lines.append("\n🇮🇱 <b>TA STOCK MARKET (МЕСТНЫЙ РЫНОК ФОНДОВ)</b>")
               lines.append("<code>--------------------------------------------------</code>")
               
               for s in sorted_sectors:
                   display_change = s['il_fund_data']['change'] if s['il_fund_data']['price'] > 0 else s['avg_change']
                   pct_str = format_pct(display_change)
-                  
-                  # Убрано моноширинное выравнивание по левому краю для всей строки.
-                  # Теперь название выводится компактно «как есть», а ID и проценты аккуратно выделены отдельно.
                   lines.append(f"{s['icon']}{s['il_name_eng']} | <code>{s['il_id']}</code> | <code>{pct_str}</code>")
 
-              lines.append("\n✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦\n")
-              lines.append("<b>🔥 ДЕТАЛИЗАЦИЯ ТОП-3 ИНДУСТРИЙ</b>")
-              
-              for s in sorted_sectors[:3]:
-                  lines.append(f"\n{s['icon']} <b>{s['name'].upper()}</b>")
-                  lines.append("📰 <b>Новости:</b>")
-                  for n in s['news']: lines.append(f"  {n}")
-                  
-                  lines.append("📊 <b>Активы секторов (US):</b>")
-                  for t in s['tickers_subset']:
-                      p_data = s['market_data'].get(t, {"price": 0.0, "change": 0.0})
-                      lines.append(f"  • {t}: <code>{p_data['price']}</code> ({format_pct(p_data['change'])})")
-                      
               lines.append("\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎\n")
               lines.append("@oil_tracker_pavel_bot")
               return "\n".join(lines)
