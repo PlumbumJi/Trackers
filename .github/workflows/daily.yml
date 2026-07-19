@@ -111,10 +111,13 @@ jobs:
           EOF
           
           cat << 'EOF' > modules/market.py
-          import aiohttp, asyncio, re
+          import aiohttp
+          import asyncio
+          import re
+          from datetime import datetime
           from bs4 import BeautifulSoup
           from modules.config import HTTP_TIMEOUT, HEADERS
-          
+
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
               api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
               url = f"https://query1.finance.yahoo.com/v8/finance/chart/{api_ticker}?range=1d&interval=1m"
@@ -141,7 +144,6 @@ jobs:
                   return dict(results)
               
           async def fetch_israeli_fund(session: aiohttp.ClientSession, fund_id: str) -> dict:
-              # Парсим напрямую веб-страницу фонда для вытягивания последней зафиксированной цены закрытия сессии
               url = f"https://www.funder.co.il/fund/{fund_id}"
               try:
                   async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
@@ -149,7 +151,25 @@ jobs:
                           html_content = await response.text()
                           soup = BeautifulSoup(html_content, 'lxml')
                           
-                          # Поиск элементов по ID, используемых Funder для отображения параметров
+                          # Если суббота (5) или воскресенье (6) — вытаскиваем показатели пятницы из таблицы истории
+                          weekday = datetime.now().weekday()
+                          if weekday in [5, 6]:
+                              history_table = soup.find('table', id=re.compile("TableHistory|history|gvHistory"))
+                              if history_table:
+                                  rows = history_table.find_all('tr')
+                                  for row in rows:
+                                      cols = row.find_all('td')
+                                      if len(cols) >= 3:
+                                          text_c = cols[2].text.strip().replace("%", "").replace("+", "")
+                                          text_p = cols[1].text.strip().replace(",", "")
+                                          try:
+                                              change_val = float(text_c)
+                                              price_val = float(text_p)
+                                              return {"price": round(price_val, 2), "change": round(change_val, 2)}
+                                          except ValueError:
+                                              continue
+                          
+                          # Стандартный рабочий режим (Пн-Пт)
                           price_el = soup.find(id=re.compile("lblLastRate$|LastRate$"))
                           change_el = soup.find(id=re.compile("lblDailyChange$|DailyChange$"))
                           
@@ -162,6 +182,15 @@ jobs:
                           
                           if change_el:
                               raw_c = change_el.text.strip().replace("%", "").replace("+", "")
+                              if not raw_c or raw_c in ["-", "—", "0"]:
+                                  history_table = soup.find('table', id=re.compile("TableHistory|history|gvHistory"))
+                                  if history_table:
+                                      rows = history_table.find_all('tr')
+                                      if len(rows) > 1:
+                                          cols = rows[1].find_all('td')
+                                          if len(cols) >= 3:
+                                              raw_c = cols[2].text.strip().replace("%", "").replace("+", "")
+                              
                               change_val = float(raw_c) if raw_c else 0.0
                               
                           return {"price": round(price_val, 2), "change": round(change_val, 2)}
@@ -288,8 +317,6 @@ jobs:
                       ch_emoji = "⚪"
                       ch_sign = f" {il_ch:.2f}%"
                   
-                  # АРХИТЕКТУРНОЕ ИСПРАВЛЕНИЕ: вся строка находится строго ВНУТРИ моноширинного тега code,
-                  # а эмодзи вынесен наружу, что решает проблему падения парсинга сущностей из-за RTL/LTR.
                   lines.append(f"{ch_emoji} <code>{s['icon']} {s['il_name_eng']:<20} | {ch_sign}</code>")
 
               lines.append("\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡️\n")
