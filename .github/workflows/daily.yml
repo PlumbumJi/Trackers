@@ -165,7 +165,6 @@ jobs:
                   async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
                       if response.status == 200:
                           html_content = await response.text()
-                          # Поиск текущей цены и суточного изменения на странице Funder
                           price_match = re.search(r'(?:lblLastRate|LastRate|latest-rate)[^>]*>([\d\.,]+)', html_content, re.IGNORECASE)
                           change_match = re.search(r'(?:lblDailyChange|DailyChange|daily-change)[^>]*>([\d\.,\-+]+)%?', html_content, re.IGNORECASE)
                           if price_match:
@@ -236,7 +235,6 @@ jobs:
                   "<b>🌍 GLOBAL HEAT MAP MATRIX</b>",
               ]
               
-              # Ровная шапка без флагов во избежание съезжания моноширинной сетки в клиентах Telegram
               lines.append("<code>💼 Name     US     IL     Рейтинг</code>")
               lines.append("<code>" + "-" * 33 + "</code>")
               
@@ -246,25 +244,22 @@ jobs:
                   name = s['short_eng'][:6]
                   tag_emoji = get_score_emoji(s['score'])
                   
-                  # ЧИСТЫЙ ВЫВОД: Спарсенные данные США с Yahoo и Израиля с сайта Funder
                   us_ch = s['avg_change']
                   il_ch = s['il_fund_data']['change'] 
                   
                   us_str = f"+{us_ch:.1f}%" if us_ch > 0 else f"{us_ch:.1f}%"
                   il_str = f"+{il_ch:.1f}%" if il_ch > 0 else f"{il_ch:.1f}%"
                   
-                  # Если Funder вернул абсолютный 0 (например, торгов не было), выводим красиво
+                  # Если Funder вернул 0 (нет торгов), всё равно выводим число, но визуально не ломаем сетку
                   if s['il_fund_data']['price'] == 0.0 and il_ch == 0.0:
-                      il_str = " --- "
+                      il_str = " 0.0%"
                   
                   score_str = f"{tag_emoji}{s['score']:>3}/100"
                   
-                  # Сборка строки с пиксельным выравниванием по ширине колонок
                   row = f"{icon}{name:<6} {us_str:>5} {il_str:>5}  {score_str}"
                   lines.append(row)
               lines.append("</code>")
               
-              # Разворачиваемый блок детальной аналитики движения и новостей
               lines.append('\n<blockquote expandable>')
               lines.append("🔍 <b>ДЕТАЛЬНАЯ АНАЛИТИКА И ДВИЖЕНИЕ АКТИВОВ</b>\n")
               
@@ -286,22 +281,28 @@ jobs:
                   
               lines.append("</blockquote>")
               
-              # Нижний блок локального рынка израильских фондов (TA STOCK MARKET)
+              # Обновленный нижний блок TA STOCK MARKET
               lines.append("\n🇮🇱 <b>TA STOCK MARKET (ФОНДЫ ИНДУСТРИЙ)</b>")
               lines.append("<code>" + "-" * 33 + "</code>")
               
               for s in sorted_sectors:
                   il_ch = s['il_fund_data']['change']
-                  ch_emoji = "🟢" if il_ch > 0 else ("🔴" if il_ch < 0 else "🟡")
-                  ch_sign = f"+{il_ch:.2f}%" if il_ch > 0 else f"{il_ch:.2f}%"
                   
-                  if s['il_fund_data']['price'] == 0.0 and il_ch == 0.0:
-                      ch_sign = "нет торгов"
+                  # Если изменение положительное/отрицательное — стандартные зеленый/красный маркеры.
+                  # Если изменение ровно 0.0 (или сайт недоступен/выходной день), выводим нейтральный белый эмодзи ⚪️ 
+                  # Но подставляем саму цифру последних торгов
+                  if il_ch > 0:
+                      ch_emoji = "🟢"
+                  elif il_ch < 0:
+                      ch_emoji = "🔴"
+                  else:
                       ch_emoji = "⚪"
+                      
+                  ch_sign = f"+{il_ch:.2f}%" if il_ch > 0 else f"{il_ch:.2f}%"
                   
                   lines.append(f"<code>{s['icon']} {s['il_name_eng']:<20} | </code>{ch_emoji} {ch_sign}")
 
-              lines.append("\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡\n")
+              lines.append("\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡️\n")
               lines.append("@oil_tracker_pavel_bot")
               return "\n".join(lines)
           EOF
