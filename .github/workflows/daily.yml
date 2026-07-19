@@ -32,7 +32,7 @@ jobs:
           
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-              "Accept": "application/json, text/plain, */*",
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
               "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7"
           }
 
@@ -58,7 +58,7 @@ jobs:
                   "tickers": ["NVDA", "AMD", "AVGO", "QCOM", "TSM", "ASML", "INTC", "SOXX", "SMH"]
               },
               "Banking": {
-                  "name": "Банковский sector", "icon": "🏦", "short_eng": "Bank", "news_ticker": "JPM", "il_fund": "5132337", 
+                  "name": "Банковский сектор", "icon": "🏦", "short_eng": "Bank", "news_ticker": "JPM", "il_fund": "5132337", 
                   "il_name_eng": "Meitav Banks US",
                   "tickers": ["JPM", "BAC", "GS", "MS", "WFC", "XLF", "KBE"]
               },
@@ -113,6 +113,8 @@ jobs:
           cat << 'EOF' > modules/market.py
           import aiohttp
           import asyncio
+          import re
+          from bs4 import BeautifulSoup
           from modules.config import HTTP_TIMEOUT, HEADERS
 
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
@@ -141,24 +143,33 @@ jobs:
                   return dict(results)
               
           async def fetch_israeli_fund(session: aiohttp.ClientSession, fund_id: str) -> dict:
-              # Использование обнаруженного открытого публичного API бэкенда Funder
-              api_url = f"https://www.funder.co.il/api/funds/history?id={fund_id}"
+              url = f"https://www.funder.co.il/fund/{fund_id}"
               try:
-                  async with session.get(api_url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
+                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
                       if response.status == 200:
-                          data = await response.json()
-                          # API возвращает упорядоченный массив исторических дней торгов
-                          if isinstance(data, list) and len(data) > 0:
-                              latest = data[0] # Самый актуальный завершенный день (пятница)
+                          html_text = await response.text()
+                          
+                          # Ищем слово יומית и захватываем идущие далее цифры, точки, знаки плюс/минус и знак процента.
+                          # Шаблон учитывает любые скрытые HTML-теги или пробелы между ними.
+                          match = re.search(r'יומית.*?([-+]?\d+\.\d+)\s*%', html_text, re.DOTALL)
+                          if match:
+                              change_val = float(match.group(1))
+                              print(f" Успешный маркер יומית для фонда {fund_id}: {change_val}%")
+                              return {"price": 0.0, "change": round(change_val, 2)}
                               
-                              # Извлекаем ключи динамического ответа (зависит от версии API схемы: Price/Change или price/dailyChange)
-                              price_val = float(latest.get("Price", latest.get("price", 0)))
-                              change_val = float(latest.get("DailyChange", latest.get("change", latest.get("percentage", 0))))
-                              
-                              if price_val > 0 or change_val != 0.0:
-                                  return {"price": round(price_val, 2), "change": round(change_val, 2)}
+                          # Глубокий поиск по DOM, если регулярное выражение не сработало напрямую
+                          soup = BeautifulSoup(html_text, 'lxml')
+                          for element in soup.find_all(text=re.compile("יומית")):
+                              parent = element.parent
+                              # Ищем процентное значение в соседних элементах или внутри родителя
+                              combined_text = parent.get_text() if parent else ""
+                              num_match = re.search(r'([-+]?\d+\.\d+)\s*%', combined_text)
+                              if num_match:
+                                  change_val = float(num_match.group(1))
+                                  return {"price": 0.0, "change": round(change_val, 2)}
+                                  
               except Exception as e:
-                  print(f"Ошибка чтения публичного API Funder для {fund_id}: {e}")
+                  print(f"Ошибка текстового сканирования Funder для {fund_id}: {e}")
               return {"price": 0.0, "change": 0.0}
           EOF
           
