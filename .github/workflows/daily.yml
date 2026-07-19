@@ -229,17 +229,44 @@ jobs:
               sorted_sectors = sorted(sectors_data, key=lambda x: x['score'], reverse=True)
               now_str = datetime.now().strftime("%d.%m.%Y | 23:15")
               
+              # Шапка отчета
               lines = [
-                  "📊 <b>DAILY MARKET REPORT</b>",
+                  "📊 <b>MARKET ANALYTICS REPORT</b>",
                   f"📅 {now_str} 🇮🇱\n",
-                  "<b>🌍 HEAT MAP (Sector Strength)</b>",
-                  "<code>--------------------------------------------------</code>"
+                  "<b>🌍 GLOBAL & IL HEAT MAP MATRIX</b>",
+                  "<code>" + "-" * 42 + "</code>"
               ]
               
+              # Отрисовка объединенной 5-колоночной таблицы в блоке моноширинного шрифта
+              lines.append("<code>")
               for s in sorted_sectors:
-                  emoji = get_score_emoji(s['score'])
-                  lines.append(f"<code>{emoji} {s['name_eng']:<18} {s['score']:>3}/100</code>")
+                  # 1. Эмодзи индустрии
+                  icon = s['icon']
+                  
+                  # 2. Название индустрии (до 13 символов)
+                  name = s['name_eng'][:13]
+                  
+                  # 3. Тепловая метка 
+                  tag_emoji = get_score_emoji(s['score'])
+                  
+                  # 4. Показатель США / Показатель Израиля
+                  us_ch = s['avg_change']
+                  il_ch = s['il_fund_data']['change'] if s['il_fund_data']['price'] > 0 else us_ch
+                  
+                  us_sign = f"+{us_ch:.1f}" if us_ch > 0 else f"{us_ch:.1f}"
+                  il_sign = f"+{il_ch:.1f}" if il_ch > 0 else f"{il_ch:.1f}"
+                  perf_str = f"{us_sign}/{il_sign}%"
+                  
+                  # 5. Рейтинг (Сила сектора)
+                  score_str = f"{s['score']:>3}/100"
+                  
+                  # Сборка строки с фиксированной шириной колонок
+                  # Эмодзи занимает визуально 2 символа, настраиваем отступы
+                  row = f"{icon} {name:<13} {tag_emoji} {perf_str:<12} {score_str}"
+                  lines.append(row)
+              lines.append("</code>")
               
+              # Раскрываемый блок с триггерами движения и новостями
               lines.append('\n<blockquote expandable>')
               lines.append("🔍 <b>ДЕТАЛЬНАЯ АНАЛИТИКА И ДВИЖЕНИЕ АКТИВОВ</b>\n")
               
@@ -247,7 +274,7 @@ jobs:
                   ch_sign = f"+{s['avg_change']:.2f}%" if s['avg_change'] > 0 else f"{s['avg_change']:.2f}%"
                   lines.append(f"<b>{s['icon']} {s['name'].upper()}</b> ({ch_sign})")
                   
-                  # Генерация ультра-компактной строки топ-активов, менявшихся сильнее всего
+                  # Компактный вывод активов
                   if s.get('top_movers'):
                       mover_tokens = []
                       for ticker, ch in s['top_movers']:
@@ -262,17 +289,7 @@ jobs:
                   
               lines.append("</blockquote>")
               
-              lines.append("\n🇮🇱 <b>TA STOCK MARKET (МЕСТНЫЙ РЫНОК ФОНДОВ)</b>")
-              lines.append("<code>--------------------------------------------------</code>")
-              
-              for s in sorted_sectors:
-                  display_change = s['il_fund_data']['change'] if s['il_fund_data']['price'] > 0 else s['avg_change']
-                  ch_emoji = "🟢" if display_change > 0 else ("🔴" if display_change < 0 else "🟡")
-                  ch_sign = f"+{display_change:.2f}%" if display_change > 0 else f"{display_change:.2f}%"
-                  
-                  lines.append(f"<code>{s['icon']} {s['il_name_eng']:<18} | {s['il_id']} | </code>{ch_emoji} {ch_sign}")
-
-              lines.append("\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎\n")
+              lines.append("⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎\n")
               lines.append("@oil_tracker_pavel_bot")
               return "\n".join(lines)
           EOF
@@ -353,14 +370,12 @@ jobs:
                       score = calculate_sector_score(avg_change)
                       news = await fetch_sector_news(session, cfg["news_ticker"])
                       
-                      # Сортируем активы по абсолютному или прямому значению изменения, чтобы выбрать 2 экстремума
-                      # Берем самый растущий и самый падающий активы сектора
                       top_movers = []
                       if ticker_movers:
                           sorted_movers = sorted(ticker_movers, key=lambda x: x[1], reverse=True)
-                          top_movers.append(sorted_movers[0]) # Максимальный рост
+                          top_movers.append(sorted_movers[0]) 
                           if len(sorted_movers) > 1:
-                              top_movers.append(sorted_movers[-1]) # Максимальное падение (или наименьший рост)
+                              top_movers.append(sorted_movers[-1])
                       
                       sectors_results.append({
                           "name_eng": key,
