@@ -63,7 +63,7 @@ jobs:
               },
               "AI": {
                   "name": "Искусственный Интеллект", "icon": "🤖", "news_ticker": "NVDA", "il_fund": "5140744", 
-                  "il_name": "מגדл AI בינה מלאכותิต", "il_name_eng": "Migdal AI",
+                  "il_name": "מגדл AI בינה מלאכותית", "il_name_eng": "Migdal AI",
                   "tickers": ["NVDA", "MSFT", "AMD", "AVGO", "PLTR", "GOOGL", "AMZN", "TSM", "BOTZ", "AIQ", "ROBO", "IRBO"]
               },
               "Gaming": {
@@ -215,12 +215,6 @@ jobs:
           cat << 'EOF' > modules/formatter.py
           from datetime import datetime
           
-          def format_pct(val: float) -> str:
-              return f"🟢 +{val:.2f}%" if val > 0 else (f"🔴 {val:.2f}%" if val < 0 else f"{val:.2f}%")
-
-          def format_pct_no_emoji(val: float) -> str:
-              return f"+{val:.2f}%" if val > 0 else f"{val:.2f}%"
-
           def format_pct_arrow(val: float) -> str:
               return f"+{val:.2f}% ⤴️" if val > 0 else (f"{val:.2f}% 🔻" if val < 0 else f"{val:.2f}%")
 
@@ -237,18 +231,21 @@ jobs:
               for i, s in enumerate(sorted_sectors):
                   status_icon = "🟢" if s['avg_change'] > 0.5 else ("🔴" if s['avg_change'] < -0.5 else "🟡")
                   
-                  # Исправлено: Валидный тег expandable с аргументом. Из заголовка убраны конфликтующие теги форматирования
-                  lines.append('<blockquote expandable="true">')
+                  # 1. Валидный чистый открывающий тег blockquote
+                  lines.append('<blockquote expandable="">')
                   lines.append(f"{i+1}. {s['icon']} {s['name_eng'].upper()} {status_icon} {format_pct_arrow(s['avg_change'])}")
                   
-                  lines.append("  📰 Новости:")
+                  lines.append("  <b>📰 Новости:</b>")
                   for n in s['news']: 
                       lines.append(f"    {n}")
                   
-                  lines.append("  📊 Активы секторов (US):")
+                  lines.append("  <b>📊 Активы секторов (US):</b>")
                   for t in s['tickers_subset']:
                       p_data = s['market_data'].get(t, {"price": 0.0, "change": 0.0})
-                      lines.append(f"    • {t}: {p_data['price']} ({format_pct_no_emoji(p_data['change'])})")
+                      ch_val = p_data['change']
+                      ch_sign = f"+{ch_val:.2f}%" if ch_val > 0 else f"{ch_val:.2f}%"
+                      # Все активы строго экранируются моноширинным тегом code
+                      lines.append(f"    • <code>{t}: {p_data['price']} ({ch_sign})</code>")
                   
                   lines.append("</blockquote>")
                   
@@ -258,11 +255,11 @@ jobs:
               for s in sorted_sectors:
                   display_change = s['il_fund_data']['change'] if s['il_fund_data']['price'] > 0 else s['avg_change']
                   
-                  # Исправлено: Эмодзи-маркер вынесен за пределы тега code, чтобы не ломать парсинг сущностей Telegram
-                  emoji_marker = "🟢" if display_change > 0 else ("🔴" if display_change < 0 else "")
-                  clean_pct = f"+{display_change:.2f}%" if display_change > 0 else f"{display_change:.2f}%"
+                  ch_emoji = "🟢" if display_change > 0 else ("🔴" if display_change < 0 else "🟡")
+                  ch_sign = f"+{display_change:.2f}%" if display_change > 0 else f"{display_change:.2f}%"
                   
-                  lines.append(f"{s['icon']}{s['il_name_eng']} | <code>{s['il_id']}</code> | {emoji_marker} <code>{clean_pct}</code>")
+                  # 2. Полная моноширинная изоляция строки для предотвращения конфликтов RTL/LTR в Telegram API
+                  lines.append(f"{s['icon']} <code>{s['il_name_eng']:<20} | {s['il_id']} | {ch_emoji} {ch_sign}</code>")
 
               lines.append("\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎\n")
               lines.append("@oil_tracker_pavel_bot")
