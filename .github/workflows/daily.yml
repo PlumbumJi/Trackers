@@ -151,27 +151,42 @@ jobs:
                           html_content = await response.text()
                           soup = BeautifulSoup(html_content, 'lxml')
                           
-                          # Если суббота (5) или воскресенье (6) — вытаскиваем показатели пятницы из таблицы истории
-                          weekday = datetime.now().weekday()
-                          if weekday in [5, 6]:
-                              history_table = soup.find('table', id=re.compile("TableHistory|history|gvHistory"))
-                              if history_table:
-                                  rows = history_table.find_all('tr')
-                                  for row in rows:
-                                      cols = row.find_all('td')
-                                      if len(cols) >= 3:
-                                          text_c = cols[2].text.strip().replace("%", "").replace("+", "")
-                                          text_p = cols[1].text.strip().replace(",", "")
-                                          try:
-                                              change_val = float(text_c)
-                                              price_val = float(text_p)
-                                              return {"price": round(price_val, 2), "change": round(change_val, 2)}
-                                          except ValueError:
-                                              continue
-                          
-                          # Стандартный рабочий режим (Пн-Пт)
-                          price_el = soup.find(id=re.compile("lblLastRate$|LastRate$"))
-                          change_el = soup.find(id=re.compile("lblDailyChange$|DailyChange$"))
+                          # Универсальный семантический сканер таблиц для выходных дней
+                          for table in soup.find_all('table'):
+                              for row in table.find_all('tr'):
+                                  cols = [td.text.strip() for td in row.find_all(['td', 'th'])]
+                                  if len(cols) >= 3:
+                                      # Проверяем, содержит ли строка дату (ДД/ММ/ГГГГ)
+                                      if any(re.search(r'\d{2}/\d{2}/\d{2,4}', c) for c in cols):
+                                          found_change = None
+                                          found_price = None
+                                          
+                                          for c in cols:
+                                              # Ищем процентное изменение (например: -1.23%, +0.4%, 2.5)
+                                              c_clean = c.replace("%", "").replace("+", "").strip()
+                                              if re.match(r'^-?\d+\.\d+$', c_clean):
+                                                  val = float(c_clean)
+                                                  if -25.0 < val < 25.0 and val != 0.0:
+                                                      found_change = val
+                                                      break
+                                          
+                                          for c in cols:
+                                              # Ищем цену закрытия (обычно это число от 50 до 50000 без знаков процента)
+                                              p_clean = c.replace(",", "").strip()
+                                              if re.match(r'^\d+(?:\.\d+)?$', p_clean):
+                                                  val = float(p_clean)
+                                                  if val > 10.0 and "%" not in c:
+                                                      found_price = val
+                                          
+                                          if found_change is not None:
+                                              return {
+                                                  "price": round(found_price if found_price else 0.0, 2),
+                                                  "change": round(found_change, 2)
+                                              }
+
+                          # Резервный режим (Пн-Пт) если таблицы истории не оказалось
+                          price_el = soup.find(id=re.compile("lblLastRate$|LastRate$", re.I))
+                          change_el = soup.find(id=re.compile("lblDailyChange$|DailyChange$", re.I))
                           
                           price_val = 0.0
                           change_val = 0.0
@@ -182,15 +197,6 @@ jobs:
                           
                           if change_el:
                               raw_c = change_el.text.strip().replace("%", "").replace("+", "")
-                              if not raw_c or raw_c in ["-", "—", "0"]:
-                                  history_table = soup.find('table', id=re.compile("TableHistory|history|gvHistory"))
-                                  if history_table:
-                                      rows = history_table.find_all('tr')
-                                      if len(rows) > 1:
-                                          cols = rows[1].find_all('td')
-                                          if len(cols) >= 3:
-                                              raw_c = cols[2].text.strip().replace("%", "").replace("+", "")
-                              
                               change_val = float(raw_c) if raw_c else 0.0
                               
                           return {"price": round(price_val, 2), "change": round(change_val, 2)}
