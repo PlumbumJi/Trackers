@@ -57,72 +57,72 @@ jobs:
 
           SECTORS_CONFIG = {
               "Oil": {
-                  "name": "Нефть и Энергия", "icon": "🛢️", "news_ticker": "USO", "il_fund": "5141841", 
+                  "name": "Нефть и Энергия", "icon": "🛢️", "short_eng": "Oil", "news_ticker": "USO", "il_fund": "5141841", 
                   "il_name_eng": "WTI Ultra x3",
                   "tickers": ["BZ=F", "CL=F", "USO", "OVX"]
               },
               "AI": {
-                  "name": "Искусственный Интеллект", "icon": "🤖", "news_ticker": "NVDA", "il_fund": "5140744", 
+                  "name": "Искусственный Интеллект", "icon": "🤖", "short_eng": "AI", "news_ticker": "NVDA", "il_fund": "5140744", 
                   "il_name_eng": "Migdal AI",
                   "tickers": ["NVDA", "MSFT", "AMD", "AVGO", "PLTR", "GOOGL", "AMZN", "TSM", "BOTZ", "AIQ", "ROBO", "IRBO"]
               },
               "Gaming": {
-                  "name": "Игровая Индустрия", "icon": "🎮", "news_ticker": "SONY", "il_fund": "5128624", 
+                  "name": "Игровая Индустрия", "icon": "🎮", "short_eng": "Game", "news_ticker": "SONY", "il_fund": "5128624", 
                   "il_name_eng": "MTF Bluestar E-Games",
                   "tickers": ["NVDA", "MSFT", "TTWO", "EA", "RBLX", "SONY", "NTDOY", "UBSFY", "ESPO", "HERO", "GAMR"]
               },
               "Semiconductors": {
-                  "name": "Полупроводники", "icon": "💻", "news_ticker": "NVDA", "il_fund": "5135355", 
+                  "name": "Полупроводники", "icon": "💻", "short_eng": "Semi", "news_ticker": "NVDA", "il_fund": "5135355", 
                   "il_name_eng": "Kasam Semiconductors",
                   "tickers": ["NVDA", "AMD", "AVGO", "QCOM", "TSM", "ASML", "INTC", "SOXX", "SMH"]
               },
               "Banking": {
-                  "name": "Банковский сектор", "icon": "🏦", "news_ticker": "JPM", "il_fund": "5132337", 
+                  "name": "Банковский сектор", "icon": "🏦", "short_eng": "Bank", "news_ticker": "JPM", "il_fund": "5132337", 
                   "il_name_eng": "Meitav Banks US",
                   "tickers": ["JPM", "BAC", "GS", "MS", "WFC", "XLF", "KBE"]
               },
               "Biotech": {
-                  "name": "Биотех и Медицина", "icon": "🏥", "news_ticker": "LLY", "il_fund": "5122585", 
+                  "name": "Биотех и Медицина", "icon": "🏥", "short_eng": "Bio", "news_ticker": "LLY", "il_fund": "5122585", 
                   "il_name_eng": "Harel Nasdaq Biotech",
                   "tickers": ["LLY", "NVO", "PFE", "MRNA", "AMGN", "XBI", "IBB"]
               },
               "Clean Energy": {
-                  "name": "Зеленая энергетика", "icon": "☀️", "news_ticker": "FSLR", "il_fund": "5132642", 
+                  "name": "Зеленая энергетика", "icon": "☀️", "short_eng": "Clean", "news_ticker": "FSLR", "il_fund": "5132642", 
                   "il_name_eng": "Meitav Clean Energy",
                   "tickers": ["ICLN", "TAN", "FAN", "FSLR", "ENPH"]
               },
               "Uranium": {
-                  "name": "Уран и Атомная энергетика", "icon": "☢️", "news_ticker": "CCJ", "il_fund": "5138136", 
+                  "name": "Уран и Атомная энергетика", "icon": "☢️", "short_eng": "Uran", "news_ticker": "CCJ", "il_fund": "5138136", 
                   "il_name_eng": "More Uranium Giants",
                   "tickers": ["URA", "URNM", "CCJ", "NXE"]
               },
               "Gold": {
-                  "name": "Золото и Металлы", "icon": "🥇", "news_ticker": "GLD", "il_fund": "5129481", 
+                  "name": "Золото и Металлы", "icon": "🥇", "short_eng": "Gold", "news_ticker": "GLD", "il_fund": "5129481", 
                   "il_name_eng": "Tachlit Gold Spot",
                   "tickers": ["GLD", "GDX", "SLV"]
               },
               "Cybersecurity": {
-                  "name": "Кибербезопасность", "icon": "🛡️", "news_ticker": "CRWD", "il_fund": "5125828", 
+                  "name": "Кибербезопасность", "icon": "🛡️", "short_eng": "Cyber", "news_ticker": "CRWD", "il_fund": "5125828", 
                   "il_name_eng": "IBI Cybersecurity",
                   "tickers": ["CIBR", "HACK", "CRWD", "PANW", "FTNT", "ZS"]
               },
               "EV": {
-                  "name": "Электромобили", "icon": "🚗", "news_ticker": "TSLA", "il_fund": "5132535", 
+                  "name": "Электромобили", "icon": "🚗", "short_eng": "EV", "news_ticker": "TSLA", "il_fund": "5132535", 
                   "il_name_eng": "Migdal EV & Auto",
                   "tickers": ["TSLA", "BYDDY", "RIVN", "LI", "DRIV"]
               },
               "Aerospace": {
-                  "name": "Авиация и Космос", "icon": "✈️", "news_ticker": "BA", "il_fund": "5136015", 
+                  "name": "Авиация и Космос", "icon": "✈️", "short_eng": "Aero", "news_ticker": "BA", "il_fund": "5136015", 
                   "il_name_eng": "Tachlit US Aerospace",
                   "tickers": ["BA", "EADSY", "LMT", "RTX", "ITA"]
               },
               "E-Commerce": {
-                  "name": "Электронная коммерция", "icon": "🛒", "news_ticker": "AMZN", "il_fund": "5131420", 
+                  "name": "Электронная коммерция", "icon": "🛒", "short_eng": "Ecom", "news_ticker": "AMZN", "il_fund": "5131420", 
                   "il_name_eng": "Meitav E-Commerce",
                   "tickers": ["AMZN", "SHOP", "MELI", "IBUY"]
               },
               "Cloud": {
-                  "name": "Облачные технологии", "icon": "☁️", "news_ticker": "MSFT", "il_fund": "5132170", 
+                  "name": "Облачные технологии", "icon": "☁️", "short_eng": "Cloud", "news_ticker": "MSFT", "il_fund": "5132170", 
                   "il_name_eng": "Harel Cloud Comp.",
                   "tickers": ["MSFT", "AMZN", "GOOGL", "ORCL", "SNOW", "WCLD", "CLOU"]
               }
@@ -230,43 +230,38 @@ jobs:
               now_str = datetime.now().strftime("%d.%m.%Y | 23:15")
               
               lines = [
-                  "📊 <b>MARKET ANALYTICS MATRIX</b>",
+                  "📊 <b>MARKET ANALYTICS REPORT</b>",
                   f"📅 {now_str} 🇮🇱\n",
-                  "<b>🌍 GLOBAL HEAT MAP & SECTOR RATING</b>",
+                  "<b>🌍 GLOBAL HEAT MAP MATRIX</b>",
               ]
               
-              # Шапка таблицы из 5 структурированных колонок
-              # Инд (2) | Название (12) | Метка (2) | США (7) | ИЛ (7) | Рейтинг (7)
-              lines.append("<code>🎯 Инд.Название     М   США     ИЛ      Рейтинг</code>")
-              lines.append("<code>" + "-" * 47 + "</code>")
+              # Шапка таблицы с вашими точными эмодзи стран и структуры
+              # Эмодзи флагов и портфеля в начале моноширинной строки Telegram могут сбивать отступы, 
+              # поэтому пробелы выровнены с математической точностью до символа.
+              lines.append("<code>💼 Name    🇺🇸     🇮🇱    Рейтинг</code>")
+              lines.append("<code>" + "-" * 32 + "</code>")
               
               lines.append("<code>")
               for s in sorted_sectors:
-                  # 1. Эмодзи индустрии
                   icon = s['icon']
-                  
-                  # 2. Название индустрии (до 12 символов)
-                  name = s['name_eng'][:12]
-                  
-                  # 3. Тепловая метка
+                  name = s['short_eng'][:6]
                   tag_emoji = get_score_emoji(s['score'])
                   
-                  # 4. Показатель США и Показатель Израильского фонда отдельно
                   us_ch = s['avg_change']
                   il_ch = s['il_fund_data']['change'] if s['il_fund_data']['price'] > 0 else us_ch
                   
-                  us_str = f"+{us_ch:.2f}%" if us_ch > 0 else f"{us_ch:.2f}%"
-                  il_str = f"+{il_ch:.2f}%" if il_ch > 0 else f"{il_ch:.2f}%"
+                  # Округляем до 1 знака ради сохранения компактности и предотвращения переноса строки
+                  us_str = f"+{us_ch:.1f}%" if us_ch > 0 else f"{us_ch:.1f}%"
+                  il_str = f"+{il_ch:.1f}%" if il_ch > 0 else f"{il_ch:.1f}%"
                   
-                  # 5. Рейтинг силы
                   score_str = f"{s['score']}/100"
                   
-                  # Строим ровную строку
-                  row = f"{icon} {name:<12} {tag_emoji} {us_str:<7} {il_str:<7} {score_str:>7}"
+                  # Динамическая сборка строки под жесткий лимит ширины (без переносов)
+                  row = f"{icon}{name:<6} {us_str:>5} {il_str:>5}  {score_str:>7}"
                   lines.append(row)
               lines.append("</code>")
               
-              # Раскрывающийся блок аналитики (новости и топ движения)
+              # Раскрывающийся блок с новостями
               lines.append('\n<blockquote expandable>')
               lines.append("🔍 <b>ДЕТАЛЬНАЯ АНАЛИТИКА И ДВИЖЕНИЕ АКТИВОВ</b>\n")
               
@@ -288,16 +283,16 @@ jobs:
                   
               lines.append("</blockquote>")
               
-              # Нижний блок локального рынка фондов (TA STOCK MARKET) сохранен полностью!
-              lines.append("\n🇮🇱 <b>TA STOCK MARKET (МЕСТНЫЙ РЫНОК ФОНДОВ)</b>")
-              lines.append("<code>" + "-" * 47 + "</code>")
+              # Блок с названиями израильских фондов
+              lines.append("\n🇮🇱 <b>TA STOCK MARKET (ФОНДЫ ИНДУСТРИЙ)</b>")
+              lines.append("<code>" + "-" * 32 + "</code>")
               
               for s in sorted_sectors:
                   display_change = s['il_fund_data']['change'] if s['il_fund_data']['price'] > 0 else s['avg_change']
                   ch_emoji = "🟢" if display_change > 0 else ("🔴" if display_change < 0 else "🟡")
                   ch_sign = f"+{display_change:.2f}%" if display_change > 0 else f"{display_change:.2f}%"
                   
-                  lines.append(f"<code>{s['icon']} {s['il_name_eng']:<18} | {s['il_id']} | </code>{ch_emoji} {ch_sign}")
+                  lines.append(f"<code>{s['icon']} {s['il_name_eng']:<20} | </code>{ch_emoji} {ch_sign}")
 
               lines.append("\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎\n")
               lines.append("@oil_tracker_pavel_bot")
@@ -389,6 +384,7 @@ jobs:
                       
                       sectors_results.append({
                           "name_eng": key,
+                          "short_eng": cfg["short_eng"],
                           "name": cfg["name"],
                           "icon": cfg["icon"],
                           "avg_change": round(avg_change, 2),
