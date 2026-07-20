@@ -162,7 +162,6 @@ jobs:
                   await page.goto(url, wait_until="domcontentloaded", timeout=15000)
                   content = await page.content()
 
-                  # Парсим процент динамики из срендеренной страницы Google/Funder
                   matches = re.findall(r'([-+]?\d+(?:\.\d+)?)\s*%', content)
                   for m in matches:
                       val = float(m)
@@ -175,7 +174,6 @@ jobs:
               return key, 0.0
 
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
-              """Запускает один экземпляр Chromium и ищет все фонды по названию."""
               results = {}
               async with async_playwright() as p:
                   browser = await p.chromium.launch(headless=True)
@@ -195,7 +193,7 @@ jobs:
           EOF
           
           cat << 'EOF' > modules/news.py
-          import aiohttp, urllib.parse, html, re
+          import aiohttp, urllib.parse, html
           from modules.config import HTTP_TIMEOUT, HEADERS
 
           async def translate_text(session: aiohttp.ClientSession, text: str) -> str:
@@ -271,13 +269,11 @@ jobs:
                   lines.append(f"{icon}{name:<6} {us_str:>6} {il_str:>6}  {score_emoji}{s['score']:>3}/100")
               lines.append("</code>\n")
 
-              lines.append("<blockquote expandable>")
               lines.append("🔍 <b>ДРАЙВЕРЫ ДВИЖЕНИЯ И ПОКАЗАТЕЛИ СЕКТОРОВ</b>\n")
               for s in sectors_data:
                   ch_sign = f"+{s['avg_change']:.2f}%" if s['avg_change'] > 0 else f"{s['avg_change']:.2f}%"
                   lines.append(f"<b>{s['icon']} {s['name']}</b> ({ch_sign})")
                   
-                  # Вывод ключевых тикеров, из которых сформирован средний показатель индустрии
                   if s.get("ticker_details"):
                       details_str = ", ".join([f"{t}: {c:+.2f}%" for t, c in s["ticker_details"]])
                       lines.append(f"  📊 <i>Компоненты: [{details_str}]</i>")
@@ -285,9 +281,8 @@ jobs:
                   for n in s['news']:
                       lines.append(f"  {escape_html(n)}")
                   lines.append("")
-              lines.append("</blockquote>")
 
-              lines.append("\n🇮🇱 <b>ФОНДЫ ТЕЛЬ-АВИВА (ИТОГИ ТОРГОВ)</b>")
+              lines.append("🇮🇱 <b>ФОНДЫ ТЕЛЬ-АВИВА (ИТОГИ ТОРГОВ)</b>")
               lines.append("<code>---------------------------------</code>")
               for s in sectors_data:
                   il_ch = s['il_fund_data']['change']
@@ -304,12 +299,10 @@ jobs:
               
               lines = [
                   "🔔 <b>ЕЖЕНЕДЕЛЬНЫЙ IPO ДАЙДЖЕСТ</b>",
-                  f"📅 {now_str} | Субботний обзор 🇮🇱\n",
-                  "<blockquote expandable>"
+                  f"📅 {now_str} | Субботний обзор 🇮🇱\n"
               ]
               for news in ipo_news:
                   lines.append(f"{escape_html(news)}\n")
-              lines.append("</blockquote>")
               lines.append(f"\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡️\n{BOT_NAME}")
               return "\n".join(lines)
           EOF
@@ -318,21 +311,56 @@ jobs:
           import aiohttp
           from modules.config import BOT_TOKEN, CHAT_ID, HTTP_TIMEOUT
           
+          def split_message(text: str, max_length: int = 4000) -> list[str]:
+              """Безопасно разбивает сообщение по строкам, не превышая лимит Telegram."""
+              if len(text) <= max_length:
+                  return [text]
+              
+              chunks = []
+              current_chunk = []
+              current_length = 0
+              
+              for line in text.split("\n"):
+                  if current_length + len(line) + 1 > max_length:
+                      chunks.append("\n".join(current_chunk))
+                      current_chunk = [line]
+                      current_length = len(line)
+                  else:
+                      current_chunk.append(line)
+                      current_length += len(line) + 1
+                      
+              if current_chunk:
+                  chunks.append("\n".join(current_chunk))
+                  
+              return chunks
+
           async def send_to_telegram(text: str):
               if not BOT_TOKEN or not CHAT_ID:
                   print("❌ BOT_TOKEN или CHAT_ID не найдены")
                   return
+
               url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-              payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+              chunks = split_message(text)
+              
+              print(f"ℹ️ Длина сообщения: {len(text)} символов. Чанков для отправки: {len(chunks)}")
+              
               async with aiohttp.ClientSession() as session:
-                  try:
-                      async with session.post(url, json=payload, timeout=HTTP_TIMEOUT) as resp:
-                          if resp.status == 200:
-                              print("🚀 Сообщение отправлено!")
-                          else:
-                              print(f"❌ Ошибка Telegram: {await resp.text()}")
-                  except Exception as e:
-                      print(f"💥 Ошибка: {e}")
+                  for idx, chunk in enumerate(chunks, start=1):
+                      payload = {
+                          "chat_id": CHAT_ID, 
+                          "text": chunk, 
+                          "parse_mode": "HTML", 
+                          "disable_web_page_preview": True
+                      }
+                      try:
+                          async with session.post(url, json=payload, timeout=HTTP_TIMEOUT) as resp:
+                              if resp.status == 200:
+                                  print(f"🚀 Чанк [{idx}/{len(chunks)}] успешно отправлен!")
+                              else:
+                                  error_body = await resp.text()
+                                  print(f"❌ Ошибка Telegram (код {resp.status}): {error_body}")
+                      except Exception as e:
+                          print(f"💥 Исключение при отправке в Telegram: {e}")
           EOF
           
           cat << 'EOF' > main.py
