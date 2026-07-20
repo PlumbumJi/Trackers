@@ -185,7 +185,6 @@ jobs:
                   if parent.parent:
                       text_block += " " + parent.parent.get_text(separator=' ', strip=True)
                   
-                  # Поиск процентного значения со знаком + или -
                   matches = re.findall(r'([-+]?\s*\d+(?:\.\d+)?)\s*%', text_block)
                   if matches:
                       clean_num = matches[0].replace(" ", "").replace("+", "")
@@ -228,7 +227,6 @@ jobs:
               except Exception as e:
                   print(f"💥 Исключение при запросе к Funder ({fund_id}): {e}")
                   
-              # Всегда возвращает показатель даже в случае сбоев
               return {"price": 0.0, "change": 0.0}
           EOF
           
