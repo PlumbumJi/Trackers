@@ -123,6 +123,7 @@ jobs:
           cat << 'EOF' > modules/market.py
           import aiohttp
           import asyncio
+          import json
           import re
           from bs4 import BeautifulSoup
           from playwright.async_api import async_playwright
@@ -154,55 +155,75 @@ jobs:
                   return dict(results)
 
           def parse_bizportal_indicator(html_text: str) -> float:
-              """Выполняет поиск показателя дневной доходности на Bizportal из HTML."""
+              """
+              ВАРИАНТ 2: Извлекает процент изменения с Bizportal через JS/JSON структуры 
+              и строго таргетированные селекторы шапки котировки.
+              """
               if not html_text:
                   return 0.0
-              
+
+              # 1. Поиск в JS-объектах/JSON на странице Bizportal
+              json_patterns = [
+                  r'"changePercent"\s*:\s*([-+]?\d+(?:\.\d+)?)',
+                  r'"dailyChangePercent"\s*:\s*([-+]?\d+(?:\.\d+)?)',
+                  r'"changePcnt"\s*:\s*([-+]?\d+(?:\.\d+)?)',
+                  r'"ChangePcnt"\s*:\s*([-+]?\d+(?:\.\d+)?)',
+                  r'window\.QuoteData\s*=\s*({.*?});'
+              ]
+
+              for pattern in json_patterns:
+                  match = re.search(pattern, html_text, re.IGNORECASE)
+                  if match:
+                      val_str = match.group(1)
+                      if val_str.startswith('{'):
+                          try:
+                              data = json.loads(val_str)
+                              for k in ['ChangePcnt', 'changePercent', 'dailyChange', 'Change']:
+                                  if k in data and data[k] is not None:
+                                      return float(data[k])
+                          except Exception:
+                              pass
+                      else:
+                          try:
+                              return float(val_str)
+                          except ValueError:
+                              pass
+
+              # 2. Если в JS нет прямого поля, изоляция DOM котировки через BeautifulSoup
               soup = BeautifulSoup(html_text, 'lxml')
-              
-              for selector in ['script', 'style', 'iframe', 'div[class*="popup"]', 'div[class*="modal"]']:
+
+              # Удаляем системные блоки профиля фонда, где указано "חשיפה למניות עד 100%"
+              for selector in ['script', 'style', 'iframe', '.fund-profile', '.fund-info', '.risk-box', '.general-details']:
                   for match in soup.select(selector):
                       match.decompose()
 
-              elements = soup.find_all(string=re.compile(r'שינוי|יומי'))
-              for el in elements:
-                  parent = el.find_parent(['td', 'tr', 'div', 'li', 'span', 'p'])
-                  if not parent:
-                      continue
-                  text_block = parent.get_text(separator=' ', strip=True)
-                  if parent.parent:
-                      text_block += " " + parent.parent.get_text(separator=' ', strip=True)
-                  
-                  matches = re.findall(r'([-+]?\s*\d+(?:\.\d+)?)\s*%', text_block)
-                  if matches:
-                      clean_num = matches[0].replace(" ", "").replace("+", "")
-                      try:
-                          return float(clean_num)
-                      except ValueError:
-                          pass
+              # Селекторы, относящиеся к котировке в шапке Bizportal
+              header_selectors = [
+                  '.quote-header .change',
+                  '.quote-header .num',
+                  '.stock-change',
+                  '.statistics-item .change',
+                  '.price-change'
+              ]
 
-              for span in soup.select('span[class*="change"], div[class*="change"], span[class*="green"], span[class*="red"]'):
-                  text_block = span.get_text(strip=True)
-                  matches = re.findall(r'([-+]?\s*\d+(?:\.\d+)?)\s*%', text_block)
-                  if matches:
-                      clean_num = matches[0].replace(" ", "").replace("+", "")
-                      try:
-                          return float(clean_num)
-                      except ValueError:
-                          pass
-
-              raw_matches = re.findall(r'([-+]?\s*\d+(?:\.\d+)?)\s*%', html_text)
-              if raw_matches:
-                  clean_num = raw_matches[0].replace(" ", "").replace("+", "")
-                  try:
-                      return float(clean_num)
-                  except ValueError:
-                      pass
+              for sel in header_selectors:
+                  for el in soup.select(sel):
+                      text_block = el.get_text(strip=True)
+                      matches = re.findall(r'([-+]?\s*\d+(?:\.\d+)?)\s*%', text_block)
+                      if matches:
+                          clean_num = matches[0].replace(" ", "").replace("+", "")
+                          try:
+                              val = float(clean_num)
+                              # Игнорируем ошибочные 100%
+                              if abs(val) != 100.0:
+                                  return val
+                          except ValueError:
+                              pass
 
               return 0.0
 
           async def fetch_all_israeli_funds(fund_map: dict) -> dict:
-              """Использует Playwright для загрузки страниц фондов на Bizportal."""
+              """Загружает страницы фондов Bizportal через Playwright."""
               results = {}
               if not fund_map:
                   return results
@@ -483,7 +504,7 @@ jobs:
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
               
               fund_map = {key: cfg["il_fund"] for key, cfg in SECTORS_CONFIG.items() if cfg["il_fund"]}
-              print(f"🌐 Запуск Playwright для получения показателей {len(fund_map)} израильских фондов с Bizportal...")
+              print(f"🌐 Запуск Playwright для сбора показателей с Bizportal...")
               il_results = await fetch_all_israeli_funds(fund_map)
 
               async with aiohttp.ClientSession() as session:
