@@ -37,7 +37,15 @@ jobs:
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7"
+              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+              "Sec-Ch-Ua": '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
+              "Sec-Ch-Ua-Mobile": "?0",
+              "Sec-Ch-Ua-Platform": '"Windows"',
+              "Sec-Fetch-Dest": "document",
+              "Sec-Fetch-Mode": "navigate",
+              "Sec-Fetch-Site": "none",
+              "Sec-Fetch-User": "?1",
+              "Upgrade-Insecure-Requests": "1"
           }
 
           SECTORS_CONFIG = {
@@ -146,34 +154,38 @@ jobs:
                   results = await asyncio.gather(*tasks)
                   return dict(results)
 
+          def clean_popups_and_modals(soup: BeautifulSoup) -> BeautifulSoup:
+              """Удаляет рекламные банеры, всплывающие окна и блокирующие элементы."""
+              for selector in [
+                  'script', 'style', 'iframe',
+                  'div[class*="popup"]', 'div[class*="modal"]', 'div[class*="overlay"]',
+                  'div[id*="popup"]', 'div[id*="modal"]', 'div[class*="banner"]',
+                  'div[class*="adv"]', 'div[id*="adv"]'
+              ]:
+                  for match in soup.select(selector):
+                      match.decompose()
+              return soup
+
           def parse_funder_indicator(html_text: str, fund_id: str) -> float:
-              """Специализированная функция поиска показателя יומית на сайте Funder."""
+              """Выполняет прямой поиск показателя дневной доходности на Funder."""
               if not html_text:
                   return 0.0
               
-              soup = BeautifulSoup(html_text, 'html.parser')
+              soup = BeautifulSoup(html_text, 'lxml')
+              soup = clean_popups_and_modals(soup)
               
-              # 1. Поиск по тегам <script> (на случай SSR/JS структур)
-              for script in soup.find_all('script'):
-                  if script.string and ('יומית' in script.string or fund_id in script.string):
-                      match = re.search(r'"yomi"?:?\s*"?([-+]?\d+\.?\d*)"?', script.string, re.IGNORECASE)
-                      if match:
-                          try:
-                              return float(match.group(1))
-                          except ValueError:
-                              pass
-
-              # 2. Поиск по DOM элементов, содержащих маркер 'יומית'
+              # Поиск по метке יומית в DOM элементах
               elements = soup.find_all(string=re.compile(r'יומית'))
               for el in elements:
-                  parent = el.find_parent(['td', 'tr', 'div', 'li'])
+                  parent = el.find_parent(['td', 'tr', 'div', 'li', 'span'])
                   if not parent:
                       continue
                   
-                  text_block = parent.get_text(separator=' ')
+                  text_block = parent.get_text(separator=' ', strip=True)
                   if parent.parent:
-                      text_block += " " + parent.parent.get_text(separator=' ')
+                      text_block += " " + parent.parent.get_text(separator=' ', strip=True)
                   
+                  # Поиск процентного значения со знаком + или -
                   matches = re.findall(r'([-+]?\s*\d+(?:\.\d+)?)\s*%', text_block)
                   if matches:
                       clean_num = matches[0].replace(" ", "").replace("+", "")
@@ -182,7 +194,7 @@ jobs:
                       except ValueError:
                           pass
 
-              # 3. Глобальный поиск регулярным выражением по всему HTML
+              # Резервный поиск напрямую по регулярному выражению в строке HTML
               raw_matches = re.findall(r'יומית[^\d%\+\-]*?([-+]?\s*\d+(?:\.\d+)?)\s*%', html_text)
               if raw_matches:
                   clean_num = raw_matches[0].replace(" ", "").replace("+", "")
@@ -195,22 +207,28 @@ jobs:
 
           async def fetch_israeli_fund(session: aiohttp.ClientSession, fund_id: str) -> dict:
               url = f"https://www.funder.co.il/fund/{fund_id}"
+              
               funder_headers = HEADERS.copy()
               funder_headers.update({
-                  "Referer": "https://www.funder.co.il/",
-                  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                  "Host": "www.funder.co.il",
+                  "Referer": "https://www.funder.co.il/"
               })
 
               try:
                   async with session.get(url, headers=funder_headers, timeout=HTTP_TIMEOUT) as response:
                       if response.status == 200:
-                          html_text = await response.text()
+                          raw_bytes = await response.read()
+                          html_text = raw_bytes.decode('utf-8', errors='ignore')
+                          
                           change_val = parse_funder_indicator(html_text, fund_id)
-                          print(f"📊 Funder [{fund_id}]: יומית = {change_val}%")
+                          print(f"✅ Успешно получено Funder [{fund_id}]: {change_val}%")
                           return {"price": 0.0, "change": round(change_val, 2)}
+                      else:
+                          print(f"⚠️ Ошибка доступа Funder [{fund_id}]: Код ответа {response.status}")
               except Exception as e:
-                  print(f"Ошибка парсинга Funder ({fund_id}): {e}")
+                  print(f"💥 Исключение при запросе к Funder ({fund_id}): {e}")
                   
+              # Всегда возвращает показатель даже в случае сбоев
               return {"price": 0.0, "change": 0.0}
           EOF
           
