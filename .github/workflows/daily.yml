@@ -122,8 +122,8 @@ jobs:
           cat << 'EOF' > modules/market.py
           import aiohttp
           import asyncio
+          import json
           import re
-          import urllib.parse
           from bs4 import BeautifulSoup
           from modules.config import HTTP_TIMEOUT, HEADERS
 
@@ -152,70 +152,49 @@ jobs:
                   results = await asyncio.gather(*tasks)
                   return dict(results)
 
-          async def fetch_fund_from_google(session: aiohttp.ClientSession, fund_id: str) -> float:
-              """Запрашивает результаты торгов фонда через поиск Google (Globes/Bizportal snippet)."""
-              query = f"site:globes.co.il OR site:bizportal.co.il \"{fund_id}\""
-              url = f"https://www.google.com/search?q={urllib.parse.quote(query)}&hl=he"
-              
-              try:
-                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
-                      if resp.status == 200:
-                          html_text = await resp.text()
-                          # Ищем шаблон процентов вида +1.2% или -0.8% в описании карточки фонда
-                          matches = re.findall(r'([-+]?\d+(?:\.\d+)?)\s*%', html_text)
-                          for m in matches:
-                              val = float(m)
-                              if abs(val) < 20.0 and val != 0.0:  # Отсекаем выбросы и 100%
-                                  return round(val, 2)
-              except Exception as e:
-                  print(f"Google fetch error [{fund_id}]: {e}")
-              return 0.0
+          async def fetch_single_israeli_fund(session: aiohttp.ClientSession, key: str, fund_id: str) -> tuple:
+              """Делает индивидуальный запрос по номеру фонда на Bizportal."""
+              if not fund_id:
+                  return key, {"price": 0.0, "change": 0.0}
 
-          async def fetch_fund_from_globes_direct(session: aiohttp.ClientSession, fund_id: str) -> float:
-              """Фоллбэк запрос к API/странице Globes."""
-              url = f"https://www.globes.co.il/portal/instrument.aspx?instrumentid={fund_id}"
+              url = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
               try:
                   async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
                       if resp.status == 200:
                           text = await resp.text()
-                          soup = BeautifulSoup(text, 'lxml')
-                          
-                          # Поиск процента изменения в шапке Globes
-                          el = soup.select_one("#lblFeatPercent, .feederChange, .price-change")
-                          if el:
-                              txt = el.get_text(strip=True).replace("+", "").replace("%", "")
-                              return float(txt)
-                          
-                          # Регулярный поиск по блоку цены
-                          match = re.search(r'class="[^"]*change[^"]*"[^>]*>([-+]?\d+(?:\.\d+)?)%', text, re.IGNORECASE)
-                          if match:
-                              return float(match.group(1))
+
+                          # 1. Поиск прямого значения изменения в точных объектах Bizportal
+                          matches = re.findall(r'"ChangePercent"\s*:\s*([-+]?\d+(?:\.\d+)?)', text, re.IGNORECASE)
+                          if not matches:
+                              matches = re.findall(r'"changePcnt"\s*:\s*([-+]?\d+(?:\.\d+)?)', text, re.IGNORECASE)
+
+                          if matches:
+                              val = float(matches[0])
+                              print(f"✅ Фонд {fund_id} ({key}): {val}%")
+                              return key, {"price": 0.0, "change": round(val, 2)}
+
+                          # 2. Точечный парсинг конкретного тега в шапке
+                          soup = BeautifulSoup(text, 'html.parser')
+                          quote_head = soup.select_one(".quote-header, .stock-change, .statistics-item")
+                          if quote_head:
+                              ch_match = re.search(r'([-+]?\d+(?:\.\d+)?)\s*%', quote_head.get_text())
+                              if ch_match:
+                                  val = float(ch_match.group(1))
+                                  if abs(val) != 100.0:  # Игнорируем технические 100%
+                                      print(f"✅ Фонд {fund_id} ({key}): {val}%")
+                                      return key, {"price": 0.0, "change": round(val, 2)}
+
               except Exception as e:
-                  print(f"Globes fetch error [{fund_id}]: {e}")
-              return 0.0
+                  print(f"⚠️ Ошибка запроса фонда {fund_id}: {e}")
 
-          async def fetch_single_israeli_fund(session: aiohttp.ClientSession, key: str, fund_id: str, default_us_change: float) -> tuple:
-              if not fund_id:
-                  return key, {"price": 0.0, "change": 0.0}
+              print(f"❌ Не удалось получить данные по фонду {fund_id}")
+              return key, {"price": 0.0, "change": 0.0}
 
-              # 1. Запрос напрямую с Globes
-              val = await fetch_fund_from_globes_direct(session, fund_id)
-              
-              # 2. Если Globes вернул 0.0, ищем результат через Google
-              if val == 0.0:
-                  val = await fetch_fund_from_google(session, fund_id)
-              
-              # 3. Если фонда нет в закрытых торгах TASE, привязываем движение к коррелирующему США-сектору
-              if val == 0.0 and default_us_change != 0.0:
-                  val = round(default_us_change * 0.85, 2)  # Корреляционный рассчет
-
-              print(f"📊 Фонд Israel [{fund_id}]: {val}%")
-              return key, {"price": 0.0, "change": val}
-
-          async def fetch_all_israeli_funds(fund_map: dict, us_sector_changes: dict) -> dict:
+          async def fetch_all_israeli_funds(fund_map: dict) -> dict:
+              """Запускает индивидуальные параллельные запросы по каждому фонду."""
               async with aiohttp.ClientSession() as session:
                   tasks = [
-                      fetch_single_israeli_fund(session, k, fid, us_sector_changes.get(k, 0.0))
+                      fetch_single_israeli_fund(session, k, fid)
                       for k, fid in fund_map.items()
                   ]
                   results = await asyncio.gather(*tasks)
@@ -442,22 +421,18 @@ jobs:
               
               print(f"📦 Сбор данных по {len(all_tickers)} тикерам...")
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
-              
-              # Рассчитываем среднее изменение по американским секторам
-              us_sector_changes = {}
-              for key, cfg in SECTORS_CONFIG.items():
-                  vals = [global_market_data[t]["change"] for t in cfg["tickers"] if t in global_market_data and global_market_data[t]["price"] > 0]
-                  us_sector_changes[key] = sum(vals) / len(vals) if vals else 0.0
 
               fund_map = {key: cfg["il_fund"] for key, cfg in SECTORS_CONFIG.items() if cfg["il_fund"]}
-              print(f"🌐 Получение рыночных данных израильских фондов...")
-              il_results = await fetch_all_israeli_funds(fund_map, us_sector_changes)
+              print(f"🌐 Точечные индивидуальные запросы фондов по их номерам...")
+              il_results = await fetch_all_israeli_funds(fund_map)
 
               async with aiohttp.ClientSession() as session:
                   sectors_results = []
                   
                   for key, cfg in SECTORS_CONFIG.items():
-                      avg_change = us_sector_changes.get(key, 0.0)
+                      valid_changes = [global_market_data[t]["change"] for t in cfg["tickers"] if t in global_market_data and global_market_data[t]["price"] > 0]
+                      avg_change = sum(valid_changes) / len(valid_changes) if valid_changes else 0.0
+                      
                       ticker_movers = [(t, global_market_data[t]["change"]) for t in cfg["tickers"] if t in global_market_data and global_market_data[t]["price"] > 0]
                       
                       score = calculate_sector_score(avg_change)
