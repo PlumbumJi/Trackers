@@ -145,29 +145,48 @@ jobs:
                   tasks = [fetch_single_ticker(session, t) for t in tickers]
                   results = await asyncio.gather(*tasks)
                   return dict(results)
-              
+
           async def fetch_israeli_fund(session: aiohttp.ClientSession, fund_id: str) -> dict:
               url = f"https://www.funder.co.il/fund/{fund_id}"
+              funder_headers = HEADERS.copy()
+              funder_headers.update({
+                  "Referer": "https://www.funder.co.il/",
+                  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+              })
+
               try:
-                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
+                  async with session.get(url, headers=funder_headers, timeout=HTTP_TIMEOUT) as response:
                       if response.status == 200:
                           html_text = await response.text()
-                          # Ищем закрытые / последние результаты торгов
-                          match = re.search(r'יומית.*?([-+]?\d+\.\d+)\s*%', html_text, re.DOTALL)
-                          if match:
-                              change_val = float(match.group(1))
-                              return {"price": 0.0, "change": round(change_val, 2)}
+                          soup = BeautifulSoup(html_text, 'html.parser')
+                          
+                          # Ищем блоки с меткой дневной доходности
+                          elements = soup.find_all(string=re.compile(r'יומית'))
+                          
+                          for el in elements:
+                              parent = el.find_parent(['td', 'div', 'tr'])
+                              if not parent:
+                                  continue
                               
-                          soup = BeautifulSoup(html_text, 'lxml')
-                          for element in soup.find_all(string=re.compile("יומית")):
-                              parent = element.parent
-                              combined_text = parent.get_text() if parent else ""
-                              num_match = re.search(r'([-+]?\d+\.\d+)\s*%', combined_text)
-                              if num_match:
-                                  change_val = float(num_match.group(1))
+                              search_scope = parent.get_text()
+                              if parent.parent:
+                                  search_scope += " " + parent.parent.get_text()
+                                  
+                              matches = re.findall(r'([-+]?\s*\d+\.\d+)\s*%', search_scope)
+                              if matches:
+                                  val_str = matches[0].replace(" ", "")
+                                  change_val = float(val_str)
                                   return {"price": 0.0, "change": round(change_val, 2)}
+                                  
+                          # Резервный поиск напрямую в HTML
+                          raw_matches = re.findall(r'יומית[^\d\%\+\-]*?([-+]?\s*\d+\.\d+)\s*%', html_text)
+                          if raw_matches:
+                              val_str = raw_matches[0].replace(" ", "")
+                              return {"price": 0.0, "change": round(float(val_str), 2)}
+
               except Exception as e:
-                  print(f"Ошибка Funder {fund_id}: {e}")
+                  print(f"Ошибка парсинга Funder ({fund_id}): {e}")
+                  
               return {"price": 0.0, "change": 0.0}
           EOF
           
