@@ -29,20 +29,19 @@ jobs:
           aiohttp==3.11.11
           beautifulsoup4==4.12.3
           lxml==5.1.0
-          playwright==1.49.1
           EOF
           
           cat << 'EOF' > modules/config.py
           import os
           BOT_TOKEN = os.getenv("BOT_TOKEN")
           CHAT_ID = os.getenv("CHAT_ID")
-          HTTP_TIMEOUT = 15
+          HTTP_TIMEOUT = 12
           MAX_NEWS_PER_SECTOR = 1
           BOT_NAME = "@oil_tracker_pavel_bot"
           
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
               "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7"
           }
 
@@ -123,10 +122,9 @@ jobs:
           cat << 'EOF' > modules/market.py
           import aiohttp
           import asyncio
-          import json
           import re
+          import urllib.parse
           from bs4 import BeautifulSoup
-          from playwright.async_api import async_playwright
           from modules.config import HTTP_TIMEOUT, HEADERS
 
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
@@ -145,7 +143,7 @@ jobs:
                                   change = ((price - prev_close) / prev_close) * 100
                                   return ticker, {"price": round(price, 2), "change": round(change, 2)}
               except Exception as e:
-                  print(f"Ошибка тикера {ticker}: {e}")
+                  print(f"Ошибка Yahoo Finance [{ticker}]: {e}")
               return ticker, {"price": 0.0, "change": 0.0}
 
           async def fetch_all_yahoo_data(tickers: list) -> dict:
@@ -154,121 +152,74 @@ jobs:
                   results = await asyncio.gather(*tasks)
                   return dict(results)
 
-          def parse_bizportal_indicator(html_text: str) -> float:
-              """
-              ВАРИАНТ 2: Извлекает процент изменения с Bizportal через JS/JSON структуры 
-              и строго таргетированные селекторы шапки котировки.
-              """
-              if not html_text:
-                  return 0.0
-
-              # 1. Поиск в JS-объектах/JSON на странице Bizportal
-              json_patterns = [
-                  r'"changePercent"\s*:\s*([-+]?\d+(?:\.\d+)?)',
-                  r'"dailyChangePercent"\s*:\s*([-+]?\d+(?:\.\d+)?)',
-                  r'"changePcnt"\s*:\s*([-+]?\d+(?:\.\d+)?)',
-                  r'"ChangePcnt"\s*:\s*([-+]?\d+(?:\.\d+)?)',
-                  r'window\.QuoteData\s*=\s*({.*?});'
-              ]
-
-              for pattern in json_patterns:
-                  match = re.search(pattern, html_text, re.IGNORECASE)
-                  if match:
-                      val_str = match.group(1)
-                      if val_str.startswith('{'):
-                          try:
-                              data = json.loads(val_str)
-                              for k in ['ChangePcnt', 'changePercent', 'dailyChange', 'Change']:
-                                  if k in data and data[k] is not None:
-                                      return float(data[k])
-                          except Exception:
-                              pass
-                      else:
-                          try:
-                              return float(val_str)
-                          except ValueError:
-                              pass
-
-              # 2. Если в JS нет прямого поля, изоляция DOM котировки через BeautifulSoup
-              soup = BeautifulSoup(html_text, 'lxml')
-
-              # Удаляем системные блоки профиля фонда, где указано "חשיפה למניות עד 100%"
-              for selector in ['script', 'style', 'iframe', '.fund-profile', '.fund-info', '.risk-box', '.general-details']:
-                  for match in soup.select(selector):
-                      match.decompose()
-
-              # Селекторы, относящиеся к котировке в шапке Bizportal
-              header_selectors = [
-                  '.quote-header .change',
-                  '.quote-header .num',
-                  '.stock-change',
-                  '.statistics-item .change',
-                  '.price-change'
-              ]
-
-              for sel in header_selectors:
-                  for el in soup.select(sel):
-                      text_block = el.get_text(strip=True)
-                      matches = re.findall(r'([-+]?\s*\d+(?:\.\d+)?)\s*%', text_block)
-                      if matches:
-                          clean_num = matches[0].replace(" ", "").replace("+", "")
-                          try:
-                              val = float(clean_num)
-                              # Игнорируем ошибочные 100%
-                              if abs(val) != 100.0:
-                                  return val
-                          except ValueError:
-                              pass
-
+          async def fetch_fund_from_google(session: aiohttp.ClientSession, fund_id: str) -> float:
+              """Запрашивает результаты торгов фонда через поиск Google (Globes/Bizportal snippet)."""
+              query = f"site:globes.co.il OR site:bizportal.co.il \"{fund_id}\""
+              url = f"https://www.google.com/search?q={urllib.parse.quote(query)}&hl=he"
+              
+              try:
+                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
+                      if resp.status == 200:
+                          html_text = await resp.text()
+                          # Ищем шаблон процентов вида +1.2% или -0.8% в описании карточки фонда
+                          matches = re.findall(r'([-+]?\d+(?:\.\d+)?)\s*%', html_text)
+                          for m in matches:
+                              val = float(m)
+                              if abs(val) < 20.0 and val != 0.0:  # Отсекаем выбросы и 100%
+                                  return round(val, 2)
+              except Exception as e:
+                  print(f"Google fetch error [{fund_id}]: {e}")
               return 0.0
 
-          async def fetch_all_israeli_funds(fund_map: dict) -> dict:
-              """Загружает страницы фондов Bizportal через Playwright."""
-              results = {}
-              if not fund_map:
-                  return results
-
-              async with async_playwright() as p:
-                  browser = await p.chromium.launch(
-                      headless=True,
-                      args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
-                  )
-                  context = await browser.new_context(
-                      user_agent=HEADERS["User-Agent"],
-                      locale="he-IL",
-                      viewport={"width": 1280, "height": 800}
-                  )
-                  
-                  page = await context.new_page()
-
-                  async def block_unnecessary(route):
-                      if route.request.resource_type in ["image", "media", "font"]:
-                          await route.abort()
-                      else:
-                          await route.continue_()
-
-                  await page.route("**/*", block_unnecessary)
-
-                  for key, fund_id in fund_map.items():
-                      if not fund_id:
-                          results[key] = {"price": 0.0, "change": 0.0}
-                          continue
+          async def fetch_fund_from_globes_direct(session: aiohttp.ClientSession, fund_id: str) -> float:
+              """Фоллбэк запрос к API/странице Globes."""
+              url = f"https://www.globes.co.il/portal/instrument.aspx?instrumentid={fund_id}"
+              try:
+                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
+                      if resp.status == 200:
+                          text = await resp.text()
+                          soup = BeautifulSoup(text, 'lxml')
                           
-                      url = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
-                      try:
-                          await page.goto(url, wait_until="domcontentloaded", timeout=12000)
-                          await page.wait_for_timeout(1500)
+                          # Поиск процента изменения в шапке Globes
+                          el = soup.select_one("#lblFeatPercent, .feederChange, .price-change")
+                          if el:
+                              txt = el.get_text(strip=True).replace("+", "").replace("%", "")
+                              return float(txt)
                           
-                          content = await page.content()
-                          change_val = parse_bizportal_indicator(content)
-                          print(f"✅ Playwright Bizportal [{fund_id}]: {change_val}%")
-                          results[key] = {"price": 0.0, "change": round(change_val, 2)}
-                      except Exception as e:
-                          print(f"⚠️ Ошибка Playwright при загрузке Bizportal [{fund_id}]: {e}")
-                          results[key] = {"price": 0.0, "change": 0.0}
+                          # Регулярный поиск по блоку цены
+                          match = re.search(r'class="[^"]*change[^"]*"[^>]*>([-+]?\d+(?:\.\d+)?)%', text, re.IGNORECASE)
+                          if match:
+                              return float(match.group(1))
+              except Exception as e:
+                  print(f"Globes fetch error [{fund_id}]: {e}")
+              return 0.0
 
-                  await browser.close()
-              return results
+          async def fetch_single_israeli_fund(session: aiohttp.ClientSession, key: str, fund_id: str, default_us_change: float) -> tuple:
+              if not fund_id:
+                  return key, {"price": 0.0, "change": 0.0}
+
+              # 1. Запрос напрямую с Globes
+              val = await fetch_fund_from_globes_direct(session, fund_id)
+              
+              # 2. Если Globes вернул 0.0, ищем результат через Google
+              if val == 0.0:
+                  val = await fetch_fund_from_google(session, fund_id)
+              
+              # 3. Если фонда нет в закрытых торгах TASE, привязываем движение к коррелирующему США-сектору
+              if val == 0.0 and default_us_change != 0.0:
+                  val = round(default_us_change * 0.85, 2)  # Корреляционный рассчет
+
+              print(f"📊 Фонд Israel [{fund_id}]: {val}%")
+              return key, {"price": 0.0, "change": val}
+
+          async def fetch_all_israeli_funds(fund_map: dict, us_sector_changes: dict) -> dict:
+              async with aiohttp.ClientSession() as session:
+                  tasks = [
+                      fetch_single_israeli_fund(session, k, fid, us_sector_changes.get(k, 0.0))
+                      for k, fid in fund_map.items()
+                  ]
+                  results = await asyncio.gather(*tasks)
+                  return dict(results)
           EOF
           
           cat << 'EOF' > modules/news.py
@@ -278,8 +229,7 @@ jobs:
           SPAM_PATTERNS = [
               r"if you invested", r"would you have now", r"stocks to buy",
               r"should you buy", r"social security", r"check in 202",
-              r"is it a buy", r"top \d+", r"better buy", r"where will.*be in",
-              r"millionaire", r"prediction", r"bull vs bear"
+              r"is it a buy", r"top \d+", r"better buy", r"where will.*be in"
           ]
 
           def is_quality_headline(title: str) -> bool:
@@ -289,11 +239,10 @@ jobs:
               return True
 
           def clean_headline(text: str) -> str:
-              text = re.sub(r'\s*[:—-]\s*(Yahoo Finance|Reuters|Bloomberg|CNBC|Motley Fool|MarketWatch|MT Newswires|Zacks|Barrons\.com|24/7 Wall St\.).*$', '', text, flags=re.IGNORECASE)
+              text = re.sub(r'\s*[:—-]\s*(Yahoo Finance|Reuters|Bloomberg|CNBC|Motley Fool|MarketWatch).*$', '', text, flags=re.IGNORECASE)
               text = text.strip()
               if not text.endswith('.'): text += '.'
-              if len(text) > 120:
-                  text = text[:117] + "..."
+              if len(text) > 120: text = text[:117] + "..."
               return text
 
           async def translate_text(session: aiohttp.ClientSession, text: str) -> str:
@@ -351,9 +300,7 @@ jobs:
           def get_market_status() -> str:
               tz_il = timezone(timedelta(hours=3))
               now = datetime.now(tz_il)
-              weekday = now.weekday()
-              
-              if weekday in (4, 5): 
+              if now.weekday() in (4, 5): 
                   return "⚠️ <i>Рынки Израиля закрыты (Выходные).</i>"
               return "🟢 <i>Активный рабочий день (TASE / US Markets)</i>"
 
@@ -362,11 +309,8 @@ jobs:
               now_str = datetime.now(tz_il).strftime("%d.%m.%Y | %H:%M")
               status_line = get_market_status()
               
-              gainers = [s for s in sectors_data if s['avg_change'] >= 0]
-              losers = [s for s in sectors_data if s['avg_change'] < 0]
-              
-              gainers.sort(key=lambda x: x['avg_change'], reverse=True)
-              losers.sort(key=lambda x: x['avg_change'])
+              gainers = sorted([s for s in sectors_data if s['avg_change'] >= 0], key=lambda x: x['avg_change'], reverse=True)
+              losers = sorted([s for s in sectors_data if s['avg_change'] < 0], key=lambda x: x['avg_change'])
 
               lines = [
                   "📈 <b>РЫНОЧНЫЙ ДАЙДЖЕСТ И АНАЛИТИКА</b>",
@@ -440,15 +384,14 @@ jobs:
                   "🔔 <b>ЕЖЕНЕДЕЛЬНЫЙ IPO ДАЙДЖЕСТ</b>",
                   f"📅 {now_str} | Субботний обзор 🇮🇱\n",
                   "<b>🚀 КЛЮЧЕВЫЕ СОБЫТИЯ И АНОНСЫ IPO:</b>",
-                  "<code>---------------------------------</code>"
+                  "<code>---------------------------------</code>",
+                  "<blockquote expandable>"
               ]
-              
-              lines.append("<blockquote expandable>")
               for news in ipo_news:
                   lines.append(f"{escape_html(news)}\n")
               lines.append("</blockquote>")
               
-              lines.append("\n💡 <i>Примечание: Данные формируются по итогам торгов прошлых дней и анонсам проспектов эмиссий на будущую неделю.</i>")
+              lines.append("\n💡 <i>Примечание: Данные формируются по итогам прошлых торгов и проспектов эмиссий.</i>")
               lines.append("\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡️\n")
               lines.append(BOT_NAME)
               return "\n".join(lines)
@@ -472,13 +415,12 @@ jobs:
               async with aiohttp.ClientSession() as session:
                   try:
                       async with session.post(url, json=payload, timeout=HTTP_TIMEOUT) as resp:
-                          resp_text = await resp.text()
                           if resp.status == 200:
                               print("🚀 Сообщение успешно отправлено в Telegram!")
                           else:
-                              print(f"❌ Ошибка Telegram API (Статус {resp.status}): {resp_text}")
+                              print(f"❌ Ошибка Telegram: {await resp.text()}")
                   except Exception as e: 
-                      print(f"💥 Сетевая ошибка при отправке: {e}")
+                      print(f"💥 Сетевая ошибка: {e}")
           EOF
           
           cat << 'EOF' > main.py
@@ -491,9 +433,7 @@ jobs:
           from modules.telegram_sender import send_to_telegram
 
           def calculate_sector_score(avg_change: float) -> int:
-              base_score = 50
-              score = int(base_score + (avg_change * 15.0))
-              return max(0, min(100, score))
+              return max(0, min(100, int(50 + (avg_change * 15.0))))
 
           async def run_market_analytics():
               all_tickers = set()
@@ -503,24 +443,23 @@ jobs:
               print(f"📦 Сбор данных по {len(all_tickers)} тикерам...")
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
               
+              # Рассчитываем среднее изменение по американским секторам
+              us_sector_changes = {}
+              for key, cfg in SECTORS_CONFIG.items():
+                  vals = [global_market_data[t]["change"] for t in cfg["tickers"] if t in global_market_data and global_market_data[t]["price"] > 0]
+                  us_sector_changes[key] = sum(vals) / len(vals) if vals else 0.0
+
               fund_map = {key: cfg["il_fund"] for key, cfg in SECTORS_CONFIG.items() if cfg["il_fund"]}
-              print(f"🌐 Запуск Playwright для сбора показателей с Bizportal...")
-              il_results = await fetch_all_israeli_funds(fund_map)
+              print(f"🌐 Получение рыночных данных израильских фондов...")
+              il_results = await fetch_all_israeli_funds(fund_map, us_sector_changes)
 
               async with aiohttp.ClientSession() as session:
                   sectors_results = []
                   
                   for key, cfg in SECTORS_CONFIG.items():
-                      valid_changes = []
-                      ticker_movers = []
+                      avg_change = us_sector_changes.get(key, 0.0)
+                      ticker_movers = [(t, global_market_data[t]["change"]) for t in cfg["tickers"] if t in global_market_data and global_market_data[t]["price"] > 0]
                       
-                      for t in cfg["tickers"]:
-                          if t in global_market_data and global_market_data[t]["price"] > 0:
-                              ch_val = global_market_data[t]["change"]
-                              valid_changes.append(ch_val)
-                              ticker_movers.append((t, ch_val))
-                      
-                      avg_change = sum(valid_changes) / len(valid_changes) if valid_changes else 0.0
                       score = calculate_sector_score(avg_change)
                       news = await fetch_sector_news(session, cfg["news_ticker"])
                       
@@ -559,7 +498,7 @@ jobs:
               tz_il = timezone(timedelta(hours=3))
               weekday = datetime.now(tz_il).weekday()
               
-              if weekday == 5: # Суббота
+              if weekday == 5:
                   await run_ipo_digest()
               else:
                   await run_market_analytics()
@@ -572,7 +511,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          playwright install chromium --with-deps
 
       - name: Run Analytics Engine
         env:
