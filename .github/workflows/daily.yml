@@ -2,7 +2,10 @@ name: Automated Market Analytics
 
 on:
   schedule:
-    - cron: '15 20 * * *'
+    # Пн-Пт в 23:10 по Израилю (20:10 UTC) — Рыночная аналитика
+    - cron: '10 20 * * 1-5'
+    # Суббота в 22:00 по Израилю (19:00 UTC) — IPO отчет
+    - cron: '0 19 * * 6'
   workflow_dispatch:
 
 jobs:
@@ -170,7 +173,6 @@ jobs:
           import aiohttp, urllib.parse, html, re
           from modules.config import HTTP_TIMEOUT, MAX_NEWS_PER_SECTOR, HEADERS
 
-          # Фильтр мусорных, спамовых и кликбейтных заголовков
           SPAM_PATTERNS = [
               r"if you invested", r"would you have now", r"stocks to buy",
               r"should you buy", r"social security", r"check in 202",
@@ -219,6 +221,22 @@ jobs:
                                       break
               except: pass
               return news_list or ["• Торгуется в рамках текущей рыночной динамики."]
+
+          async def fetch_ipo_news(session: aiohttp.ClientSession) -> list:
+              url = "https://query1.finance.yahoo.com/v1/finance/search?q=IPO"
+              ipo_news = []
+              try:
+                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
+                      if response.status == 200:
+                          items = (await response.json()).get("news", [])
+                          for item in items[:6]:
+                              title = item.get("title", "")
+                              if title and is_quality_headline(title):
+                                  cleaned = clean_headline(title)
+                                  translated = await translate_text(session, cleaned)
+                                  ipo_news.append(f"📌 {translated}")
+              except: pass
+              return ipo_news or ["📌 На этой неделе крупных публикаций по IPO не зафиксировано."]
           EOF
           
           cat << 'EOF' > modules/formatter.py
@@ -228,21 +246,19 @@ jobs:
               return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
           def get_market_status() -> str:
-              # Израильское время (UTC+3)
               tz_il = timezone(timedelta(hours=3))
               now = datetime.now(tz_il)
-              weekday = now.weekday() # 0 = Пн, 5 = Сб, 6 = Вс
+              weekday = now.weekday()
               
-              if weekday in (5, 6):
-                  return "⚠️ <i>Рынки закрыты (Выходные). Котировки закрытия сессии.</i>"
-              return "🟢 <i>Активная рыночная сессия</i>"
+              if weekday in (4, 5): # Пятница, Суббота в Израиле
+                  return "⚠️ <i>Рынки Израиля закрыты (Выходные).</i>"
+              return "🟢 <i>Активный рабочий день (TASE / US Markets)</i>"
 
           def build_telegram_message(sectors_data: list) -> str:
               tz_il = timezone(timedelta(hours=3))
               now_str = datetime.now(tz_il).strftime("%d.%m.%Y | %H:%M")
               status_line = get_market_status()
               
-              # Разделяем на плюс и минус
               gainers = [s for s in sectors_data if s['avg_change'] >= 0]
               losers = [s for s in sectors_data if s['avg_change'] < 0]
               
@@ -312,6 +328,26 @@ jobs:
 
               lines.append("\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡️")
               return "\n".join(lines)
+
+          def build_ipo_message(ipo_news: list) -> str:
+              tz_il = timezone(timedelta(hours=3))
+              now_str = datetime.now(tz_il).strftime("%d.%m.%Y")
+              
+              lines = [
+                  "🔔 <b>ЕЖЕНЕДЕЛЬНЫЙ IPO ДАЙДЖЕСТ</b>",
+                  f"📅 {now_str} | Субботний обзор 🇮🇱\n",
+                  "<b>🚀 КЛЮЧЕВЫЕ СОБЫТИЯ И АНОНСЫ IPO:</b>",
+                  "<code>---------------------------------</code>"
+              ]
+              
+              lines.append("<blockquote expandable>")
+              for news in ipo_news:
+                  lines.append(f"{escape_html(news)}\n")
+              lines.append("</blockquote>")
+              
+              lines.append("\n💡 <i>Примечание: Данные формируются по итогам торгов прошлых дней и анонсам проспектов эмиссий на будущую неделю.</i>")
+              lines.append("\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡️")
+              return "\n".join(lines)
           EOF
           
           cat << 'EOF' > modules/telegram_sender.py
@@ -343,10 +379,11 @@ jobs:
           
           cat << 'EOF' > main.py
           import asyncio, aiohttp
+          from datetime import datetime, timezone, timedelta
           from modules.config import SECTORS_CONFIG
           from modules.market import fetch_all_yahoo_data, fetch_israeli_fund
-          from modules.news import fetch_sector_news
-          from modules.formatter import build_telegram_message
+          from modules.news import fetch_sector_news, fetch_ipo_news
+          from modules.formatter import build_telegram_message, build_ipo_message
           from modules.telegram_sender import send_to_telegram
 
           def calculate_sector_score(avg_change: float) -> int:
@@ -354,7 +391,7 @@ jobs:
               score = int(base_score + (avg_change * 15.0))
               return max(0, min(100, score))
 
-          async def main():
+          async def run_market_analytics():
               all_tickers = set()
               for cfg in SECTORS_CONFIG.values():
                   all_tickers.update(cfg["tickers"])
@@ -364,11 +401,7 @@ jobs:
               
               async with aiohttp.ClientSession() as session:
                   sectors_results = []
-                  
-                  il_tasks = {}
-                  for key, cfg in SECTORS_CONFIG.items():
-                      if cfg["il_fund"]:
-                          il_tasks[key] = fetch_israeli_fund(session, cfg["il_fund"])
+                  il_tasks = {key: fetch_israeli_fund(session, cfg["il_fund"]) for key, cfg in SECTORS_CONFIG.items() if cfg["il_fund"]}
                   
                   il_results = {}
                   if il_tasks:
@@ -413,6 +446,23 @@ jobs:
                       
                   message = build_telegram_message(sectors_results)
                   await send_to_telegram(message)
+
+          async def run_ipo_digest():
+              print("📅 Формирование субботнего IPO дайджеста...")
+              async with aiohttp.ClientSession() as session:
+                  ipo_news = await fetch_ipo_news(session)
+                  message = build_ipo_message(ipo_news)
+                  await send_to_telegram(message)
+
+          async def main():
+              tz_il = timezone(timedelta(hours=3))
+              weekday = datetime.now(tz_il).weekday()
+              
+              # 5 — это Суббота (0=Пн, 1=Вт, ..., 5=Сб, 6=Вс)
+              if weekday == 5:
+                  await run_ipo_digest()
+              else:
+                  await run_market_analytics()
 
           if __name__ == "__main__":
               asyncio.run(main())
