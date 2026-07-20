@@ -37,7 +37,7 @@ jobs:
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-              "Accept-Language": "en-US,en;q=0.9,ru;q=0.8,he;q=0.7"
+              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7"
           }
 
           SECTORS_CONFIG = {
@@ -146,6 +146,53 @@ jobs:
                   results = await asyncio.gather(*tasks)
                   return dict(results)
 
+          def parse_funder_indicator(html_text: str, fund_id: str) -> float:
+              """Специализированная функция поиска показателя יומית на сайте Funder."""
+              if not html_text:
+                  return 0.0
+              
+              soup = BeautifulSoup(html_text, 'html.parser')
+              
+              # 1. Поиск по тегам <script> (на случай SSR/JS структур)
+              for script in soup.find_all('script'):
+                  if script.string and ('יומית' in script.string or fund_id in script.string):
+                      match = re.search(r'"yomi"?:?\s*"?([-+]?\d+\.?\d*)"?', script.string, re.IGNORECASE)
+                      if match:
+                          try:
+                              return float(match.group(1))
+                          except ValueError:
+                              pass
+
+              # 2. Поиск по DOM элементов, содержащих маркер 'יומית'
+              elements = soup.find_all(string=re.compile(r'יומית'))
+              for el in elements:
+                  parent = el.find_parent(['td', 'tr', 'div', 'li'])
+                  if not parent:
+                      continue
+                  
+                  text_block = parent.get_text(separator=' ')
+                  if parent.parent:
+                      text_block += " " + parent.parent.get_text(separator=' ')
+                  
+                  matches = re.findall(r'([-+]?\s*\d+(?:\.\d+)?)\s*%', text_block)
+                  if matches:
+                      clean_num = matches[0].replace(" ", "").replace("+", "")
+                      try:
+                          return float(clean_num)
+                      except ValueError:
+                          pass
+
+              # 3. Глобальный поиск регулярным выражением по всему HTML
+              raw_matches = re.findall(r'יומית[^\d%\+\-]*?([-+]?\s*\d+(?:\.\d+)?)\s*%', html_text)
+              if raw_matches:
+                  clean_num = raw_matches[0].replace(" ", "").replace("+", "")
+                  try:
+                      return float(clean_num)
+                  except ValueError:
+                      pass
+
+              return 0.0
+
           async def fetch_israeli_fund(session: aiohttp.ClientSession, fund_id: str) -> dict:
               url = f"https://www.funder.co.il/fund/{fund_id}"
               funder_headers = HEADERS.copy()
@@ -158,32 +205,9 @@ jobs:
                   async with session.get(url, headers=funder_headers, timeout=HTTP_TIMEOUT) as response:
                       if response.status == 200:
                           html_text = await response.text()
-                          soup = BeautifulSoup(html_text, 'html.parser')
-                          
-                          # Ищем блоки с меткой дневной доходности
-                          elements = soup.find_all(string=re.compile(r'יומית'))
-                          
-                          for el in elements:
-                              parent = el.find_parent(['td', 'div', 'tr'])
-                              if not parent:
-                                  continue
-                              
-                              search_scope = parent.get_text()
-                              if parent.parent:
-                                  search_scope += " " + parent.parent.get_text()
-                                  
-                              matches = re.findall(r'([-+]?\s*\d+\.\d+)\s*%', search_scope)
-                              if matches:
-                                  val_str = matches[0].replace(" ", "")
-                                  change_val = float(val_str)
-                                  return {"price": 0.0, "change": round(change_val, 2)}
-                                  
-                          # Резервный поиск напрямую в HTML
-                          raw_matches = re.findall(r'יומית[^\d\%\+\-]*?([-+]?\s*\d+\.\d+)\s*%', html_text)
-                          if raw_matches:
-                              val_str = raw_matches[0].replace(" ", "")
-                              return {"price": 0.0, "change": round(float(val_str), 2)}
-
+                          change_val = parse_funder_indicator(html_text, fund_id)
+                          print(f"📊 Funder [{fund_id}]: יומית = {change_val}%")
+                          return {"price": 0.0, "change": round(change_val, 2)}
               except Exception as e:
                   print(f"Ошибка парсинга Funder ({fund_id}): {e}")
                   
