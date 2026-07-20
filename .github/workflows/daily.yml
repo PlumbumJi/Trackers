@@ -153,8 +153,8 @@ jobs:
                   results = await asyncio.gather(*tasks)
                   return dict(results)
 
-          def parse_maya_indicator(html_text: str) -> float:
-              """Выполняет поиск показателя дневной доходности на Maya TASE из HTML."""
+          def parse_bizportal_indicator(html_text: str) -> float:
+              """Выполняет поиск показателя дневной доходности на Bizportal из HTML."""
               if not html_text:
                   return 0.0
               
@@ -181,7 +181,7 @@ jobs:
                       except ValueError:
                           pass
 
-              for span in soup.select('span[class*="change"], div[class*="change"], span[class*="green"], span[class*="red"], span[class*="trend"]'):
+              for span in soup.select('span[class*="change"], div[class*="change"], span[class*="green"], span[class*="red"]'):
                   text_block = span.get_text(strip=True)
                   matches = re.findall(r'([-+]?\s*\d+(?:\.\d+)?)\s*%', text_block)
                   if matches:
@@ -202,7 +202,7 @@ jobs:
               return 0.0
 
           async def fetch_all_israeli_funds(fund_map: dict) -> dict:
-              """Использует Playwright для загрузки страниц фондов на Maya TASE."""
+              """Использует Playwright для загрузки страниц фондов на Bizportal."""
               results = {}
               if not fund_map:
                   return results
@@ -233,17 +233,17 @@ jobs:
                           results[key] = {"price": 0.0, "change": 0.0}
                           continue
                           
-                      url = f"https://maya.tase.co.il/he/funds/mutual-funds/{fund_id}"
+                      url = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
                       try:
                           await page.goto(url, wait_until="domcontentloaded", timeout=12000)
-                          await page.wait_for_timeout(2000) # Даем время на выполнение JS Maya
+                          await page.wait_for_timeout(1500)
                           
                           content = await page.content()
-                          change_val = parse_maya_indicator(content)
-                          print(f"✅ Playwright Maya TASE [{fund_id}]: {change_val}%")
+                          change_val = parse_bizportal_indicator(content)
+                          print(f"✅ Playwright Bizportal [{fund_id}]: {change_val}%")
                           results[key] = {"price": 0.0, "change": round(change_val, 2)}
                       except Exception as e:
-                          print(f"⚠️ Ошибка Playwright при загрузке Maya TASE [{fund_id}]: {e}")
+                          print(f"⚠️ Ошибка Playwright при загрузке Bizportal [{fund_id}]: {e}")
                           results[key] = {"price": 0.0, "change": 0.0}
 
                   await browser.close()
@@ -483,7 +483,7 @@ jobs:
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
               
               fund_map = {key: cfg["il_fund"] for key, cfg in SECTORS_CONFIG.items() if cfg["il_fund"]}
-              print(f"🌐 Запуск Playwright для получения показателей {len(fund_map)} израильских фондов с Maya TASE...")
+              print(f"🌐 Запуск Playwright для получения показателей {len(fund_map)} израильских фондов с Bizportal...")
               il_results = await fetch_all_israeli_funds(fund_map)
 
               async with aiohttp.ClientSession() as session:
