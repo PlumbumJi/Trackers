@@ -153,24 +153,22 @@ jobs:
                   results = await asyncio.gather(*tasks)
                   return dict(results)
 
-          def parse_funder_indicator(html_text: str) -> float:
-              """Выполняет поиск показателя дневной доходности на Funder из исходного HTML."""
+          def parse_bizportal_indicator(html_text: str) -> float:
+              """Выполняет поиск показателя дневной доходности на Bizportal из HTML."""
               if not html_text:
                   return 0.0
               
               soup = BeautifulSoup(html_text, 'lxml')
               
-              # Удаление баннеров и всплывающих окон из DOM
               for selector in ['script', 'style', 'iframe', 'div[class*="popup"]', 'div[class*="modal"]']:
                   for match in soup.select(selector):
                       match.decompose()
 
-              elements = soup.find_all(string=re.compile(r'יומית'))
+              elements = soup.find_all(string=re.compile(r'שינוי|יומי'))
               for el in elements:
-                  parent = el.find_parent(['td', 'tr', 'div', 'li', 'span'])
+                  parent = el.find_parent(['td', 'tr', 'div', 'li', 'span', 'p'])
                   if not parent:
                       continue
-                  
                   text_block = parent.get_text(separator=' ', strip=True)
                   if parent.parent:
                       text_block += " " + parent.parent.get_text(separator=' ', strip=True)
@@ -183,7 +181,17 @@ jobs:
                       except ValueError:
                           pass
 
-              raw_matches = re.findall(r'יומית[^\d%\+\-]*?([-+]?\s*\d+(?:\.\d+)?)\s*%', html_text)
+              for span in soup.select('span[class*="change"], div[class*="change"], span[class*="green"], span[class*="red"]'):
+                  text_block = span.get_text(strip=True)
+                  matches = re.findall(r'([-+]?\s*\d+(?:\.\d+)?)\s*%', text_block)
+                  if matches:
+                      clean_num = matches[0].replace(" ", "").replace("+", "")
+                      try:
+                          return float(clean_num)
+                      except ValueError:
+                          pass
+
+              raw_matches = re.findall(r'([-+]?\s*\d+(?:\.\d+)?)\s*%', html_text)
               if raw_matches:
                   clean_num = raw_matches[0].replace(" ", "").replace("+", "")
                   try:
@@ -194,7 +202,7 @@ jobs:
               return 0.0
 
           async def fetch_all_israeli_funds(fund_map: dict) -> dict:
-              """Использует Playwright для загрузки динамических страниц фондов на Funder."""
+              """Использует Playwright для загрузки страниц фондов на Bizportal."""
               results = {}
               if not fund_map:
                   return results
@@ -212,7 +220,6 @@ jobs:
                   
                   page = await context.new_page()
 
-                  # Блокировка тяжелых ресурсов и рекламы для ускорения
                   async def block_unnecessary(route):
                       if route.request.resource_type in ["image", "media", "font"]:
                           await route.abort()
@@ -226,18 +233,17 @@ jobs:
                           results[key] = {"price": 0.0, "change": 0.0}
                           continue
                           
-                      url = f"https://www.funder.co.il/fund/{fund_id}"
+                      url = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
                       try:
-                          # Переход на страницу и ожидание выполнения JS
                           await page.goto(url, wait_until="domcontentloaded", timeout=12000)
-                          await page.wait_for_timeout(1500) # Ожидание JS-рендера
+                          await page.wait_for_timeout(1500)
                           
                           content = await page.content()
-                          change_val = parse_funder_indicator(content)
-                          print(f"✅ Playwright Funder [{fund_id}]: {change_val}%")
+                          change_val = parse_bizportal_indicator(content)
+                          print(f"✅ Playwright Bizportal [{fund_id}]: {change_val}%")
                           results[key] = {"price": 0.0, "change": round(change_val, 2)}
                       except Exception as e:
-                          print(f"⚠️ Ошибка Playwright при загрузке [{fund_id}]: {e}")
+                          print(f"⚠️ Ошибка Playwright при загрузке Bizportal [{fund_id}]: {e}")
                           results[key] = {"price": 0.0, "change": 0.0}
 
                   await browser.close()
@@ -476,9 +482,8 @@ jobs:
               print(f"📦 Сбор данных по {len(all_tickers)} тикерам...")
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
               
-              # Запуск Playwright для сбора данных Funder
               fund_map = {key: cfg["il_fund"] for key, cfg in SECTORS_CONFIG.items() if cfg["il_fund"]}
-              print(f"🌐 Запуск Playwright для получения показателей {len(fund_map)} израильских фондов...")
+              print(f"🌐 Запуск Playwright для получения показателей {len(fund_map)} израильских фондов с Bizportal...")
               il_results = await fetch_all_israeli_funds(fund_map)
 
               async with aiohttp.ClientSession() as session:
