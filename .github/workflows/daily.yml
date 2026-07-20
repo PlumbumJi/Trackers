@@ -46,28 +46,28 @@ jobs:
           SECTORS_CONFIG = {
               "Oil": {
                   "name": "Нефть и Энергетика", "icon": "🛢️", "short_eng": "Oil", "news_ticker": "USO", 
-                  "il_search_name": "ברק אולטרה נפט WTI", "il_name_eng": "WTI Ultra x3", 
-                  "tickers": ["BZ=F", "CL=F", "USO", "OVX"]
+                  "il_search_name": "קרן נאמנות ברק אולטרה נפט WTI", "il_name_eng": "WTI Ultra x3", 
+                  "tickers": ["BZ=F", "CL=F", "USO", "OVX", "XLE", "VLO"]
               },
               "Cybersecurity": {
                   "name": "Кибербезопасность", "icon": "🛡️", "short_eng": "Cyber", "news_ticker": "CIBR", 
-                  "il_search_name": "אי.בי.אי סייבר", "il_name_eng": "IBI Cybersecurity", 
-                  "tickers": ["CIBR", "HACK", "CRWD", "PANW", "FTNT", "ZS"]
+                  "il_search_name": "אי.בי.אי. סייבר", "il_name_eng": "IBI Cybersecurity", 
+                  "tickers": ["CIBR", "HACK", "CRWD", "PANW", "FTNT", "ZS", "NET"]
               },
               "Gold": {
                   "name": "Золото и Металлы", "icon": "🥇", "short_eng": "Gold", "news_ticker": "GLD", 
                   "il_search_name": "תכלית זהב פיזי", "il_name_eng": "Tachlit Gold Spot", 
-                  "tickers": ["GLD", "GDX", "SLV"]
+                  "tickers": ["GLD", "GDX", "SLV", "NEM", "GOLD"]
               },
               "Clean Energy": {
                   "name": "Зеленая энергетика", "icon": "☀️", "short_eng": "Clean", "news_ticker": "FSLR", 
                   "il_search_name": "מיטב אנרגיה ירוקה", "il_name_eng": "Meitav Clean Energy", 
-                  "tickers": ["ICLN", "TAN", "FAN", "FSLR", "ENPH"]
+                  "tickers": ["ICLN", "TAN", "FAN", "FSLR", "ENPH", "SEDG"]
               },
               "Aerospace": {
                   "name": "Авиация и Космос", "icon": "✈️", "short_eng": "Aero", "news_ticker": "ITA", 
                   "il_search_name": "תכלית תעופה וחלל ארהב", "il_name_eng": "Tachlit US Aerospace", 
-                  "tickers": ["BA", "EADSY", "LMT", "RTX", "ITA"]
+                  "tickers": ["BA", "EADSY", "LMT", "RTX", "ITA", "NOC"]
               },
               "Biotech": {
                   "name": "Биотех и Медицина", "icon": "🏥", "short_eng": "Bio", "news_ticker": "LLY", 
@@ -87,32 +87,32 @@ jobs:
               "Uranium": {
                   "name": "Уран и Атомная энергетика", "icon": "☢️", "short_eng": "Uran", "news_ticker": "CCJ", 
                   "il_search_name": "מור אורניום", "il_name_eng": "More Uranium Giants", 
-                  "tickers": ["URA", "URNM", "CCJ", "NXE"]
+                  "tickers": ["URA", "URNM", "CCJ", "NXE", "DNN"]
               },
               "Gaming": {
                   "name": "Игровая Индустрия", "icon": "🎮", "short_eng": "Game", "news_ticker": "SONY", 
                   "il_search_name": "מגדל גיימינג", "il_name_eng": "MTF Bluestar E-Games", 
-                  "tickers": ["NVDA", "MSFT", "TTWO", "EA", "RBLX", "SONY", "NTDOY", "UBSFY", "ESPO", "HERO", "GAMR"]
+                  "tickers": ["NVDA", "MSFT", "TTWO", "EA", "RBLX", "SONY", "NTDOY", "HERO"]
               },
               "EV": {
                   "name": "Электромобили", "icon": "🚗", "short_eng": "EV", "news_ticker": "TSLA", 
                   "il_search_name": "מגדל רכב חשמלי", "il_name_eng": "Migdal EV & Auto", 
-                  "tickers": ["TSLA", "BYDDY", "RIVN", "LI", "DRIV"]
+                  "tickers": ["TSLA", "BYDDY", "RIVN", "LI", "DRIV", "LCID"]
               },
               "E-Commerce": {
                   "name": "Электронная коммерция", "icon": "🛒", "short_eng": "Ecom", "news_ticker": "IBUY", 
                   "il_search_name": "מיטב מסחר אלקטרוני", "il_name_eng": "Meitav E-Commerce", 
-                  "tickers": ["AMZN", "SHOP", "MELI", "IBUY"]
+                  "tickers": ["AMZN", "SHOP", "MELI", "IBUY", "EBAY", "PDD"]
               },
               "Semiconductors": {
                   "name": "Полупроводники", "icon": "💻", "short_eng": "Semi", "news_ticker": "SOXX", 
                   "il_search_name": "קסם שבבים", "il_name_eng": "Kasam Semiconductors", 
-                  "tickers": ["NVDA", "AMD", "AVGO", "QCOM", "TSM", "ASML", "INTC", "SOXX", "SMH"]
+                  "tickers": ["NVDA", "AMD", "AVGO", "QCOM", "TSM", "ASML", "INTC", "SOXX"]
               },
               "AI": {
                   "name": "Искусственный Интеллект", "icon": "🤖", "short_eng": "AI", "news_ticker": "NVDA", 
                   "il_search_name": "מגדל אינטליגנציה מלאכותית", "il_name_eng": "Migdal AI", 
-                  "tickers": ["NVDA", "MSFT", "AMD", "AVGO", "PLTR", "GOOGL", "AMZN", "TSM", "BOTZ", "AIQ", "ROBO", "IRBO"]
+                  "tickers": ["NVDA", "MSFT", "AMD", "AVGO", "PLTR", "GOOGL", "AMZN", "BOTZ"]
               }
           }
           EOF
@@ -151,26 +151,53 @@ jobs:
                   return dict(results)
 
           async def fetch_fund_by_name_playwright(page, key: str, search_name: str) -> tuple:
-              """Ищет израильский фонд в Playwright по его названию."""
+              """Переходит на страницу Funder/Google Finance по названию и точно извлекает динамику."""
               if not search_name:
                   return key, 0.0
 
               try:
-                  query = f"קרן נאמנות {search_name} פאנדר"
-                  url = f"https://www.google.com/search?q={urllib.parse.quote(query)}&hl=he"
+                  query = f"{search_name} funder"
+                  search_url = f"https://www.google.com/search?q={urllib.parse.quote(query)}&hl=he"
                   
-                  await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-                  content = await page.content()
+                  await page.goto(search_url, wait_until="domcontentloaded", timeout=12000)
+                  
+                  # Ищем ссылку на funder.co.il и кликаем
+                  funder_link = await page.query_selector('a[href*="funder.co.il/fund/"]')
+                  if funder_link:
+                      href = await funder_link.get_attribute("href")
+                      if href:
+                          await page.goto(href, wait_until="domcontentloaded", timeout=12000)
+                          
+                          # Ищем точный элемент изменений курса
+                          elem = await page.query_selector("#dailyChange, .change-val, span[id*='Change']")
+                          if elem:
+                              text = await elem.inner_text()
+                              match = re.search(r'([-+]?\d+(?:\.\d+)?)', text.replace(',', '.'))
+                              if match:
+                                  val = float(match.group(1))
+                                  print(f"✅ [Funder Direct] [{search_name}]: {val}%")
+                                  return key, round(val, 2)
 
-                  matches = re.findall(r'([-+]?\d+(?:\.\d+)?)\s*%', content)
-                  for m in matches:
-                      val = float(m)
-                      if abs(val) < 25.0 and val != 0.0:
-                          print(f"✅ Playwright нашел [{search_name}]: {val}%")
+                  # Фоллбэк: ищем блок котировки Google Finance в результатах
+                  elem_g = await page.query_selector('[data-percentage-change], div[aria-label*="%"]')
+                  if elem_g:
+                      attr = await elem_g.get_attribute("data-percentage-change")
+                      if attr:
+                          val = float(attr)
+                          print(f"✅ [Google Finance Attribute] [{search_name}]: {val}%")
                           return key, round(val, 2)
+                      
+                      text_g = await elem_g.inner_text()
+                      match_g = re.search(r'([-+]?\d+(?:\.\d+)?)\s*%', text_g)
+                      if match_g:
+                          val = float(match_g.group(1))
+                          print(f"✅ [Google Snippet] [{search_name}]: {val}%")
+                          return key, round(val, 2)
+
               except Exception as e:
                   print(f"⚠️ Ошибка Playwright [{search_name}]: {e}")
 
+              print(f"❌ Не удалось найти точные данные для [{search_name}] (0.0%)")
               return key, 0.0
 
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
@@ -274,9 +301,10 @@ jobs:
                   ch_sign = f"+{s['avg_change']:.2f}%" if s['avg_change'] > 0 else f"{s['avg_change']:.2f}%"
                   lines.append(f"<b>{s['icon']} {s['name']}</b> ({ch_sign})")
                   
-                  if s.get("ticker_details"):
-                      details_str = ", ".join([f"{t}: {c:+.2f}%" for t, c in s["ticker_details"]])
-                      lines.append(f"  📊 <i>Компоненты: [{details_str}]</i>")
+                  # Показываем 4 ключевых компонента с наибольшими изменениями
+                  if s.get("top_4_tickers"):
+                      details_str = ", ".join([f"{t}: {c:+.2f}%" for t, c in s["top_4_tickers"]])
+                      lines.append(f"  📊 <i>Топ-4 драйвера: [{details_str}]</i>")
                       
                   for n in s['news']:
                       lines.append(f"  {escape_html(n)}")
@@ -312,7 +340,6 @@ jobs:
           from modules.config import BOT_TOKEN, CHAT_ID, HTTP_TIMEOUT
           
           def split_message(text: str, max_length: int = 4000) -> list[str]:
-              """Безопасно разбивает сообщение по строкам, не превышая лимит Telegram."""
               if len(text) <= max_length:
                   return [text]
               
@@ -342,7 +369,7 @@ jobs:
               url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
               chunks = split_message(text)
               
-              print(f"ℹ️ Длина сообщения: {len(text)} символов. Чанков для отправки: {len(chunks)}")
+              print(f"ℹ️ Длина сообщения: {len(text)} символов. Чанков: {len(chunks)}")
               
               async with aiohttp.ClientSession() as session:
                   for idx, chunk in enumerate(chunks, start=1):
@@ -357,10 +384,9 @@ jobs:
                               if resp.status == 200:
                                   print(f"🚀 Чанк [{idx}/{len(chunks)}] успешно отправлен!")
                               else:
-                                  error_body = await resp.text()
-                                  print(f"❌ Ошибка Telegram (код {resp.status}): {error_body}")
+                                  print(f"❌ Ошибка Telegram (код {resp.status}): {await resp.text()}")
                       except Exception as e:
-                          print(f"💥 Исключение при отправке в Telegram: {e}")
+                          print(f"💥 Ошибка отправки: {e}")
           EOF
           
           cat << 'EOF' > main.py
@@ -383,7 +409,7 @@ jobs:
               print(f"📦 Сбор данных Yahoo Finance...")
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
 
-              print(f"🌐 Поиск израильских фондов через Playwright по названию...")
+              print(f"🌐 Точный поиск израильских фондов через Playwright...")
               il_results = await fetch_all_israeli_funds(SECTORS_CONFIG)
 
               async with aiohttp.ClientSession() as session:
@@ -391,6 +417,11 @@ jobs:
                   
                   for key, cfg in SECTORS_CONFIG.items():
                       ticker_details = [(t, global_market_data[t]["change"]) for t in cfg["tickers"] if t in global_market_data and global_market_data[t]["price"] > 0]
+                      
+                      # Сортируем тикеры по абсолютной величине изменения и берем ровно 4
+                      sorted_tickers = sorted(ticker_details, key=lambda x: abs(x[1]), reverse=True)
+                      top_4_tickers = sorted_tickers[:4]
+                      
                       valid_changes = [c for _, c in ticker_details]
                       avg_change = sum(valid_changes) / len(valid_changes) if valid_changes else 0.0
                       
@@ -402,7 +433,7 @@ jobs:
                           "name": cfg["name"],
                           "icon": cfg["icon"],
                           "avg_change": round(avg_change, 2),
-                          "ticker_details": ticker_details,
+                          "top_4_tickers": top_4_tickers,
                           "score": score,
                           "news": news,
                           "il_name_eng": cfg["il_name_eng"],
