@@ -46,7 +46,7 @@ jobs:
           SECTORS_CONFIG = {
               "Oil": {
                   "name": "Нефть и Энергетика", "icon": "🛢️", "short_eng": "Oil", "news_ticker": "USO", 
-                  "il_search_name": "קרן נאמנות ברק אולטרה נפט WTI", "il_name_eng": "WTI Ultra x3", 
+                  "il_search_name": "ברק אולטרה נפט", "il_name_eng": "WTI Ultra x3", 
                   "tickers": ["BZ=F", "CL=F", "USO", "OVX", "XLE", "VLO"]
               },
               "Cybersecurity": {
@@ -56,7 +56,7 @@ jobs:
               },
               "Gold": {
                   "name": "Золото и Металлы", "icon": "🥇", "short_eng": "Gold", "news_ticker": "GLD", 
-                  "il_search_name": "תכלית זהב פיזי", "il_name_eng": "Tachlit Gold Spot", 
+                  "il_search_name": "תכלית זהב", "il_name_eng": "Tachlit Gold Spot", 
                   "tickers": ["GLD", "GDX", "SLV", "NEM", "GOLD"]
               },
               "Clean Energy": {
@@ -66,7 +66,7 @@ jobs:
               },
               "Aerospace": {
                   "name": "Авиация и Космос", "icon": "✈️", "short_eng": "Aero", "news_ticker": "ITA", 
-                  "il_search_name": "תכלית תעופה וחלל ארהב", "il_name_eng": "Tachlit US Aerospace", 
+                  "il_search_name": "תכלית תעופה", "il_name_eng": "Tachlit US Aerospace", 
                   "tickers": ["BA", "EADSY", "LMT", "RTX", "ITA", "NOC"]
               },
               "Biotech": {
@@ -81,7 +81,7 @@ jobs:
               },
               "Banking": {
                   "name": "Банковский сектор", "icon": "🏦", "short_eng": "Bank", "news_ticker": "JPM", 
-                  "il_search_name": "מיטב בנקים ארהב", "il_name_eng": "Meitav Banks US", 
+                  "il_search_name": "מיטב בנקים", "il_name_eng": "Meitav Banks US", 
                   "tickers": ["JPM", "BAC", "GS", "MS", "WFC", "XLF", "KBE"]
               },
               "Uranium": {
@@ -151,53 +151,44 @@ jobs:
                   return dict(results)
 
           async def fetch_fund_by_name_playwright(page, key: str, search_name: str) -> tuple:
-              """Переходит на страницу Funder/Google Finance по названию и точно извлекает динамику."""
+              """Ищет фонд на Funder напрямую без посредников поисковика."""
               if not search_name:
                   return key, 0.0
 
               try:
-                  query = f"{search_name} funder"
-                  search_url = f"https://www.google.com/search?q={urllib.parse.quote(query)}&hl=he"
+                  url = f"https://www.funder.co.il/search?q={urllib.parse.quote(search_name)}"
+                  await page.goto(url, wait_until="domcontentloaded", timeout=12000)
                   
-                  await page.goto(search_url, wait_until="domcontentloaded", timeout=12000)
+                  # 1. Если сразу попали на страницу фонда или поиск выдал результаты
+                  content = await page.content()
                   
-                  # Ищем ссылку на funder.co.il и кликаем
-                  funder_link = await page.query_selector('a[href*="funder.co.il/fund/"]')
-                  if funder_link:
-                      href = await funder_link.get_attribute("href")
-                      if href:
-                          await page.goto(href, wait_until="domcontentloaded", timeout=12000)
-                          
-                          # Ищем точный элемент изменений курса
-                          elem = await page.query_selector("#dailyChange, .change-val, span[id*='Change']")
-                          if elem:
-                              text = await elem.inner_text()
-                              match = re.search(r'([-+]?\d+(?:\.\d+)?)', text.replace(',', '.'))
-                              if match:
-                                  val = float(match.group(1))
-                                  print(f"✅ [Funder Direct] [{search_name}]: {val}%")
-                                  return key, round(val, 2)
+                  # Ищем изменения через внутренние теги Funder
+                  match = re.search(r'id=["\']?dailyChange["\']?[^>]*>\s*([+-]?\d+(?:\.\d+)?)', content)
+                  if not match:
+                      match = re.search(r'class=["\']?[^"\']*change[^"\']*["\']?[^>]*>\s*([+-]?\d+(?:\.\d+)?)', content)
+                  if match:
+                      val = float(match.group(1))
+                      print(f"✅ [Funder Direct] [{search_name}]: {val}%")
+                      return key, round(val, 2)
 
-                  # Фоллбэк: ищем блок котировки Google Finance в результатах
-                  elem_g = await page.query_selector('[data-percentage-change], div[aria-label*="%"]')
-                  if elem_g:
-                      attr = await elem_g.get_attribute("data-percentage-change")
-                      if attr:
-                          val = float(attr)
-                          print(f"✅ [Google Finance Attribute] [{search_name}]: {val}%")
-                          return key, round(val, 2)
-                      
-                      text_g = await elem_g.inner_text()
-                      match_g = re.search(r'([-+]?\d+(?:\.\d+)?)\s*%', text_g)
-                      if match_g:
-                          val = float(match_g.group(1))
-                          print(f"✅ [Google Snippet] [{search_name}]: {val}%")
-                          return key, round(val, 2)
+                  # 2. Переход на первый результат поиска на Funder если попали в листинг
+                  link = await page.query_selector('a[href*="/fund/"]')
+                  if link:
+                      href = await link.get_attribute("href")
+                      if href:
+                          full_url = href if href.startswith("http") else f"https://www.funder.co.il{href}"
+                          await page.goto(full_url, wait_until="domcontentloaded", timeout=12000)
+                          sub_content = await page.content()
+                          sub_match = re.search(r'([+-]?\d+(?:\.\d+)?)\s*%', sub_content)
+                          if sub_match:
+                              val = float(sub_match.group(1))
+                              print(f"✅ [Funder Fund Page] [{search_name}]: {val}%")
+                              return key, round(val, 2)
 
               except Exception as e:
                   print(f"⚠️ Ошибка Playwright [{search_name}]: {e}")
 
-              print(f"❌ Не удалось найти точные данные для [{search_name}] (0.0%)")
+              print(f"❌ Не удалось получить данные по [{search_name}] (0.0%)")
               return key, 0.0
 
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
@@ -223,14 +214,19 @@ jobs:
           import aiohttp, urllib.parse, html
           from modules.config import HTTP_TIMEOUT, HEADERS
 
-          async def translate_text(session: aiohttp.ClientSession, text: str) -> str:
+          async def translate_to_russian(session: aiohttp.ClientSession, text: str) -> str:
+              """Переводит заголовок новости на русский язык через Google Translate API."""
+              if not text:
+                  return text
               try:
-                  url = f"https://api.mymemory.translated.net/get?q={urllib.parse.quote(text)}&langpair=en|ru"
-                  async with session.get(url, timeout=5) as resp:
+                  url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ru&dt=t&q={urllib.parse.quote(text)}"
+                  async with session.get(url, timeout=6) as resp:
                       if resp.status == 200:
-                          translated = (await resp.json()).get("responseData", {}).get("translatedText", text)
+                          data = await resp.json()
+                          translated = "".join([segment[0] for segment in data[0] if segment[0]])
                           return html.unescape(translated)
-              except: pass
+              except Exception as e:
+                  print(f"Ошибка перевода: {e}")
               return text
 
           async def fetch_sector_news(session: aiohttp.ClientSession, query_ticker: str) -> list:
@@ -242,8 +238,8 @@ jobs:
                           for item in items:
                               title = item.get("title", "")
                               if title and len(title) > 15:
-                                  translated = await translate_text(session, title)
-                                  return [f"• {translated}"]
+                                  translated_title = await translate_to_russian(session, title)
+                                  return [f"• {translated_title}"]
               except: pass
               return ["• Торгуется в рамках текущей рыночной динамики."]
 
@@ -257,8 +253,8 @@ jobs:
                           for item in items[:5]:
                               title = item.get("title", "")
                               if title:
-                                  translated = await translate_text(session, title)
-                                  ipo_news.append(f"📌 {translated}")
+                                  translated_title = await translate_to_russian(session, title)
+                                  ipo_news.append(f"📌 {translated_title}")
               except: pass
               return ipo_news or ["📌 Публикаций по IPO на этой неделе не зафиксировано."]
           EOF
@@ -296,12 +292,13 @@ jobs:
                   lines.append(f"{icon}{name:<6} {us_str:>6} {il_str:>6}  {score_emoji}{s['score']:>3}/100")
               lines.append("</code>\n")
 
+              # Сворачиваемая сноска с драйверами и переведенными новостями
+              lines.append("<blockquote expandable>")
               lines.append("🔍 <b>ДРАЙВЕРЫ ДВИЖЕНИЯ И ПОКАЗАТЕЛИ СЕКТОРОВ</b>\n")
               for s in sectors_data:
                   ch_sign = f"+{s['avg_change']:.2f}%" if s['avg_change'] > 0 else f"{s['avg_change']:.2f}%"
                   lines.append(f"<b>{s['icon']} {s['name']}</b> ({ch_sign})")
                   
-                  # Показываем 4 ключевых компонента с наибольшими изменениями
                   if s.get("top_4_tickers"):
                       details_str = ", ".join([f"{t}: {c:+.2f}%" for t, c in s["top_4_tickers"]])
                       lines.append(f"  📊 <i>Топ-4 драйвера: [{details_str}]</i>")
@@ -309,8 +306,9 @@ jobs:
                   for n in s['news']:
                       lines.append(f"  {escape_html(n)}")
                   lines.append("")
+              lines.append("</blockquote>")
 
-              lines.append("🇮🇱 <b>ФОНДЫ ТЕЛЬ-АВИВА (ИТОГИ ТОРГОВ)</b>")
+              lines.append("\n🇮🇱 <b>ФОНДЫ ТЕЛЬ-АВИВА (ИТОГИ ТОРГОВ)</b>")
               lines.append("<code>---------------------------------</code>")
               for s in sectors_data:
                   il_ch = s['il_fund_data']['change']
@@ -327,10 +325,12 @@ jobs:
               
               lines = [
                   "🔔 <b>ЕЖЕНЕДЕЛЬНЫЙ IPO ДАЙДЖЕСТ</b>",
-                  f"📅 {now_str} | Субботний обзор 🇮🇱\n"
+                  f"📅 {now_str} | Субботний обзор 🇮🇱\n",
+                  "<blockquote expandable>"
               ]
               for news in ipo_news:
                   lines.append(f"{escape_html(news)}\n")
+              lines.append("</blockquote>")
               lines.append(f"\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡️\n{BOT_NAME}")
               return "\n".join(lines)
           EOF
@@ -418,7 +418,7 @@ jobs:
                   for key, cfg in SECTORS_CONFIG.items():
                       ticker_details = [(t, global_market_data[t]["change"]) for t in cfg["tickers"] if t in global_market_data and global_market_data[t]["price"] > 0]
                       
-                      # Сортируем тикеры по абсолютной величине изменения и берем ровно 4
+                      # Берем 4 ключевых тикера с наибольшими абсолютными изменениями
                       sorted_tickers = sorted(ticker_details, key=lambda x: abs(x[1]), reverse=True)
                       top_4_tickers = sorted_tickers[:4]
                       
