@@ -15,6 +15,11 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4.2.2
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Deploy Architecture Files
         run: |
           mkdir -p modules
@@ -24,6 +29,7 @@ jobs:
           aiohttp==3.11.11
           beautifulsoup4==4.12.3
           lxml==5.1.0
+          playwright==1.49.1
           EOF
           
           cat << 'EOF' > modules/config.py
@@ -37,15 +43,7 @@ jobs:
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
-              "Sec-Ch-Ua": '"Not-A.Brand";v="99", "Chromium";v="124", "Google Chrome";v="124"',
-              "Sec-Ch-Ua-Mobile": "?0",
-              "Sec-Ch-Ua-Platform": '"Windows"',
-              "Sec-Fetch-Dest": "document",
-              "Sec-Fetch-Mode": "navigate",
-              "Sec-Fetch-Site": "none",
-              "Sec-Fetch-User": "?1",
-              "Upgrade-Insecure-Requests": "1"
+              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7"
           }
 
           SECTORS_CONFIG = {
@@ -127,6 +125,7 @@ jobs:
           import asyncio
           import re
           from bs4 import BeautifulSoup
+          from playwright.async_api import async_playwright
           from modules.config import HTTP_TIMEOUT, HEADERS
 
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
@@ -154,27 +153,18 @@ jobs:
                   results = await asyncio.gather(*tasks)
                   return dict(results)
 
-          def clean_popups_and_modals(soup: BeautifulSoup) -> BeautifulSoup:
-              """Удаляет рекламные банеры, всплывающие окна и блокирующие элементы."""
-              for selector in [
-                  'script', 'style', 'iframe',
-                  'div[class*="popup"]', 'div[class*="modal"]', 'div[class*="overlay"]',
-                  'div[id*="popup"]', 'div[id*="modal"]', 'div[class*="banner"]',
-                  'div[class*="adv"]', 'div[id*="adv"]'
-              ]:
-                  for match in soup.select(selector):
-                      match.decompose()
-              return soup
-
-          def parse_funder_indicator(html_text: str, fund_id: str) -> float:
-              """Выполняет прямой поиск показателя дневной доходности на Funder."""
+          def parse_funder_indicator(html_text: str) -> float:
+              """Выполняет поиск показателя дневной доходности на Funder из исходного HTML."""
               if not html_text:
                   return 0.0
               
               soup = BeautifulSoup(html_text, 'lxml')
-              soup = clean_popups_and_modals(soup)
               
-              # Поиск по метке יומית в DOM элементах
+              # Удаление баннеров и всплывающих окон из DOM
+              for selector in ['script', 'style', 'iframe', 'div[class*="popup"]', 'div[class*="modal"]']:
+                  for match in soup.select(selector):
+                      match.decompose()
+
               elements = soup.find_all(string=re.compile(r'יומית'))
               for el in elements:
                   parent = el.find_parent(['td', 'tr', 'div', 'li', 'span'])
@@ -193,7 +183,6 @@ jobs:
                       except ValueError:
                           pass
 
-              # Резервный поиск напрямую по регулярному выражению в строке HTML
               raw_matches = re.findall(r'יומית[^\d%\+\-]*?([-+]?\s*\d+(?:\.\d+)?)\s*%', html_text)
               if raw_matches:
                   clean_num = raw_matches[0].replace(" ", "").replace("+", "")
@@ -204,30 +193,55 @@ jobs:
 
               return 0.0
 
-          async def fetch_israeli_fund(session: aiohttp.ClientSession, fund_id: str) -> dict:
-              url = f"https://www.funder.co.il/fund/{fund_id}"
-              
-              funder_headers = HEADERS.copy()
-              funder_headers.update({
-                  "Host": "www.funder.co.il",
-                  "Referer": "https://www.funder.co.il/"
-              })
+          async def fetch_all_israeli_funds(fund_map: dict) -> dict:
+              """Использует Playwright для загрузки динамических страниц фондов на Funder."""
+              results = {}
+              if not fund_map:
+                  return results
 
-              try:
-                  async with session.get(url, headers=funder_headers, timeout=HTTP_TIMEOUT) as response:
-                      if response.status == 200:
-                          raw_bytes = await response.read()
-                          html_text = raw_bytes.decode('utf-8', errors='ignore')
-                          
-                          change_val = parse_funder_indicator(html_text, fund_id)
-                          print(f"✅ Успешно получено Funder [{fund_id}]: {change_val}%")
-                          return {"price": 0.0, "change": round(change_val, 2)}
-                      else:
-                          print(f"⚠️ Ошибка доступа Funder [{fund_id}]: Код ответа {response.status}")
-              except Exception as e:
-                  print(f"💥 Исключение при запросе к Funder ({fund_id}): {e}")
+              async with async_playwright() as p:
+                  browser = await p.chromium.launch(
+                      headless=True,
+                      args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                  )
+                  context = await browser.new_context(
+                      user_agent=HEADERS["User-Agent"],
+                      locale="he-IL",
+                      viewport={"width": 1280, "height": 800}
+                  )
                   
-              return {"price": 0.0, "change": 0.0}
+                  page = await context.new_page()
+
+                  # Блокировка тяжелых ресурсов и рекламы для ускорения
+                  async def block_unnecessary(route):
+                      if route.request.resource_type in ["image", "media", "font"]:
+                          await route.abort()
+                      else:
+                          await route.continue_()
+
+                  await page.route("**/*", block_unnecessary)
+
+                  for key, fund_id in fund_map.items():
+                      if not fund_id:
+                          results[key] = {"price": 0.0, "change": 0.0}
+                          continue
+                          
+                      url = f"https://www.funder.co.il/fund/{fund_id}"
+                      try:
+                          # Переход на страницу и ожидание выполнения JS
+                          await page.goto(url, wait_until="domcontentloaded", timeout=12000)
+                          await page.wait_for_timeout(1500) # Ожидание JS-рендера
+                          
+                          content = await page.content()
+                          change_val = parse_funder_indicator(content)
+                          print(f"✅ Playwright Funder [{fund_id}]: {change_val}%")
+                          results[key] = {"price": 0.0, "change": round(change_val, 2)}
+                      except Exception as e:
+                          print(f"⚠️ Ошибка Playwright при загрузке [{fund_id}]: {e}")
+                          results[key] = {"price": 0.0, "change": 0.0}
+
+                  await browser.close()
+              return results
           EOF
           
           cat << 'EOF' > modules/news.py
@@ -444,7 +458,7 @@ jobs:
           import asyncio, aiohttp
           from datetime import datetime, timezone, timedelta
           from modules.config import SECTORS_CONFIG
-          from modules.market import fetch_all_yahoo_data, fetch_israeli_fund
+          from modules.market import fetch_all_yahoo_data, fetch_all_israeli_funds
           from modules.news import fetch_sector_news, fetch_ipo_news
           from modules.formatter import build_telegram_message, build_ipo_message
           from modules.telegram_sender import send_to_telegram
@@ -462,15 +476,13 @@ jobs:
               print(f"📦 Сбор данных по {len(all_tickers)} тикерам...")
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
               
+              # Запуск Playwright для сбора данных Funder
+              fund_map = {key: cfg["il_fund"] for key, cfg in SECTORS_CONFIG.items() if cfg["il_fund"]}
+              print(f"🌐 Запуск Playwright для получения показателей {len(fund_map)} израильских фондов...")
+              il_results = await fetch_all_israeli_funds(fund_map)
+
               async with aiohttp.ClientSession() as session:
                   sectors_results = []
-                  il_tasks = {key: fetch_israeli_fund(session, cfg["il_fund"]) for key, cfg in SECTORS_CONFIG.items() if cfg["il_fund"]}
-                  
-                  il_results = {}
-                  if il_tasks:
-                      il_keys = list(il_tasks.keys())
-                      il_res_data = await asyncio.gather(*il_tasks.values())
-                      il_results = dict(zip(il_keys, il_res_data))
                   
                   for key, cfg in SECTORS_CONFIG.items():
                       valid_changes = []
@@ -534,6 +546,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          playwright install chromium --with-deps
 
       - name: Run Analytics Engine
         env:
