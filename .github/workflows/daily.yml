@@ -320,11 +320,10 @@ jobs:
               now_str = datetime.now(tz_il).strftime("%d.%m.%Y | %H:%M")
               
               lines = [
-                  "📈 <b>РЫНОЧНЫЙ ДАЙДЖЕСТ И АНАЛИТИКА</b>",
+                  "📈 <b>Рыночный Дайджест</b>",
                   f"📅 {now_str} (IDT) 🇮🇱\n",
                   "<b>📊 ОБЗОР СЕКТОРОВ (US) И ФОНДОВ (IL)</b>",
                   "<code>Сектор       US      IL   Рейтинг</code>",
-                  "<code>---------------------------------</code>",
                   "<code>"
               ]
               
@@ -347,24 +346,25 @@ jobs:
                   ch_sign = f"+{s['avg_change']:.2f}%" if s['avg_change'] > 0 else f"{s['avg_change']:.2f}%"
                   lines.append(f"<b>{s['icon']} {escape_html(s['name'])}</b> ({ch_sign})")
                   
-                  if s.get("top_4_tickers"):
-                      details_str = ", ".join([f"{t}: {c:+.2f}%" for t, c in s["top_4_tickers"]])
-                      lines.append(f"  📊 <i>Топ-4 драйвера: [{escape_html(details_str)}]</i>")
+                  if s.get("top_3_tickers"):
+                      details_str = ", ".join([f"{t}: {c:+.2f}%" for t, c in s["top_3_tickers"]])
+                      lines.append(f"  📊 <i>Топ-3 драйвера: [{escape_html(details_str)}]</i>")
                       
                   for n in s['news']:
                       lines.append(f"  {escape_html(n)}")
                   lines.append("")
-              lines.append("</blockquote>")
+              lines.append("</blockquote>\n")
 
-              lines.append("\n🇮🇱 <b>ФОНДЫ ТЕЛЬ-АВИВА (ИТОГИ ТОРГОВ)</b>")
-              lines.append("───────────────────────────")
+              lines.append("<blockquote expandable>")
+              lines.append("🇮🇱 <b>TA Stocks</b>\n")
               for s in sectors_data:
                   il_ch = s['il_fund_data']['change']
                   ch_emoji = "🟢" if il_ch > 0 else ("🔴" if il_ch < 0 else "⚪")
                   ch_sign = f"+{il_ch:.2f}%" if il_ch > 0 else f"{il_ch:.2f}%"
                   lines.append(f"{ch_emoji} <b>{escape_html(s['il_name_eng'])}</b> ({s['icon']})\n└ <code>{s['fund_id']}</code> · <b>{ch_sign}</b>")
+              lines.append("</blockquote>")
 
-              lines.append(f"\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡️\n{BOT_NAME}")
+              lines.append(f"\n{BOT_NAME}")
               return "\n".join(lines)
 
           def build_ipo_message(ipo_news: list) -> str:
@@ -379,7 +379,7 @@ jobs:
               for news in ipo_news:
                   lines.append(f"{escape_html(news)}\n")
               lines.append("</blockquote>")
-              lines.append(f"\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡️\n{BOT_NAME}")
+              lines.append(f"\n{BOT_NAME}")
               return "\n".join(lines)
           EOF
           
@@ -468,7 +468,7 @@ jobs:
                       ticker_details = [(t, global_market_data[t]["change"]) for t in cfg["tickers"] if t in global_market_data and global_market_data[t]["price"] > 0]
                       
                       sorted_tickers = sorted(ticker_details, key=lambda x: abs(x[1]), reverse=True)
-                      top_4_tickers = sorted_tickers[:4]
+                      top_3_tickers = sorted_tickers[:3]
                       
                       valid_changes = [c for _, c in ticker_details]
                       avg_change = sum(valid_changes) / len(valid_changes) if valid_changes else 0.0
@@ -482,7 +482,7 @@ jobs:
                           "icon": cfg["icon"],
                           "fund_id": cfg.get("fund_id", ""),
                           "avg_change": round(avg_change, 2),
-                          "top_4_tickers": top_4_tickers,
+                          "top_3_tickers": top_3_tickers,
                           "score": score,
                           "news": news,
                           "il_name_eng": cfg["il_name_eng"],
