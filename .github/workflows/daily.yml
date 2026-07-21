@@ -46,72 +46,72 @@ jobs:
           SECTORS_CONFIG = {
               "Oil": {
                   "name": "Нефть и Энергетика", "icon": "🛢️", "short_eng": "Oil", "news_ticker": "USO", 
-                  "il_search_name": "ברק אולטרה נפט", "il_name_eng": "WTI Ultra x3", 
+                  "fund_id": "5141841", "il_name_eng": "WTI Ultra x3", 
                   "tickers": ["BZ=F", "CL=F", "USO", "OVX", "XLE", "VLO"]
               },
               "Cybersecurity": {
                   "name": "Кибербезопасность", "icon": "🛡️", "short_eng": "Cyber", "news_ticker": "CIBR", 
-                  "il_search_name": "אי.בי.אי. סייבר", "il_name_eng": "IBI Cybersecurity", 
+                  "fund_id": "5140744", "il_name_eng": "IBI Cybersecurity", 
                   "tickers": ["CIBR", "HACK", "CRWD", "PANW", "FTNT", "ZS", "NET"]
               },
               "Gold": {
                   "name": "Золото и Металлы", "icon": "🥇", "short_eng": "Gold", "news_ticker": "GLD", 
-                  "il_search_name": "תכלית זהב", "il_name_eng": "Tachlit Gold Spot", 
+                  "fund_id": "5128624", "il_name_eng": "Tachlit Gold Spot", 
                   "tickers": ["GLD", "GDX", "SLV", "NEM", "GOLD"]
               },
               "Clean Energy": {
                   "name": "Зеленая энергетика", "icon": "☀️", "short_eng": "Clean", "news_ticker": "FSLR", 
-                  "il_search_name": "מיטב אנרגיה ירוקה", "il_name_eng": "Meitav Clean Energy", 
+                  "fund_id": "5138136", "il_name_eng": "Meitav Clean Energy", 
                   "tickers": ["ICLN", "TAN", "FAN", "FSLR", "ENPH", "SEDG"]
               },
               "Aerospace": {
                   "name": "Авиация и Космос", "icon": "✈️", "short_eng": "Aero", "news_ticker": "ITA", 
-                  "il_search_name": "תכלית תעופה", "il_name_eng": "Tachlit US Aerospace", 
+                  "fund_id": "5135116", "il_name_eng": "Tachlit US Aerospace", 
                   "tickers": ["BA", "EADSY", "LMT", "RTX", "ITA", "NOC"]
               },
               "Biotech": {
                   "name": "Биотех и Медицина", "icon": "🏥", "short_eng": "Bio", "news_ticker": "LLY", 
-                  "il_search_name": "הראל נסדאק ביוטכנולוגיה", "il_name_eng": "Harel Nasdaq Biotech", 
+                  "fund_id": "5122965", "il_name_eng": "Harel Nasdaq Biotech", 
                   "tickers": ["LLY", "NVO", "PFE", "MRNA", "AMGN", "XBI", "IBB"]
               },
               "Cloud": {
                   "name": "Облачные технологии", "icon": "☁️", "short_eng": "Cloud", "news_ticker": "WCLD", 
-                  "il_search_name": "הראל מחשוב ענן", "il_name_eng": "Harel Cloud Comp.", 
+                  "fund_id": "5131014", "il_name_eng": "Harel Cloud Comp.", 
                   "tickers": ["MSFT", "AMZN", "GOOGL", "ORCL", "SNOW", "WCLD", "CLOU"]
               },
               "Banking": {
                   "name": "Банковский сектор", "icon": "🏦", "short_eng": "Bank", "news_ticker": "JPM", 
-                  "il_search_name": "מיטב בנקים", "il_name_eng": "Meitav Banks US", 
+                  "fund_id": "5138144", "il_name_eng": "Meitav Banks US", 
                   "tickers": ["JPM", "BAC", "GS", "MS", "WFC", "XLF", "KBE"]
               },
               "Uranium": {
                   "name": "Уран и Атомная энергетика", "icon": "☢️", "short_eng": "Uran", "news_ticker": "CCJ", 
-                  "il_search_name": "מור אורניום", "il_name_eng": "More Uranium Giants", 
+                  "fund_id": "5138763", "il_name_eng": "More Uranium Giants", 
                   "tickers": ["URA", "URNM", "CCJ", "NXE", "DNN"]
               },
               "Gaming": {
                   "name": "Игровая Индустрия", "icon": "🎮", "short_eng": "Game", "news_ticker": "SONY", 
-                  "il_search_name": "מגדל גיימינג", "il_name_eng": "MTF Bluestar E-Games", 
+                  "fund_id": "5130198", "il_name_eng": "MTF Bluestar E-Games", 
                   "tickers": ["NVDA", "MSFT", "TTWO", "EA", "RBLX", "SONY", "NTDOY", "HERO"]
               },
               "EV": {
                   "name": "Электромобили", "icon": "🚗", "short_eng": "EV", "news_ticker": "TSLA", 
-                  "il_search_name": "מגדל רכב חשמלי", "il_name_eng": "Migdal EV & Auto", 
+                  "fund_id": "5132228", "il_name_eng": "Migdal EV & Auto", 
                   "tickers": ["TSLA", "BYDDY", "RIVN", "LI", "DRIV", "LCID"]
               },
               "E-Commerce": {
                   "name": "Электронная коммерция", "icon": "🛒", "short_eng": "Ecom", "news_ticker": "IBUY", 
-                  "il_search_name": "מיטב מסחר אלקטרוני", "il_name_eng": "Meitav E-Commerce", 
+                  "fund_id": "5138128", "il_name_eng": "Meitav E-Commerce", 
                   "tickers": ["AMZN", "SHOP", "MELI", "IBUY", "EBAY", "PDD"]
               },
               "Semiconductors": {
                   "name": "Полупроводники", "icon": "💻", "short_eng": "Semi", "news_ticker": "SOXX", 
-                  "il_search_name": "קסם שבבים", "il_name_eng": "Kasam Semiconductors", 
+                  "fund_id": "5118716", "il_name_eng": "Kasam Semiconductors", 
                   "tickers": ["NVDA", "AMD", "AVGO", "QCOM", "TSM", "ASML", "INTC", "SOXX"]
               },
               "AI": {
                   "name": "Искусственный Интеллект", "icon": "🤖", "short_eng": "AI", "news_ticker": "NVDA", 
-                  "il_search_name": "מגדל אינטליגנציה מלאכותית", "il_name_eng": "Migdal AI", 
+                  "fund_id": "5134101", "il_name_eng": "Migdal AI", 
                   "tickers": ["NVDA", "MSFT", "AMD", "AVGO", "PLTR", "GOOGL", "AMZN", "BOTZ"]
               }
           }
@@ -120,8 +120,8 @@ jobs:
           cat << 'EOF' > modules/market.py
           import aiohttp
           import asyncio
-          import urllib.parse
           import re
+          from bs4 import BeautifulSoup
           from playwright.async_api import async_playwright
           from modules.config import HTTP_TIMEOUT, HEADERS
 
@@ -150,63 +150,150 @@ jobs:
                   results = await asyncio.gather(*tasks)
                   return dict(results)
 
-          async def fetch_fund_by_name_playwright(page, key: str, search_name: str) -> tuple:
-              """Ищет фонд на Funder напрямую без посредников поисковика."""
-              if not search_name:
-                  return key, 0.0
+          def extract_percentage(text: str) -> float | None:
+              if not text:
+                  return None
+              cleaned = text.replace(',', '.').replace('%', '').strip()
+              match = re.search(r'([+-]?\d+(?:\.\d+)?)', cleaned)
+              if match:
+                  try:
+                      val = float(match.group(1))
+                      if abs(val) <= 50.0:
+                          return round(val, 2)
+                  except ValueError:
+                      pass
+              return None
 
+          async def fetch_fund_from_tase(session: aiohttp.ClientSession, fund_id: str) -> float | None:
+              """Источник 1: TASE (Официальный API биржи Тель-Авива)"""
+              url = f"https://api.tase.co.il/api/content/securitydata?securityId={fund_id}&lang=he"
               try:
-                  url = f"https://www.funder.co.il/search?q={urllib.parse.quote(search_name)}"
+                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
+                      if resp.status == 200:
+                          data = await resp.json()
+                          chg = data.get("PercentageChange") or data.get("ChangeRate") or data.get("RateChange")
+                          if chg is not None:
+                              val = float(chg)
+                              print(f"✅ [TASE] [{fund_id}]: {val}%")
+                              return round(val, 2)
+              except Exception as e:
+                  print(f"⚠️ [TASE] [{fund_id}] ошибка: {e}")
+              return None
+
+          async def fetch_fund_from_funder(session: aiohttp.ClientSession, fund_id: str) -> float | None:
+              """Источник 2: Direct Funder Page"""
+              url = f"https://www.funder.co.il/fund/{fund_id}"
+              try:
+                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
+                      if resp.status == 200:
+                          html_text = await resp.text()
+                          soup = BeautifulSoup(html_text, "html.parser")
+                          
+                          target = soup.find(id="dailyChange") or soup.find(class_="change-val") or soup.find("span", {"id": re.compile(r"Change", re.I)})
+                          if target:
+                              val = extract_percentage(target.get_text())
+                              if val is not None:
+                                  print(f"✅ [Funder] [{fund_id}]: {val}%")
+                                  return val
+                                  
+                          m = re.search(r'id=["\']?dailyChange["\']?[^>]*>\s*([+-]?\d+(?:\.\d+)?)', html_text)
+                          if m:
+                              val = float(m.group(1))
+                              print(f"✅ [Funder Regex] [{fund_id}]: {val}%")
+                              return round(val, 2)
+              except Exception as e:
+                  print(f"⚠️ [Funder] [{fund_id}] ошибка: {e}")
+              return None
+
+          async def fetch_fund_from_bizportal(session: aiohttp.ClientSession, fund_id: str) -> float | None:
+              """Источник 3: Bizportal"""
+              url = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
+              try:
+                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
+                      if resp.status == 200:
+                          html_text = await resp.text()
+                          soup = BeautifulSoup(html_text, "html.parser")
+                          elem = soup.find("span", class_=re.compile(r"change", re.I)) or soup.find("div", class_=re.compile(r"change", re.I))
+                          if elem:
+                              val = extract_percentage(elem.get_text())
+                              if val is not None:
+                                  print(f"✅ [Bizportal] [{fund_id}]: {val}%")
+                                  return val
+              except Exception as e:
+                  print(f"⚠️ [Bizportal] [{fund_id}] ошибка: {e}")
+              return None
+
+          async def fetch_fund_from_playwright_search(page, fund_id: str) -> float | None:
+              """Источник 4: Playwright Search по номеру фонда"""
+              try:
+                  url = f"https://www.google.com/search?q={fund_id}+TASE+fund&hl=he"
                   await page.goto(url, wait_until="domcontentloaded", timeout=12000)
                   
-                  # 1. Если сразу попали на страницу фонда или поиск выдал результаты
+                  # Попытка извлечь данные непосредственно с виджета Google
+                  elem = await page.query_selector('[data-percentage-change]')
+                  if elem:
+                      attr = await elem.get_attribute("data-percentage-change")
+                      if attr:
+                          val = float(attr)
+                          print(f"✅ [Playwright Google Widget] [{fund_id}]: {val}%")
+                          return round(val, 2)
+
                   content = await page.content()
-                  
-                  # Ищем изменения через внутренние теги Funder
-                  match = re.search(r'id=["\']?dailyChange["\']?[^>]*>\s*([+-]?\d+(?:\.\d+)?)', content)
-                  if not match:
-                      match = re.search(r'class=["\']?[^"\']*change[^"\']*["\']?[^>]*>\s*([+-]?\d+(?:\.\d+)?)', content)
-                  if match:
-                      val = float(match.group(1))
-                      print(f"✅ [Funder Direct] [{search_name}]: {val}%")
-                      return key, round(val, 2)
-
-                  # 2. Переход на первый результат поиска на Funder если попали в листинг
-                  link = await page.query_selector('a[href*="/fund/"]')
-                  if link:
-                      href = await link.get_attribute("href")
-                      if href:
-                          full_url = href if href.startswith("http") else f"https://www.funder.co.il{href}"
-                          await page.goto(full_url, wait_until="domcontentloaded", timeout=12000)
-                          sub_content = await page.content()
-                          sub_match = re.search(r'([+-]?\d+(?:\.\d+)?)\s*%', sub_content)
-                          if sub_match:
-                              val = float(sub_match.group(1))
-                              print(f"✅ [Funder Fund Page] [{search_name}]: {val}%")
-                              return key, round(val, 2)
-
+                  matches = re.findall(r'([-+]?\d+(?:\.\d+)?)\s*%', content)
+                  for m in matches:
+                      val = float(m)
+                      if 0.05 <= abs(val) <= 25.0:
+                          print(f"✅ [Playwright Search] [{fund_id}]: {val}%")
+                          return round(val, 2)
               except Exception as e:
-                  print(f"⚠️ Ошибка Playwright [{search_name}]: {e}")
+                  print(f"⚠️ [Playwright Search] [{fund_id}] ошибка: {e}")
+              return None
 
-              print(f"❌ Не удалось получить данные по [{search_name}] (0.0%)")
-              return key, 0.0
+          async def fetch_fund_data_by_id(session: aiohttp.ClientSession, page, fund_id: str) -> float:
+              """Многоуровневый каскад перебора источников (TASE -> Funder -> Bizportal -> Playwright -> 0.0)"""
+              if not fund_id:
+                  return 0.0
+
+              # 1. TASE
+              val = await fetch_fund_from_tase(session, fund_id)
+              if val is not None:
+                  return val
+
+              # 2. Funder
+              val = await fetch_fund_from_funder(session, fund_id)
+              if val is not None:
+                  return val
+
+              # 3. Bizportal
+              val = await fetch_fund_from_bizportal(session, fund_id)
+              if val is not None:
+                  return val
+
+              # 4. Playwright Search
+              val = await fetch_fund_from_playwright_search(page, fund_id)
+              if val is not None:
+                  return val
+
+              print(f"❌ [0.00%] Все источники недоступны для фонда [{fund_id}]")
+              return 0.0
 
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
               results = {}
-              async with async_playwright() as p:
-                  browser = await p.chromium.launch(headless=True)
-                  context = await browser.new_context(
-                      user_agent=HEADERS["User-Agent"],
-                      locale="he-IL"
-                  )
-                  page = await context.new_page()
+              async with aiohttp.ClientSession() as session:
+                  async with async_playwright() as p:
+                      browser = await p.chromium.launch(headless=True)
+                      context = await browser.new_context(
+                          user_agent=HEADERS["User-Agent"],
+                          locale="he-IL"
+                      )
+                      page = await context.new_page()
 
-                  for key, cfg in sectors_config.items():
-                      search_name = cfg.get("il_search_name", "")
-                      k, val = await fetch_fund_by_name_playwright(page, key, search_name)
-                      results[k] = {"price": 0.0, "change": val}
+                      for key, cfg in sectors_config.items():
+                          fund_id = cfg.get("fund_id", "")
+                          val = await fetch_fund_data_by_id(session, page, fund_id)
+                          results[key] = {"price": 0.0, "change": val}
 
-                  await browser.close()
+                      await browser.close()
               return results
           EOF
           
@@ -292,7 +379,6 @@ jobs:
                   lines.append(f"{icon}{name:<6} {us_str:>6} {il_str:>6}  {score_emoji}{s['score']:>3}/100")
               lines.append("</code>\n")
 
-              # Сворачиваемая сноска с драйверами и переведенными новостями
               lines.append("<blockquote expandable>")
               lines.append("🔍 <b>ДРАЙВЕРЫ ДВИЖЕНИЯ И ПОКАЗАТЕЛИ СЕКТОРОВ</b>\n")
               for s in sectors_data:
@@ -409,7 +495,7 @@ jobs:
               print(f"📦 Сбор данных Yahoo Finance...")
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
 
-              print(f"🌐 Точный поиск израильских фондов через Playwright...")
+              print(f"🌐 Многоуровневый каскадный поиск израильских фондов по ID...")
               il_results = await fetch_all_israeli_funds(SECTORS_CONFIG)
 
               async with aiohttp.ClientSession() as session:
@@ -418,7 +504,6 @@ jobs:
                   for key, cfg in SECTORS_CONFIG.items():
                       ticker_details = [(t, global_market_data[t]["change"]) for t in cfg["tickers"] if t in global_market_data and global_market_data[t]["price"] > 0]
                       
-                      # Берем 4 ключевых тикера с наибольшими абсолютными изменениями
                       sorted_tickers = sorted(ticker_details, key=lambda x: abs(x[1]), reverse=True)
                       top_4_tickers = sorted_tickers[:4]
                       
