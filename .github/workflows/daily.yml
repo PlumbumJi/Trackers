@@ -163,7 +163,6 @@ jobs:
               return None
 
           async def fetch_bizportal_direct(session: aiohttp.ClientSession, fund_id: str) -> float | None:
-              """Прямой API Bizportal без блокировок"""
               url = f"https://api.bizportal.co.il/api/mutualfunds/getgeneralview?id={fund_id}"
               try:
                   async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
@@ -178,7 +177,6 @@ jobs:
               return None
 
           async def fetch_funder_direct(session: aiohttp.ClientSession, fund_id: str) -> float | None:
-              """Прямой API Funder"""
               url = f"https://www.funder.co.il/api/fund/{fund_id}"
               try:
                   async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
@@ -195,7 +193,6 @@ jobs:
               if not fund_id:
                   return 0.0
 
-              # Запускаем одновременно оба надежных REST API
               tasks = [
                   asyncio.create_task(fetch_bizportal_direct(session, fund_id)),
                   asyncio.create_task(fetch_funder_direct(session, fund_id))
