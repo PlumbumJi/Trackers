@@ -166,7 +166,6 @@ jobs:
               return None
 
           async def fetch_fund_from_bizportal_api(session: aiohttp.ClientSession, fund_id: str) -> float | None:
-              """Источник 1: Прямой внутренний API Bizportal"""
               url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
               req_headers = {
                   **HEADERS,
@@ -180,45 +179,36 @@ jobs:
                           chg = data.get("ChangeRate") or data.get("DailyChange") or data.get("Change")
                           val = parse_float(chg)
                           if val is not None:
-                              print(f"✅ [Bizportal API] [{fund_id}]: {val}%")
                               return val
-              except Exception as e:
-                  print(f"⚠️ [Bizportal API] [{fund_id}] ошибка: {e}")
+              except Exception:
+                  pass
               return None
 
           async def fetch_fund_from_funder_api(session: aiohttp.ClientSession, fund_id: str) -> float | None:
-              """Источник 2: Funder Web & Regex"""
               url = f"https://www.funder.co.il/fund/{fund_id}"
               try:
                   async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
                       if resp.status == 200:
                           html_text = await resp.text()
                           soup = BeautifulSoup(html_text, "html.parser")
-                          
                           elem = soup.select_one("#dailyChange, .change-val, .fund-change")
                           if elem:
                               val = parse_float(elem.get_text())
                               if val is not None:
-                                  print(f"✅ [Funder HTML] [{fund_id}]: {val}%")
                                   return val
 
                           m = re.search(r'(?:dailyChange|changeRate|rateChange)\s*[:=]\s*["\']?([+-]?\d+(?:\.\d+)?)', html_text, re.I)
                           if m:
                               val = parse_float(m.group(1))
                               if val is not None:
-                                  print(f"✅ [Funder Regex] [{fund_id}]: {val}%")
                                   return val
-              except Exception as e:
-                  print(f"⚠️ [Funder] [{fund_id}] ошибка: {e}")
+              except Exception:
+                  pass
               return None
 
           async def fetch_fund_from_tase_direct(session: aiohttp.ClientSession, fund_id: str) -> float | None:
-              """Источник 3: Эндпоинт TASE Maya"""
               url = f"https://mayaapi.tase.co.il/api/fund/details?fundId={fund_id}"
-              req_headers = {
-                  **HEADERS,
-                  "X-Maya-With": "allow"
-              }
+              req_headers = {**HEADERS, "X-Maya-With": "allow"}
               try:
                   async with session.get(url, headers=req_headers, timeout=HTTP_TIMEOUT) as resp:
                       if resp.status == 200:
@@ -226,27 +216,34 @@ jobs:
                           chg = data.get("ChangeRate") or data.get("PercentageChange")
                           val = parse_float(chg)
                           if val is not None:
-                              print(f"✅ [TASE Maya] [{fund_id}]: {val}%")
                               return val
-              except Exception as e:
-                  print(f"⚠️ [TASE Maya] [{fund_id}] ошибка: {e}")
+              except Exception:
+                  pass
               return None
 
           async def fetch_fund_data_by_id(session: aiohttp.ClientSession, fund_id: str) -> float:
+              """Параллельный запуск всех 3 источников: побеждает первый ответивший"""
               if not fund_id:
                   return 0.0
 
-              val = await fetch_fund_from_bizportal_api(session, fund_id)
-              if val is not None:
-                  return val
+              tasks = [
+                  asyncio.create_task(fetch_fund_from_bizportal_api(session, fund_id)),
+                  asyncio.create_task(fetch_fund_from_funder_api(session, fund_id)),
+                  asyncio.create_task(fetch_fund_from_tase_direct(session, fund_id))
+              ]
 
-              val = await fetch_fund_from_funder_api(session, fund_id)
-              if val is not None:
-                  return val
+              try:
+                  done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                  for task in pending:
+                      task.cancel()
 
-              val = await fetch_fund_from_tase_direct(session, fund_id)
-              if val is not None:
-                  return val
+                  for task in done:
+                      res = task.result()
+                      if res is not None:
+                          print(f"✅ [{fund_id}]: {res}%")
+                          return res
+              except Exception as e:
+                  print(f"⚠️ Ошибка получения данных фонда {fund_id}: {e}")
 
               print(f"❌ [0.00%] Не удалось извлечь данные для фонда [{fund_id}]")
               return 0.0
@@ -254,11 +251,13 @@ jobs:
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
               results = {}
               async with aiohttp.ClientSession() as session:
-                  for key, cfg in sectors_config.items():
-                      fund_id = cfg.get("fund_id", "")
-                      val = await fetch_fund_data_by_id(session, fund_id)
+                  tasks = {
+                      key: fetch_fund_data_by_id(session, cfg.get("fund_id", ""))
+                      for key, cfg in sectors_config.items()
+                  }
+                  for key, task in tasks.items():
+                      val = await task
                       results[key] = {"price": 0.0, "change": val}
-                      await asyncio.sleep(0.2)
               return results
           EOF
           
@@ -347,11 +346,11 @@ jobs:
               lines.append("🔍 <b>ДРАЙВЕРЫ ДВИЖЕНИЯ И ПОКАЗАТЕЛИ СЕКТОРОВ</b>\n")
               for s in sectors_data:
                   ch_sign = f"+{s['avg_change']:.2f}%" if s['avg_change'] > 0 else f"{s['avg_change']:.2f}%"
-                  lines.append(f"<b>{s['icon']} {s['name']}</b> ({ch_sign})")
+                  lines.append(f"<b>{s['icon']} {escape_html(s['name'])}</b> ({ch_sign})")
                   
                   if s.get("top_4_tickers"):
                       details_str = ", ".join([f"{t}: {c:+.2f}%" for t, c in s["top_4_tickers"]])
-                      lines.append(f"  📊 <i>Топ-4 драйвера: [{details_str}]</i>")
+                      lines.append(f"  📊 <i>Топ-4 драйвера: [{escape_html(details_str)}]</i>")
                       
                   for n in s['news']:
                       lines.append(f"  {escape_html(n)}")
@@ -359,12 +358,12 @@ jobs:
               lines.append("</blockquote>")
 
               lines.append("\n🇮🇱 <b>ФОНДЫ ТЕЛЬ-АВИВА (ИТОГИ ТОРГОВ)</b>")
-              lines.append("<code>---------------------------------</code>")
+              lines.append("───────────────────────────")
               for s in sectors_data:
                   il_ch = s['il_fund_data']['change']
                   ch_emoji = "🟢" if il_ch > 0 else ("🔴" if il_ch < 0 else "⚪")
                   ch_sign = f"+{il_ch:.2f}%" if il_ch > 0 else f"{il_ch:.2f}%"
-                  lines.append(f"{ch_emoji} <code>{s['icon']} {s['il_name_eng']:<20} | {ch_sign:>7}</code>")
+                  lines.append(f"{ch_emoji} <b>{escape_html(s['il_name_eng'])}</b> ({s['icon']})\n└ <code>{s['fund_id']}</code> · <b>{ch_sign}</b>")
 
               lines.append(f"\n⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡︎ ⚡️\n{BOT_NAME}")
               return "\n".join(lines)
@@ -481,6 +480,7 @@ jobs:
                           "short_eng": cfg["short_eng"],
                           "name": cfg["name"],
                           "icon": cfg["icon"],
+                          "fund_id": cfg.get("fund_id", ""),
                           "avg_change": round(avg_change, 2),
                           "top_4_tickers": top_4_tickers,
                           "score": score,
