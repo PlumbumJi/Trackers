@@ -141,8 +141,8 @@ jobs:
                               if price is not None and prev_close:
                                   change = ((price - prev_close) / prev_close) * 100
                                   return ticker, {"price": round(price, 2), "change": round(change, 2)}
-              except Exception as e:
-                  print(f"Ошибка Yahoo [{ticker}]: {e}")
+              except Exception:
+                  pass
               return ticker, {"price": 0.0, "change": 0.0}
 
           async def fetch_all_yahoo_data(tickers: list) -> dict:
@@ -161,6 +161,19 @@ jobs:
                       res = float(match.group(1))
                       if abs(res) <= 50.0:
                           return round(res, 2)
+              except Exception:
+                  pass
+              return None
+
+          async def fetch_fund_from_funder_json(session: aiohttp.ClientSession, fund_id: str) -> float | None:
+              url = f"https://www.funder.co.il/api/fund/{fund_id}"
+              try:
+                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
+                      if resp.status == 200:
+                          data = await resp.json()
+                          val = parse_float(data.get("dayChange"))
+                          if val is not None:
+                              return val
               except Exception:
                   pass
               return None
@@ -184,55 +197,17 @@ jobs:
                   pass
               return None
 
-          async def fetch_fund_from_funder_api(session: aiohttp.ClientSession, fund_id: str) -> float | None:
-              url = f"https://www.funder.co.il/fund/{fund_id}"
-              try:
-                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
-                      if resp.status == 200:
-                          html_text = await resp.text()
-                          soup = BeautifulSoup(html_text, "html.parser")
-                          elem = soup.select_one("#dailyChange, .change-val, .fund-change")
-                          if elem:
-                              val = parse_float(elem.get_text())
-                              if val is not None:
-                                  return val
-
-                          m = re.search(r'(?:dailyChange|changeRate|rateChange)\s*[:=]\s*["\']?([+-]?\d+(?:\.\d+)?)', html_text, re.I)
-                          if m:
-                              val = parse_float(m.group(1))
-                              if val is not None:
-                                  return val
-              except Exception:
-                  pass
-              return None
-
-          async def fetch_fund_from_tase_direct(session: aiohttp.ClientSession, fund_id: str) -> float | None:
-              url = f"https://mayaapi.tase.co.il/api/fund/details?fundId={fund_id}"
-              req_headers = {**HEADERS, "X-Maya-With": "allow"}
-              try:
-                  async with session.get(url, headers=req_headers, timeout=HTTP_TIMEOUT) as resp:
-                      if resp.status == 200:
-                          data = await resp.json()
-                          chg = data.get("ChangeRate") or data.get("PercentageChange")
-                          val = parse_float(chg)
-                          if val is not None:
-                              return val
-              except Exception:
-                  pass
-              return None
-
           async def fetch_fund_data_by_id(session: aiohttp.ClientSession, fund_id: str) -> float:
               if not fund_id:
                   return 0.0
 
               tasks = [
-                  asyncio.create_task(fetch_fund_from_bizportal_api(session, fund_id)),
-                  asyncio.create_task(fetch_fund_from_funder_api(session, fund_id)),
-                  asyncio.create_task(fetch_fund_from_tase_direct(session, fund_id))
+                  asyncio.create_task(fetch_fund_from_funder_json(session, fund_id)),
+                  asyncio.create_task(fetch_fund_from_bizportal_api(session, fund_id))
               ]
 
               try:
-                  done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                  done, pending = await asyncio.wait(tasks, timeout=HTTP_TIMEOUT, return_when=asyncio.FIRST_COMPLETED)
                   for task in pending:
                       task.cancel()
 
@@ -241,10 +216,10 @@ jobs:
                       if res is not None:
                           print(f"✅ [{fund_id}]: {res}%")
                           return res
-              except Exception as e:
-                  print(f"⚠️ Ошибка получения данных фонда {fund_id}: {e}")
+              except Exception:
+                  pass
 
-              print(f"❌ [0.00%] Не удалось извлечь данные для фонда [{fund_id}]")
+              print(f"⚠️ [0.00%] Не удалось извлечь данные для фонда [{fund_id}]")
               return 0.0
 
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
@@ -387,27 +362,41 @@ jobs:
           import aiohttp
           from modules.config import BOT_TOKEN, CHAT_ID, HTTP_TIMEOUT
 
-          def split_message(text: str, max_length: int = 4095) -> list[str]:
+          def split_message(text: str, max_length: int = 4000) -> list[str]:
               if len(text) <= max_length:
                   return [text]
               
               chunks = []
-              current_chunk = []
-              current_length = 0
-              
-              for line in text.split("\n"):
-                  if current_length + len(line) + 1 > max_length:
-                      if current_chunk:
-                          chunks.append("\n".join(current_chunk))
-                      current_chunk = [line]
-                      current_length = len(line) + 1
-                  else:
-                      current_chunk.append(line)
-                      current_length += len(line) + 1
-                      
-              if current_chunk:
-                  chunks.append("\n".join(current_chunk))
+              raw_blocks = text.split("</blockquote>")
+              current_chunk = ""
+
+              for raw_block in raw_blocks:
+                  if not raw_block:
+                      continue
                   
+                  block = raw_block + "</blockquote>" if "blockquote" in raw_block else raw_block
+
+                  if len(current_chunk) + len(block) > max_length:
+                      if current_chunk:
+                          chunks.append(current_chunk.strip())
+                          current_chunk = ""
+                      
+                      if len(block) > max_length:
+                          lines = block.split("\n")
+                          for line in lines:
+                              if len(current_chunk) + len(line) + 1 > max_length:
+                                  chunks.append(current_chunk.strip())
+                                  current_chunk = line + "\n"
+                              else:
+                                  current_chunk += line + "\n"
+                      else:
+                          current_chunk = block
+                  else:
+                      current_chunk += block
+
+              if current_chunk.strip():
+                  chunks.append(current_chunk.strip())
+
               return chunks
 
           async def send_to_telegram(text: str):
@@ -416,7 +405,7 @@ jobs:
                   return
 
               url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-              chunks = split_message(text, max_length=4095)
+              chunks = split_message(text, max_length=3900)
               
               print(f"ℹ️ Общая длина сообщения: {len(text)} символов. Итоговых частей: {len(chunks)}")
               
