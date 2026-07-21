@@ -28,7 +28,6 @@ jobs:
           cat << 'EOF' > requirements.txt
           aiohttp==3.11.11
           beautifulsoup4==4.12.3
-          playwright==1.49.1
           EOF
           
           cat << 'EOF' > modules/config.py
@@ -40,7 +39,10 @@ jobs:
           
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7"
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webkit,javascript,json,*/*;q=0.8",
+              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+              "Cache-Control": "no-cache",
+              "Pragma": "no-cache"
           }
 
           SECTORS_CONFIG = {
@@ -122,7 +124,6 @@ jobs:
           import asyncio
           import re
           from bs4 import BeautifulSoup
-          from playwright.async_api import async_playwright
           from modules.config import HTTP_TIMEOUT, HEADERS
 
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
@@ -150,38 +151,43 @@ jobs:
                   results = await asyncio.gather(*tasks)
                   return dict(results)
 
-          def extract_percentage(text: str) -> float | None:
-              if not text:
+          def parse_float(val) -> float | None:
+              if val is None:
                   return None
-              cleaned = text.replace(',', '.').replace('%', '').strip()
-              match = re.search(r'([+-]?\d+(?:\.\d+)?)', cleaned)
-              if match:
-                  try:
-                      val = float(match.group(1))
-                      if abs(val) <= 50.0:
-                          return round(val, 2)
-                  except ValueError:
-                      pass
+              try:
+                  cleaned = str(val).replace(',', '.').replace('%', '').strip()
+                  match = re.search(r'([+-]?\d+(?:\.\d+)?)', cleaned)
+                  if match:
+                      res = float(match.group(1))
+                      if abs(res) <= 50.0:
+                          return round(res, 2)
+              except Exception:
+                  pass
               return None
 
-          async def fetch_fund_from_tase(session: aiohttp.ClientSession, fund_id: str) -> float | None:
-              """Источник 1: TASE (Официальный API биржи Тель-Авива)"""
-              url = f"https://api.tase.co.il/api/content/securitydata?securityId={fund_id}&lang=he"
+          async def fetch_fund_from_bizportal_api(session: aiohttp.ClientSession, fund_id: str) -> float | None:
+              """Источник 1: Прямой внутренний API Bizportal"""
+              url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
+              req_headers = {
+                  **HEADERS,
+                  "Referer": f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}",
+                  "X-Requested-With": "XMLHttpRequest"
+              }
               try:
-                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
+                  async with session.get(url, headers=req_headers, timeout=HTTP_TIMEOUT) as resp:
                       if resp.status == 200:
                           data = await resp.json()
-                          chg = data.get("PercentageChange") or data.get("ChangeRate") or data.get("RateChange")
-                          if chg is not None:
-                              val = float(chg)
-                              print(f"✅ [TASE] [{fund_id}]: {val}%")
-                              return round(val, 2)
+                          chg = data.get("ChangeRate") or data.get("DailyChange") or data.get("Change")
+                          val = parse_float(chg)
+                          if val is not None:
+                              print(f"✅ [Bizportal API] [{fund_id}]: {val}%")
+                              return val
               except Exception as e:
-                  print(f"⚠️ [TASE] [{fund_id}] ошибка: {e}")
+                  print(f"⚠️ [Bizportal API] [{fund_id}] ошибка: {e}")
               return None
 
-          async def fetch_fund_from_funder(session: aiohttp.ClientSession, fund_id: str) -> float | None:
-              """Источник 2: Direct Funder Page"""
+          async def fetch_fund_from_funder_api(session: aiohttp.ClientSession, fund_id: str) -> float | None:
+              """Источник 2: Funder Web & Regex"""
               url = f"https://www.funder.co.il/fund/{fund_id}"
               try:
                   async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
@@ -189,111 +195,70 @@ jobs:
                           html_text = await resp.text()
                           soup = BeautifulSoup(html_text, "html.parser")
                           
-                          target = soup.find(id="dailyChange") or soup.find(class_="change-val") or soup.find("span", {"id": re.compile(r"Change", re.I)})
-                          if target:
-                              val = extract_percentage(target.get_text())
+                          elem = soup.select_one("#dailyChange, .change-val, .fund-change")
+                          if elem:
+                              val = parse_float(elem.get_text())
                               if val is not None:
-                                  print(f"✅ [Funder] [{fund_id}]: {val}%")
+                                  print(f"✅ [Funder HTML] [{fund_id}]: {val}%")
                                   return val
-                                  
-                          m = re.search(r'id=["\']?dailyChange["\']?[^>]*>\s*([+-]?\d+(?:\.\d+)?)', html_text)
+
+                          m = re.search(r'(?:dailyChange|changeRate|rateChange)\s*[:=]\s*["\']?([+-]?\d+(?:\.\d+)?)', html_text, re.I)
                           if m:
-                              val = float(m.group(1))
-                              print(f"✅ [Funder Regex] [{fund_id}]: {val}%")
-                              return round(val, 2)
+                              val = parse_float(m.group(1))
+                              if val is not None:
+                                  print(f"✅ [Funder Regex] [{fund_id}]: {val}%")
+                                  return val
               except Exception as e:
                   print(f"⚠️ [Funder] [{fund_id}] ошибка: {e}")
               return None
 
-          async def fetch_fund_from_bizportal(session: aiohttp.ClientSession, fund_id: str) -> float | None:
-              """Источник 3: Bizportal"""
-              url = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
+          async def fetch_fund_from_tase_direct(session: aiohttp.ClientSession, fund_id: str) -> float | None:
+              """Источник 3: Эндпоинт TASE Maya"""
+              url = f"https://mayaapi.tase.co.il/api/fund/details?fundId={fund_id}"
+              req_headers = {
+                  **HEADERS,
+                  "X-Maya-With": "allow"
+              }
               try:
-                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
+                  async with session.get(url, headers=req_headers, timeout=HTTP_TIMEOUT) as resp:
                       if resp.status == 200:
-                          html_text = await resp.text()
-                          soup = BeautifulSoup(html_text, "html.parser")
-                          elem = soup.find("span", class_=re.compile(r"change", re.I)) or soup.find("div", class_=re.compile(r"change", re.I))
-                          if elem:
-                              val = extract_percentage(elem.get_text())
-                              if val is not None:
-                                  print(f"✅ [Bizportal] [{fund_id}]: {val}%")
-                                  return val
+                          data = await resp.json()
+                          chg = data.get("ChangeRate") or data.get("PercentageChange")
+                          val = parse_float(chg)
+                          if val is not None:
+                              print(f"✅ [TASE Maya] [{fund_id}]: {val}%")
+                              return val
               except Exception as e:
-                  print(f"⚠️ [Bizportal] [{fund_id}] ошибка: {e}")
+                  print(f"⚠️ [TASE Maya] [{fund_id}] ошибка: {e}")
               return None
 
-          async def fetch_fund_from_playwright_search(page, fund_id: str) -> float | None:
-              """Источник 4: Playwright Search по номеру фонда"""
-              try:
-                  url = f"https://www.google.com/search?q={fund_id}+TASE+fund&hl=he"
-                  await page.goto(url, wait_until="domcontentloaded", timeout=12000)
-                  
-                  # Попытка извлечь данные непосредственно с виджета Google
-                  elem = await page.query_selector('[data-percentage-change]')
-                  if elem:
-                      attr = await elem.get_attribute("data-percentage-change")
-                      if attr:
-                          val = float(attr)
-                          print(f"✅ [Playwright Google Widget] [{fund_id}]: {val}%")
-                          return round(val, 2)
-
-                  content = await page.content()
-                  matches = re.findall(r'([-+]?\d+(?:\.\d+)?)\s*%', content)
-                  for m in matches:
-                      val = float(m)
-                      if 0.05 <= abs(val) <= 25.0:
-                          print(f"✅ [Playwright Search] [{fund_id}]: {val}%")
-                          return round(val, 2)
-              except Exception as e:
-                  print(f"⚠️ [Playwright Search] [{fund_id}] ошибка: {e}")
-              return None
-
-          async def fetch_fund_data_by_id(session: aiohttp.ClientSession, page, fund_id: str) -> float:
-              """Многоуровневый каскад перебора источников (TASE -> Funder -> Bizportal -> Playwright -> 0.0)"""
+          async def fetch_fund_data_by_id(session: aiohttp.ClientSession, fund_id: str) -> float:
               if not fund_id:
                   return 0.0
 
-              # 1. TASE
-              val = await fetch_fund_from_tase(session, fund_id)
+              val = await fetch_fund_from_bizportal_api(session, fund_id)
               if val is not None:
                   return val
 
-              # 2. Funder
-              val = await fetch_fund_from_funder(session, fund_id)
+              val = await fetch_fund_from_funder_api(session, fund_id)
               if val is not None:
                   return val
 
-              # 3. Bizportal
-              val = await fetch_fund_from_bizportal(session, fund_id)
+              val = await fetch_fund_from_tase_direct(session, fund_id)
               if val is not None:
                   return val
 
-              # 4. Playwright Search
-              val = await fetch_fund_from_playwright_search(page, fund_id)
-              if val is not None:
-                  return val
-
-              print(f"❌ [0.00%] Все источники недоступны для фонда [{fund_id}]")
+              print(f"❌ [0.00%] Не удалось извлечь данные для фонда [{fund_id}]")
               return 0.0
 
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
               results = {}
               async with aiohttp.ClientSession() as session:
-                  async with async_playwright() as p:
-                      browser = await p.chromium.launch(headless=True)
-                      context = await browser.new_context(
-                          user_agent=HEADERS["User-Agent"],
-                          locale="he-IL"
-                      )
-                      page = await context.new_page()
-
-                      for key, cfg in sectors_config.items():
-                          fund_id = cfg.get("fund_id", "")
-                          val = await fetch_fund_data_by_id(session, page, fund_id)
-                          results[key] = {"price": 0.0, "change": val}
-
-                      await browser.close()
+                  for key, cfg in sectors_config.items():
+                      fund_id = cfg.get("fund_id", "")
+                      val = await fetch_fund_data_by_id(session, fund_id)
+                      results[key] = {"price": 0.0, "change": val}
+                      await asyncio.sleep(0.2)
               return results
           EOF
           
@@ -302,7 +267,6 @@ jobs:
           from modules.config import HTTP_TIMEOUT, HEADERS
 
           async def translate_to_russian(session: aiohttp.ClientSession, text: str) -> str:
-              """Переводит заголовок новости на русский язык через Google Translate API."""
               if not text:
                   return text
               try:
@@ -495,7 +459,7 @@ jobs:
               print(f"📦 Сбор данных Yahoo Finance...")
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
 
-              print(f"🌐 Многоуровневый каскадный поиск израильских фондов по ID...")
+              print(f"🌐 Опрос API-эндпоинтов израильских фондов...")
               il_results = await fetch_all_israeli_funds(SECTORS_CONFIG)
 
               async with aiohttp.ClientSession() as session:
@@ -551,7 +515,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          playwright install --with-deps chromium
 
       - name: Run Analytics Engine
         env:
