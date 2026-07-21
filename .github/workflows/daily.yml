@@ -222,7 +222,6 @@ jobs:
               return None
 
           async def fetch_fund_data_by_id(session: aiohttp.ClientSession, fund_id: str) -> float:
-              """Параллельный запуск всех 3 источников: побеждает первый ответивший"""
               if not fund_id:
                   return 0.0
 
@@ -387,8 +386,8 @@ jobs:
           cat << 'EOF' > modules/telegram_sender.py
           import aiohttp
           from modules.config import BOT_TOKEN, CHAT_ID, HTTP_TIMEOUT
-          
-          def split_message(text: str, max_length: int = 4000) -> list[str]:
+
+          def split_message(text: str, max_length: int = 4095) -> list[str]:
               if len(text) <= max_length:
                   return [text]
               
@@ -398,9 +397,10 @@ jobs:
               
               for line in text.split("\n"):
                   if current_length + len(line) + 1 > max_length:
-                      chunks.append("\n".join(current_chunk))
+                      if current_chunk:
+                          chunks.append("\n".join(current_chunk))
                       current_chunk = [line]
-                      current_length = len(line)
+                      current_length = len(line) + 1
                   else:
                       current_chunk.append(line)
                       current_length += len(line) + 1
@@ -416,9 +416,9 @@ jobs:
                   return
 
               url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-              chunks = split_message(text)
+              chunks = split_message(text, max_length=4095)
               
-              print(f"ℹ️ Длина сообщения: {len(text)} символов. Чанков: {len(chunks)}")
+              print(f"ℹ️ Общая длина сообщения: {len(text)} символов. Итоговых частей: {len(chunks)}")
               
               async with aiohttp.ClientSession() as session:
                   for idx, chunk in enumerate(chunks, start=1):
@@ -431,7 +431,7 @@ jobs:
                       try:
                           async with session.post(url, json=payload, timeout=HTTP_TIMEOUT) as resp:
                               if resp.status == 200:
-                                  print(f"🚀 Чанк [{idx}/{len(chunks)}] успешно отправлен!")
+                                  print(f"🚀 Часть [{idx}/{len(chunks)}] ({len(chunk)} симв.) успешно отправлена!")
                               else:
                                   print(f"❌ Ошибка Telegram (код {resp.status}): {await resp.text()}")
                       except Exception as e:
