@@ -27,11 +27,11 @@ jobs:
           
           cat << 'EOF' > requirements.txt
           aiohttp==3.11.11
-          beautifulsoup4==4.12.3
           EOF
           
           cat << 'EOF' > modules/config.py
           import os
+
           BOT_TOKEN = os.getenv("BOT_TOKEN")
           CHAT_ID = os.getenv("CHAT_ID")
           HTTP_TIMEOUT = 15
@@ -165,7 +165,7 @@ jobs:
               return None
 
           async def fetch_israeli_fund_data(session: aiohttp.ClientSession, fund_id: str) -> float:
-              # 1. Основной источник: Bizportal API
+              # 1. Bizportal API
               biz_url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
               try:
                   async with session.get(biz_url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
@@ -180,7 +180,7 @@ jobs:
               except Exception:
                   pass
 
-              # 2. Фолбэк источника: Funder JSON API
+              # 2. Funder API (Фолбэк)
               funder_url = f"https://www.funder.co.il/api/fund/{fund_id}"
               try:
                   funder_headers = HEADERS.copy()
@@ -197,7 +197,7 @@ jobs:
               except Exception:
                   pass
 
-              print(f"ℹ️ [{fund_id}] Изменение за день: 0.00% (нет торгов или нулевая динамика)")
+              print(f"ℹ️ [{fund_id}] Изменение за день: 0.00%")
               return 0.0
 
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
@@ -218,7 +218,9 @@ jobs:
           EOF
           
           cat << 'EOF' > modules/news.py
-          import aiohttp, urllib.parse, html
+          import aiohttp
+          import urllib.parse
+          import html
           from modules.config import HTTP_TIMEOUT, HEADERS
 
           async def translate_to_russian(session: aiohttp.ClientSession, text: str) -> str:
@@ -246,7 +248,8 @@ jobs:
                               if title and len(title) > 15:
                                   translated_title = await translate_to_russian(session, title)
                                   return [f"• {translated_title}"]
-              except: pass
+              except Exception:
+                  pass
               return ["• Торгуется в рамках текущей рыночной динамики."]
 
           async def fetch_ipo_news(session: aiohttp.ClientSession) -> list:
@@ -261,7 +264,8 @@ jobs:
                               if title:
                                   translated_title = await translate_to_russian(session, title)
                                   ipo_news.append(f"📌 {translated_title}")
-              except: pass
+              except Exception:
+                  pass
               return ipo_news or ["📌 Публикаций по IPO на этой неделе не зафиксировано."]
           EOF
           
@@ -312,7 +316,6 @@ jobs:
                   lines.append("")
               lines.append("</blockquote>\n")
 
-              # Сортировка фондов Израиля по ВОЗРАСТАНИЮ (от худшего/меньшего к лучшему)
               ta_stocks_sorted = sorted(sectors_data, key=lambda x: x['il_fund_data']['change'])
 
               lines.append("<blockquote expandable>")
@@ -413,7 +416,8 @@ jobs:
           EOF
           
           cat << 'EOF' > main.py
-          import asyncio, aiohttp
+          import asyncio
+          import aiohttp
           from datetime import datetime, timezone, timedelta
           from modules.config import SECTORS_CONFIG
           from modules.market import fetch_all_yahoo_data, fetch_all_israeli_funds
@@ -429,10 +433,10 @@ jobs:
               for cfg in SECTORS_CONFIG.values():
                   all_tickers.update(cfg["tickers"])
               
-              print(f"📦 Сбор данных Yahoo Finance...")
+              print("📦 Сбор данных Yahoo Finance...")
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
 
-              print(f"🌐 Опрос израильских фондов...")
+              print("🌐 Опрос израильских фондов...")
               il_results = await fetch_all_israeli_funds(SECTORS_CONFIG)
 
               async with aiohttp.ClientSession() as session:
@@ -463,7 +467,6 @@ jobs:
                           "il_fund_data": il_results.get(key, {"price": 0.0, "change": 0.0})
                       })
                   
-                  # Основная таблица секторов сверху вниз от большего к меньшему
                   sectors_results.sort(key=lambda x: x["avg_change"], reverse=True)
                       
                   message = build_telegram_message(sectors_results)
