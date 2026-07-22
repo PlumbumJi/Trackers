@@ -28,7 +28,6 @@ jobs:
           cat << 'EOF' > requirements.txt
           aiohttp==3.11.11
           beautifulsoup4==4.12.3
-          playwright==1.49.1
           EOF
           
           cat << 'EOF' > modules/config.py
@@ -40,7 +39,10 @@ jobs:
           
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7"
+              "Accept": "application/json, text/plain, */*",
+              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+              "Referer": "https://www.bizportal.co.il/",
+              "Origin": "https://www.bizportal.co.il"
           }
 
           SECTORS_CONFIG = {
@@ -121,7 +123,7 @@ jobs:
           import aiohttp
           import asyncio
           import re
-          from playwright.async_api import async_playwright
+          from bs4 import BeautifulSoup
           from modules.config import HTTP_TIMEOUT, HEADERS
 
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
@@ -150,7 +152,7 @@ jobs:
                   return dict(results)
 
           def parse_float(val) -> float | None:
-              if not val:
+              if val is None:
                   return None
               try:
                   cleaned = str(val).replace(',', '.').replace('%', '').replace('+', '').strip()
@@ -163,67 +165,61 @@ jobs:
                   pass
               return None
 
-          async def scrape_fund_with_playwright(page, fund_id: str) -> float:
-              # 1. Попытка через прямой API Bizportal (самый надежный и без перехвата шапки)
-              biz_api_url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
+          async def fetch_bizportal_fund_data(session: aiohttp.ClientSession, fund_id: str) -> float:
+              # 1. Прямой опрос JSON API Bizportal
+              api_url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
               try:
-                  response = await page.goto(biz_api_url, timeout=7000)
-                  if response and response.status == 200:
-                      data = await response.json()
-                      chg = data.get("ChangePercent") or data.get("DailyChangePercent")
-                      val = parse_float(chg)
-                      if val is not None:
-                          print(f"✅ [Bizportal API] [{fund_id}]: {val}%")
-                          return val
-              except Exception:
-                  pass
+                  async with session.get(api_url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
+                      if response.status == 200:
+                          data = await response.json()
+                          if isinstance(data, dict):
+                              raw_change = (
+                                  data.get("DailyChangePercent") 
+                                  or data.get("ChangePercent") 
+                                  or data.get("PrcChg")
+                              )
+                              val = parse_float(raw_change)
+                              if val is not None:
+                                  print(f"✅ [Bizportal API] [{fund_id}]: {val}%")
+                                  return val
+              except Exception as e:
+                  print(f"⚠️ [Bizportal API Error] [{fund_id}]: {e}")
 
-              # 2. Переход на Funder со строгим точечным селектором внутри контейнера фонда
-              funder_url = f"https://www.funder.co.il/fund/{fund_id}"
+              # 2. Фолбэк: Прямой запрос HTML-страницы Bizportal
+              page_url = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
               try:
-                  await page.goto(funder_url, wait_until="domcontentloaded", timeout=10000)
-                  await page.wait_for_timeout(1000)
-                  
-                  # Ищем изменение строго внутри блока карточки фонда (пропуская header/nav)
-                  selectors = [
-                      '#fund-info .fund-change',
-                      '#fundData #dayChange',
-                      'div.fund-details-box span.change',
-                      'td#fundDailyChange'
-                  ]
-                  
-                  for selector in selectors:
-                      elem = page.locator(selector).first
-                      if await elem.is_visible(timeout=1000):
-                          txt = await elem.inner_text()
-                          val = parse_float(txt)
-                          if val is not None:
-                              print(f"✅ [Funder Card] [{fund_id}]: {val}%")
-                              return val
-              except Exception:
-                  pass
+                  async with session.get(page_url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
+                      if response.status == 200:
+                          html_text = await response.text()
+                          soup = BeautifulSoup(html_text, 'html.parser')
+                          
+                          # Поиск элементов изменения
+                          target = soup.find('span', class_=re.compile(r'(num|daily|change)', re.I))
+                          if target:
+                              val = parse_float(target.get_text())
+                              if val is not None:
+                                  print(f"✅ [Bizportal HTML] [{fund_id}]: {val}%")
+                                  return val
+              except Exception as e:
+                  print(f"⚠️ [Bizportal HTML Error] [{fund_id}]: {e}")
 
-              print(f"⚠️ [0.00%] Данные для фонда [{fund_id}] не найдены")
+              print(f"❌ [{fund_id}] Данные не получены. Возврат 0.0")
               return 0.0
 
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
               results = {}
-              async with async_playwright() as p:
-                  browser = await p.chromium.launch(
-                      headless=True,
-                      args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-                  )
-                  context = await browser.new_context(
-                      user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                  )
-                  page = await context.new_page()
-
+              async with aiohttp.ClientSession() as session:
+                  tasks = []
+                  keys = []
                   for key, cfg in sectors_config.items():
                       fund_id = cfg.get("fund_id", "")
-                      val = await scrape_fund_with_playwright(page, fund_id)
+                      keys.append(key)
+                      tasks.append(fetch_bizportal_fund_data(session, fund_id))
+                  
+                  fetched_changes = await asyncio.gather(*tasks)
+                  for key, val in zip(keys, fetched_changes):
                       results[key] = {"price": 0.0, "change": val}
-
-                  await browser.close()
+                      
               return results
           EOF
           
@@ -439,7 +435,7 @@ jobs:
               print(f"📦 Сбор данных Yahoo Finance...")
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
 
-              print(f"🌐 Опрос и парсинг израильских фондов через Playwright...")
+              print(f"🌐 Опрос израильских фондов через Bizportal API...")
               il_results = await fetch_all_israeli_funds(SECTORS_CONFIG)
 
               async with aiohttp.ClientSession() as session:
@@ -495,11 +491,10 @@ jobs:
               asyncio.run(main())
           EOF
 
-      - name: Install Dependencies & Playwright Browsers
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          playwright install chromium --with-deps
 
       - name: Run Analytics Engine
         env:
