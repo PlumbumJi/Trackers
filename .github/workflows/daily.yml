@@ -159,68 +159,46 @@ jobs:
                   match = re.search(r'([+-]?\d+(?:\.\d+)?)', cleaned)
                   if match:
                       res = float(match.group(1))
-                      if abs(res) <= 50.0:
+                      if -30.0 <= res <= 30.0:
                           return round(res, 2)
               except Exception:
                   pass
               return None
 
-          async def fetch_from_funder(session: aiohttp.ClientSession, fund_id: str) -> float | None:
-              urls = [
-                  f"https://www.funder.co.il/fund/{fund_id}",
-                  f"https://www.funder.co.il/api/fund/{fund_id}"
-              ]
-              funder_headers = {
-                  **HEADERS,
-                  "Referer": "https://www.funder.co.il/",
-                  "Sec-Fetch-Dest": "document",
-                  "Sec-Fetch-Mode": "navigate"
-              }
-              for url in urls:
-                  try:
-                      async with session.get(url, headers=funder_headers, timeout=HTTP_TIMEOUT) as resp:
-                          if resp.status == 200:
-                              if "api" in url:
-                                  data = await resp.json()
-                                  val = parse_float(data.get("dayChange") or data.get("change"))
-                              else:
-                                  html_text = await resp.text()
-                                  soup = BeautifulSoup(html_text, 'html.parser')
-                                  elem = soup.find(id=re.compile(r'dayChange|change', re.I)) or soup.find('span', class_=re.compile(r'change|profit', re.I))
-                                  val = parse_float(elem.text) if elem else None
-                              if val is not None:
-                                  return val
-                  except Exception:
-                      continue
-              return None
-
           async def fetch_from_bizportal(session: aiohttp.ClientSession, fund_id: str) -> float | None:
               url_api = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
-              url_page = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
-              
               req_headers = {
                   **HEADERS,
-                  "Referer": url_page,
+                  "Referer": f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}",
                   "X-Requested-With": "XMLHttpRequest"
               }
               try:
                   async with session.get(url_api, headers=req_headers, timeout=HTTP_TIMEOUT) as resp:
                       if resp.status == 200:
                           data = await resp.json()
-                          chg = data.get("ChangeRate") or data.get("DailyChange") or data.get("Change")
+                          chg = data.get("ChangePercent") or data.get("DailyChangePercent") or data.get("Change")
                           val = parse_float(chg)
                           if val is not None:
                               return val
               except Exception:
                   pass
+              return None
 
+          async def fetch_from_funder(session: aiohttp.ClientSession, fund_id: str) -> float | None:
+              url = f"https://www.funder.co.il/fund/{fund_id}"
+              funder_headers = {
+                  **HEADERS,
+                  "Referer": "https://www.funder.co.il/"
+              }
               try:
-                  async with session.get(url_page, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
+                  async with session.get(url, headers=funder_headers, timeout=HTTP_TIMEOUT) as resp:
                       if resp.status == 200:
                           html_text = await resp.text()
-                          match = re.search(r'class="[^\"]*change[^\"]*"[^>]*>([+-]?\d+(?:\.\d+)?%?)', html_text, re.I)
-                          if match:
-                              return parse_float(match.group(1))
+                          soup = BeautifulSoup(html_text, 'html.parser')
+                          elem = soup.find('span', {'id': re.compile(r'FundChange|dayChange', re.I)}) or \
+                                 soup.find('td', class_=re.compile(r'fund-change|change', re.I))
+                          if elem:
+                              return parse_float(elem.text)
               except Exception:
                   pass
               return None
@@ -236,7 +214,8 @@ jobs:
                       if resp.status == 200:
                           html_text = await resp.text()
                           soup = BeautifulSoup(html_text, 'html.parser')
-                          elem = soup.find('span', {'id': re.compile(r'lblChange|LastRate', re.I)}) or soup.find('td', class_=re.compile(r'change', re.I))
+                          container = soup.find('div', {'id': re.compile(r'instrument|quote', re.I)}) or soup
+                          elem = container.find('span', class_=re.compile(r'change|percentage', re.I))
                           if elem:
                               return parse_float(elem.text)
               except Exception:
@@ -247,25 +226,22 @@ jobs:
               if not fund_id:
                   return 0.0
 
-              tasks = [
-                  asyncio.create_task(fetch_from_funder(session, fund_id)),
-                  asyncio.create_task(fetch_from_bizportal(session, fund_id)),
-                  asyncio.create_task(fetch_from_globes(session, fund_id))
-              ]
+              val = await fetch_from_bizportal(session, fund_id)
+              if val is not None:
+                  print(f"✅ [Bizportal] [{fund_id}]: {val}%")
+                  return val
 
-              try:
-                  for completed in asyncio.as_completed(tasks, timeout=HTTP_TIMEOUT):
-                      res = await completed
-                      if res is not None:
-                          for t in tasks:
-                              if not t.done():
-                                  t.cancel()
-                          print(f"✅ [{fund_id}]: {res}%")
-                          return res
-              except Exception:
-                  pass
+              val = await fetch_from_funder(session, fund_id)
+              if val is not None:
+                  print(f"✅ [Funder] [{fund_id}]: {val}%")
+                  return val
 
-              print(f"⚠️ [0.00%] Не удалось извлечь данные для фонда [{fund_id}] со всех источников")
+              val = await fetch_from_globes(session, fund_id)
+              if val is not None:
+                  print(f"✅ [Globes] [{fund_id}]: {val}%")
+                  return val
+
+              print(f"⚠️ [0.00%] Не удалось извлечь данные для фонда [{fund_id}]")
               return 0.0
 
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
