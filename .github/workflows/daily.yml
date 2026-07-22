@@ -164,50 +164,46 @@ jobs:
               return None
 
           async def scrape_fund_with_playwright(page, fund_id: str) -> float:
-              urls = [
-                  f"https://www.funder.co.il/fund/{fund_id}",
-                  f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}",
-                  f"https://www.globes.co.il/portal/instrument.aspx?instrumentid={fund_id}"
-              ]
+              # 1. Попытка через прямой API Bizportal (самый надежный и без перехвата шапки)
+              biz_api_url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
+              try:
+                  response = await page.goto(biz_api_url, timeout=7000)
+                  if response and response.status == 200:
+                      data = await response.json()
+                      chg = data.get("ChangePercent") or data.get("DailyChangePercent")
+                      val = parse_float(chg)
+                      if val is not None:
+                          print(f"✅ [Bizportal API] [{fund_id}]: {val}%")
+                          return val
+              except Exception:
+                  pass
 
-              for url in urls:
-                  try:
-                      await page.goto(url, wait_until="domcontentloaded", timeout=12000)
-                      await page.wait_for_timeout(1500)
+              # 2. Переход на Funder со строгим точечным селектором внутри контейнера фонда
+              funder_url = f"https://www.funder.co.il/fund/{fund_id}"
+              try:
+                  await page.goto(funder_url, wait_until="domcontentloaded", timeout=10000)
+                  await page.wait_for_timeout(1000)
+                  
+                  # Ищем изменение строго внутри блока карточки фонда (пропуская header/nav)
+                  selectors = [
+                      '#fund-info .fund-change',
+                      '#fundData #dayChange',
+                      'div.fund-details-box span.change',
+                      'td#fundDailyChange'
+                  ]
+                  
+                  for selector in selectors:
+                      elem = page.locator(selector).first
+                      if await elem.is_visible(timeout=1000):
+                          txt = await elem.inner_text()
+                          val = parse_float(txt)
+                          if val is not None:
+                              print(f"✅ [Funder Card] [{fund_id}]: {val}%")
+                              return val
+              except Exception:
+                  pass
 
-                      if "funder" in url:
-                          # Парсинг элемента изменения конкретно на Funder
-                          for selector in ['#dayChange', '.fund-change', 'span[id*="Change"]']:
-                              if await page.is_visible(selector):
-                                  txt = await page.inner_text(selector)
-                                  val = parse_float(txt)
-                                  if val is not None:
-                                      print(f"✅ [Funder] [{fund_id}]: {val}%")
-                                      return val
-
-                      elif "bizportal" in url:
-                          # Парсинг блока изменения на Bizportal
-                          for selector in ['.num.change', '.daily-change', 'span[class*="change"]']:
-                              if await page.is_visible(selector):
-                                  txt = await page.inner_text(selector)
-                                  val = parse_float(txt)
-                                  if val is not None:
-                                      print(f"✅ [Bizportal] [{fund_id}]: {val}%")
-                                      return val
-
-                      elif "globes" in url:
-                          # Парсинг блока изменения на Globes
-                          for selector in ['#lblChange', 'span.change', 'td.change']:
-                              if await page.is_visible(selector):
-                                  txt = await page.inner_text(selector)
-                                  val = parse_float(txt)
-                                  if val is not None:
-                                      print(f"✅ [Globes] [{fund_id}]: {val}%")
-                                      return val
-                  except Exception:
-                      continue
-
-              print(f"⚠️ [0.00%] Не удалось извлечь данные для фонда [{fund_id}]")
+              print(f"⚠️ [0.00%] Данные для фонда [{fund_id}] не найдены")
               return 0.0
 
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
@@ -221,9 +217,6 @@ jobs:
                       user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
                   )
                   page = await context.new_page()
-
-                  # Блокировка тяжелых ресурсов (картинки, шрифты, реклама) для максимальной скорости
-                  await page.route("**/*.{png,jpg,jpeg,gif,svg,css,woff,woff2}", lambda route: route.abort())
 
                   for key, cfg in sectors_config.items():
                       fund_id = cfg.get("fund_id", "")
@@ -477,7 +470,7 @@ jobs:
                           "il_fund_data": il_results.get(key, {"price": 0.0, "change": 0.0})
                       })
                   
-                  # Сортировка от большего к меньшему
+                  # Сортировка от большего к меньшего
                   sectors_results.sort(key=lambda x: x["avg_change"], reverse=True)
                       
                   message = build_telegram_message(sectors_results)
