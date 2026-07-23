@@ -27,14 +27,14 @@ jobs:
           
           cat << 'EOF' > requirements.txt
           aiohttp==3.11.11
-          beautifulsoup4==4.12.3
           EOF
           
           cat << 'EOF' > modules/config.py
           import os
+
           BOT_TOKEN = os.getenv("BOT_TOKEN")
           CHAT_ID = os.getenv("CHAT_ID")
-          HTTP_TIMEOUT = 15
+          HTTP_TIMEOUT = 20
           BOT_NAME = "@oil_tracker_pavel_bot"
           
           HEADERS = {
@@ -123,7 +123,357 @@ jobs:
           import aiohttp
           import asyncio
           import re
+          import random
           from modules.config import HTTP_TIMEOUT, HEADERS
+
+          # ─── Helpers ─────────────────────────────────────────────────────────
+
+          def parse_float(val) -> float | None:
+              if val is None:
+                  return None
+              try:
+                  cleaned = str(val).replace(',', '.').replace('%', '').replace('+', '').strip()
+                  match = re.search(r'([+-]?\d+(?:\.\d+)?)', cleaned)
+                  if match:
+                      res = float(match.group(1))
+                      if -25.0 <= res <= 25.0:
+                          return round(res, 2)
+              except Exception:
+                  pass
+              return None
+
+
+          async def _safe_get(session: aiohttp.ClientSession, url: str, headers: dict, timeout: int = HTTP_TIMEOUT):
+              """Безопасный GET с обработкой ошибок"""
+              try:
+                  async with session.get(url, headers=headers, timeout=timeout) as resp:
+                      if resp.status == 200:
+                          content_type = resp.headers.get('Content-Type', '')
+                          if 'application/json' in content_type:
+                              return await resp.json()
+                          else:
+                              return await resp.text()
+                      else:
+                          print(f"   ⚠️ HTTP {resp.status} для {url[:60]}...")
+              except asyncio.TimeoutError:
+                  print(f"   ⏱️ Таймаут для {url[:60]}...")
+              except Exception as e:
+                  print(f"   💥 Ошибка: {str(e)[:80]}")
+              return None
+
+
+          # ═════════════════════════════════════════════════════════════════════
+          # УРОВЕНЬ 1 — Bizportal API (JSON)
+          # ═════════════════════════════════════════════════════════════════════
+
+          async def _try_bizportal_api(session: aiohttp.ClientSession, fund_id: str) -> float | None:
+              url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
+              data = await _safe_get(session, url, HEADERS)
+              
+              if isinstance(data, dict):
+                  raw = data.get("DailyChangePercent") or data.get("ChangePercent") or data.get("PrcChg")
+                  val = parse_float(raw)
+                  if val is not None and abs(val) > 0.001:
+                      print(f"   ✅ Bizportal API: {val}%")
+                      return val
+              return None
+
+
+          # ═════════════════════════════════════════════════════════════════════
+          # УРОВЕНЬ 2 — Funder API (JSON)
+          # ═════════════════════════════════════════════════════════════════════
+
+          async def _try_funder_api(session: aiohttp.ClientSession, fund_id: str) -> float | None:
+              url = f"https://www.funder.co.il/api/fund/{fund_id}"
+              funder_headers = HEADERS.copy()
+              funder_headers["Referer"] = f"https://www.funder.co.il/fund/{fund_id}"
+              
+              data = await _safe_get(session, url, funder_headers)
+              
+              if isinstance(data, dict):
+                  raw = data.get("dayChange") or data.get("change") or data.get("dailyChange")
+                  val = parse_float(raw)
+                  if val is not None:
+                      print(f"   ✅ Funder API: {val}%")
+                      return val
+              return None
+
+
+          # ═════════════════════════════════════════════════════════════════════
+          # УРОВЕНЬ 3 — Bizportal HTML (парсинг SSR)
+          # ═════════════════════════════════════════════════════════════════════
+
+          async def _try_bizportal_html(session: aiohttp.ClientSession, fund_id: str) -> float | None:
+              url = f"https://www.bizportal.co.il/mutualfunds/generalview/{fund_id}"
+              html_headers = HEADERS.copy()
+              html_headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+              
+              text = await _safe_get(session, url, html_headers)
+              if not isinstance(text, str):
+                  return None
+              
+              # Паттерны для поиска изменения в HTML
+              patterns = [
+                  # JSON-встроенные данные
+                  r'"DailyChangePercent"[:\s]*"?([+-]?\d+\.?\d*)"?',
+                  r'"ChangePercent"[:\s]*"?([+-]?\d+\.?\d*)"?',
+                  r'"PrcChg"[:\s]*"?([+-]?\d+\.?\d*)"?',
+                  r'"dailyChange"[:\s]*"?([+-]?\d+\.?\d*)"?',
+                  # HTML-классы и data-атрибуты
+                  r'class="[^"]*change[^"]*">\s*([+-]?\d+\.?\d*)\s*%',
+                  r'data-change="([+-]?\d+\.?\d*)"',
+                  r'data-percent="([+-]?\d+\.?\d*)"',
+                  # Общие паттерны (иврит/англ)
+                  r'שינוי יומי.*?([+-]?\d+\.?\d*)%',
+                  r'Daily Change.*?([+-]?\d+\.?\d*)%',
+                  r'>([+-]?\d+\.?\d*)%<',
+              ]
+              
+              for pattern in patterns:
+                  match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+                  if match:
+                      val = parse_float(match.group(1))
+                      if val is not None:
+                          print(f"   ✅ Bizportal HTML: {val}%")
+                          return val
+              
+              # Fallback: ищем LastRate и BaseRate для расчёта
+              last_match = re.search(r'"LastRate"[:\s]*(\d+\.?\d*)', text, re.IGNORECASE)
+              base_match = re.search(r'"BaseRate"[:\s]*(\d+\.?\d*)', text, re.IGNORECASE)
+              
+              if last_match and base_match:
+                  last = float(last_match.group(1))
+                  base = float(base_match.group(1))
+                  if base > 0:
+                      change = ((last - base) / base) * 100
+                      val = round(change, 2)
+                      print(f"   ✅ Bizportal HTML (calc): {val}%")
+                      return val
+              
+              return None
+
+
+          # ═════════════════════════════════════════════════════════════════════
+          # УРОВЕНЬ 4 — Funder HTML (парсинг SSR)
+          # ═════════════════════════════════════════════════════════════════════
+
+          async def _try_funder_html(session: aiohttp.ClientSession, fund_id: str) -> float | None:
+              url = f"https://www.funder.co.il/fund/{fund_id}"
+              html_headers = HEADERS.copy()
+              html_headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+              html_headers["Referer"] = "https://www.funder.co.il/"
+              
+              text = await _safe_get(session, url, html_headers)
+              if not isinstance(text, str):
+                  return None
+              
+              patterns = [
+                  r'"dayChange"[:\s]*([+-]?\d+\.?\d*)',
+                  r'"change"[:\s]*"?([+-]?\d+\.?\d*)"?',
+                  r'"dailyChange"[:\s]*([+-]?\d+\.?\d*)',
+                  r'class="[^"]*change[^"]*">\s*([+-]?\d+\.?\d*)\s*%',
+                  r'data-change="([+-]?\d+\.?\d*)"',
+                  r'>([+-]?\d+\.?\d*)%<',
+                  r'שינוי יומי\s*([+-]?\d+\.?\d*)%',
+              ]
+              
+              for pattern in patterns:
+                  match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+                  if match:
+                      val = parse_float(match.group(1))
+                      if val is not None:
+                          print(f"   ✅ Funder HTML: {val}%")
+                          return val
+              
+              return None
+
+
+          # ═════════════════════════════════════════════════════════════════════
+          # УРОВЕНЬ 5 — TASE (Тель-Авивская биржа) HTML
+          # ═════════════════════════════════════════════════════════════════════
+
+          async def _try_tase_html(session: aiohttp.ClientSession, fund_id: str) -> float | None:
+              url = f"https://market.tase.co.il/he/market_data/mutualfunds/pages/mutualfund.aspx?fundId={fund_id}"
+              tase_headers = {
+                  "User-Agent": HEADERS["User-Agent"],
+                  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                  "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+                  "Referer": "https://market.tase.co.il/",
+                  "Origin": "https://market.tase.co.il",
+              }
+              
+              text = await _safe_get(session, url, tase_headers)
+              if not isinstance(text, str):
+                  return None
+              
+              # TASE часто встраивает данные в скрипты/JSON
+              patterns = [
+                  r'"dailyChange"[:\s]*"?([+-]?\d+\.?\d*)"?',
+                  r'"changePercent"[:\s]*"?([+-]?\d+\.?\d*)"?',
+                  r'"ChangePercent"[:\s]*"?([+-]?\d+\.?\d*)"?',
+                  r'data-daily-change="([+-]?\d+\.?\d*)"',
+                  r'>([+-]?\d+\.?\d*)%<',
+              ]
+              
+              for pattern in patterns:
+                  match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+                  if match:
+                      val = parse_float(match.group(1))
+                      if val is not None:
+                          print(f"   ✅ TASE HTML: {val}%")
+                          return val
+              
+              # Расчёт из LastRate/BaseRate
+              last_match = re.search(r'"LastRate"[:\s]*(\d+\.?\d*)', text, re.IGNORECASE)
+              base_match = re.search(r'"BaseRate"[:\s]*(\d+\.?\d*)', text, re.IGNORECASE)
+              
+              if last_match and base_match:
+                  last = float(last_match.group(1))
+                  base = float(base_match.group(1))
+                  if base > 0:
+                      change = ((last - base) / base) * 100
+                      val = round(change, 2)
+                      print(f"   ✅ TASE HTML (calc): {val}%")
+                      return val
+              
+              return None
+
+
+          # ═════════════════════════════════════════════════════════════════════
+          # УРОВЕНЬ 6 — GemelNet (альтернативный агрегатор)
+          # ═════════════════════════════════════════════════════════════════════
+
+          async def _try_gemelnet(session: aiohttp.ClientSession, fund_id: str) -> float | None:
+              url = f"https://www.gemelnet.co.il/fund.aspx?fund={fund_id}"
+              gemel_headers = HEADERS.copy()
+              gemel_headers["Referer"] = "https://www.gemelnet.co.il/"
+              gemel_headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+              
+              text = await _safe_get(session, url, gemel_headers)
+              if not isinstance(text, str):
+                  return None
+              
+              patterns = [
+                  r'>([+-]?\d+\.?\d*)%<',
+                  r'"change"[:\s]*"([^"]+)"',
+                  r'שינוי יומי\s*([+-]?\d+\.?\d*)%',
+                  r'class="[^"]*change[^"]*">\s*([+-]?\d+\.?\d*)\s*%',
+              ]
+              
+              for pattern in patterns:
+                  match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+                  if match:
+                      val = parse_float(match.group(1))
+                      if val is not None:
+                          print(f"   ✅ GemelNet: {val}%")
+                          return val
+              
+              return None
+
+
+          # ═════════════════════════════════════════════════════════════════════
+          # УРОВЕНЬ 7 — Investing.com (мировой агрегатор)
+          # ═════════════════════════════════════════════════════════════════════
+
+          async def _try_investing(session: aiohttp.ClientSession, fund_id: str, il_name_eng: str) -> float | None:
+              """Investing.com иногда индексирует израильские фонды. Пробуем найти по имени фонда."""
+              search_term = il_name_eng.replace(" ", "+")
+              url = f"https://www.investing.com/search/?q={search_term}"
+              
+              inv_headers = HEADERS.copy()
+              inv_headers["Referer"] = "https://www.investing.com/"
+              inv_headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+              
+              text = await _safe_get(session, url, inv_headers)
+              if not isinstance(text, str):
+                  return None
+              
+              # Ищем ссылку на фонд
+              fund_link_pattern = rf'href="(/funds/[^"]+)"[^>]*>.*?{re.escape(il_name_eng[:15])}'
+              link_match = re.search(fund_link_pattern, text, re.IGNORECASE | re.DOTALL)
+              
+              if link_match:
+                  fund_url = f"https://www.investing.com{link_match.group(1)}"
+                  fund_text = await _safe_get(session, fund_url, inv_headers)
+                  
+                  if isinstance(fund_text, str):
+                      patterns = [
+                          r'data-test="dailyChange">([+-]?\d+\.?\d*)%',
+                          r'class="[^"]*change[^"]*">\s*([+-]?\d+\.?\d*)\s*%',
+                          r'>([+-]?\d+\.?\d*)%<',
+                      ]
+                      for pattern in patterns:
+                          match = re.search(pattern, fund_text, re.IGNORECASE | re.DOTALL)
+                          if match:
+                              val = parse_float(match.group(1))
+                              if val is not None:
+                                  print(f"   ✅ Investing.com: {val}%")
+                                  return val
+              
+              return None
+
+
+          # ═════════════════════════════════════════════════════════════════════
+          # ГЛАВНАЯ ФУНКЦИЯ: Каскадный фолбэк
+          # ═════════════════════════════════════════════════════════════════════
+
+          async def fetch_israeli_fund_data(session: aiohttp.ClientSession, fund_id: str, il_name_eng: str = "") -> float:
+              """
+              Пробуем источники по порядку с задержкой между запросами.
+              Порядок: API → HTML-парсинг → альтернативные сайты
+              """
+              print(f"🔍 [{fund_id}] {il_name_eng or 'Fund'}")
+              
+              sources = [
+                  ("Bizportal API", _try_bizportal_api),
+                  ("Funder API", _try_funder_api),
+                  ("Bizportal HTML", _try_bizportal_html),
+                  ("Funder HTML", _try_funder_html),
+                  ("TASE HTML", _try_tase_html),
+                  ("GemelNet", _try_gemelnet),
+              ]
+              
+              # Если есть имя фонда, добавляем Investing.com
+              if il_name_eng:
+                  sources.append(("Investing.com", lambda s, fid: _try_investing(s, fid, il_name_eng)))
+              
+              for source_name, source_func in sources:
+                  print(f"   → Пробуем {source_name}...")
+                  try:
+                      result = await source_func(session, fund_id)
+                      if result is not None:
+                          return result
+                  except Exception as e:
+                      print(f"   💥 [{source_name}] критическая ошибка: {str(e)[:80]}")
+                  
+                  # Задержка между запросами к разным доменам (чтобы не забанили)
+                  await asyncio.sleep(random.uniform(0.3, 0.8))
+              
+              print(f"   ❌ Все источники исчерпаны. Возвращаем 0.00%")
+              return 0.0
+
+
+          async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
+              results = {}
+              async with aiohttp.ClientSession() as session:
+                  tasks = []
+                  keys = []
+                  for key, cfg in sectors_config.items():
+                      fund_id = cfg.get("fund_id", "")
+                      il_name_eng = cfg.get("il_name_eng", "")
+                      keys.append(key)
+                      tasks.append(fetch_israeli_fund_data(session, fund_id, il_name_eng))
+                  
+                  fetched_changes = await asyncio.gather(*tasks)
+                  for key, val in zip(keys, fetched_changes):
+                      results[key] = {"price": 0.0, "change": val}
+                      
+              return results
+
+
+          # ═════════════════════════════════════════════════════════════════════
+          # Yahoo Finance (без изменений — работает стабильно)
+          # ═════════════════════════════════════════════════════════════════════
 
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
               api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
@@ -144,77 +494,12 @@ jobs:
                   pass
               return ticker, {"price": 0.0, "change": 0.0}
 
+
           async def fetch_all_yahoo_data(tickers: list) -> dict:
               async with aiohttp.ClientSession() as session:
                   tasks = [fetch_single_ticker(session, t) for t in tickers]
                   results = await asyncio.gather(*tasks)
                   return dict(results)
-
-          def parse_float(val) -> float | None:
-              if val is None:
-                  return None
-              try:
-                  cleaned = str(val).replace(',', '.').replace('%', '').replace('+', '').strip()
-                  match = re.search(r'([+-]?\d+(?:\.\d+)?)', cleaned)
-                  if match:
-                      res = float(match.group(1))
-                      if -25.0 <= res <= 25.0:
-                          return round(res, 2)
-              except Exception:
-                  pass
-              return None
-
-          async def fetch_israeli_fund_data(session: aiohttp.ClientSession, fund_id: str) -> float:
-              # 1. Основной источник: Bizportal API
-              biz_url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
-              try:
-                  async with session.get(biz_url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
-                      if resp.status == 200:
-                          data = await resp.json()
-                          if isinstance(data, dict):
-                              raw = data.get("DailyChangePercent") or data.get("ChangePercent") or data.get("PrcChg")
-                              val = parse_float(raw)
-                              if val is not None and val != 0.0:
-                                  print(f"✅ [Bizportal API] [{fund_id}]: {val}%")
-                                  return val
-              except Exception:
-                  pass
-
-              # 2. Фолбэк источника: Funder JSON API
-              funder_url = f"https://www.funder.co.il/api/fund/{fund_id}"
-              try:
-                  funder_headers = HEADERS.copy()
-                  funder_headers["Referer"] = f"https://www.funder.co.il/fund/{fund_id}"
-                  async with session.get(funder_url, headers=funder_headers, timeout=HTTP_TIMEOUT) as resp:
-                      if resp.status == 200:
-                          data = await resp.json()
-                          if isinstance(data, dict):
-                              raw = data.get("dayChange") or data.get("change") or data.get("dailyChange")
-                              val = parse_float(raw)
-                              if val is not None:
-                                  print(f"✅ [Funder API] [{fund_id}]: {val}%")
-                                  return val
-              except Exception:
-                  pass
-
-              print(f"ℹ️ [{fund_id}] Изменение за день: 0.00% (нет торгов или нулевая динамика)")
-              return 0.0
-
-          async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
-              results = {}
-              async with aiohttp.ClientSession() as session:
-                  tasks = []
-                  keys = []
-                  for key, cfg in sectors_config.items():
-                      fund_id = cfg.get("fund_id", "")
-                      keys.append(key)
-                      tasks.append(fetch_israeli_fund_data(session, fund_id))
-                  
-                  fetched_changes = await asyncio.gather(*tasks)
-                  for key, val in zip(keys, fetched_changes):
-                      results[key] = {"price": 0.0, "change": val}
-                      
-              return results
           EOF
           
           cat << 'EOF' > modules/news.py
@@ -325,7 +610,7 @@ jobs:
               lines.append("</blockquote>")
 
               lines.append(f"\n{BOT_NAME}")
-              return "\n".join(lines)
+              return "\n".join(lines")
 
           def build_ipo_message(ipo_news: list) -> str:
               tz_il = timezone(timedelta(hours=3))
