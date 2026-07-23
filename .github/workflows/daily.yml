@@ -1,4 +1,4 @@
-          name: Automated Market Analytics
+name: Automated Market Analytics
 
 on:
   schedule:
