@@ -27,14 +27,14 @@ jobs:
           
           cat << 'EOF' > requirements.txt
           aiohttp==3.11.11
+          beautifulsoup4==4.12.3
           EOF
           
           cat << 'EOF' > modules/config.py
           import os
-
           BOT_TOKEN = os.getenv("BOT_TOKEN")
           CHAT_ID = os.getenv("CHAT_ID")
-          HTTP_TIMEOUT = 20
+          HTTP_TIMEOUT = 15
           BOT_NAME = "@oil_tracker_pavel_bot"
           
           HEADERS = {
@@ -117,6 +117,375 @@ jobs:
                   "tickers": ["NVDA", "MSFT", "AMD", "AVGO", "PLTR", "GOOGL", "AMZN", "BOTZ"]
               }
           }
+          EOF
+          
+          cat << 'EOF' > modules/market.py
+          import aiohttp
+          import asyncio
+          import re
+          from modules.config import HTTP_TIMEOUT, HEADERS
+
+          async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
+              api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
+              url = f"https://query1.finance.yahoo.com/v8/finance/chart/{api_ticker}?range=1d&interval=1m"
+              try:
+                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
+                      if response.status == 200:
+                          data = await response.json()
+                          result = data.get("chart", {}).get("result", [])
+                          if result:
+                              meta = result[0].get("meta", {})
+                              price = meta.get("regularMarketPrice")
+                              prev_close = meta.get("chartPreviousClose")
+                              if price is not None and prev_close:
+                                  change = ((price - prev_close) / prev_close) * 100
+                                  return ticker, {"price": round(price, 2), "change": round(change, 2)}
+              except Exception:
+                  pass
+              return ticker, {"price": 0.0, "change": 0.0}
+
+          async def fetch_all_yahoo_data(tickers: list) -> dict:
+              async with aiohttp.ClientSession() as session:
+                  tasks = [fetch_single_ticker(session, t) for t in tickers]
+                  results = await asyncio.gather(*tasks)
+                  return dict(results)
+
+          def parse_float(val) -> float | None:
+              if val is None:
+                  return None
+              try:
+                  cleaned = str(val).replace(',', '.').replace('%', '').replace('+', '').strip()
+                  match = re.search(r'([+-]?\d+(?:\.\d+)?)', cleaned)
+                  if match:
+                      res = float(match.group(1))
+                      if -25.0 <= res <= 25.0:
+                          return round(res, 2)
+              except Exception:
+                  pass
+              return None
+
+          async def fetch_israeli_fund_data(session: aiohttp.ClientSession, fund_id: str) -> float:
+              # 1. Основной источник: Bizportal API
+              biz_url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
+              try:
+                  async with session.get(biz_url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
+                      if resp.status == 200:
+                          data = await resp.json()
+                          if isinstance(data, dict):
+                              raw = data.get("DailyChangePercent") or data.get("ChangePercent") or data.get("PrcChg")
+                              val = parse_float(raw)
+                              if val is not None and val != 0.0:
+                                  print(f"✅ [Bizportal API] [{fund_id}]: {val}%")
+                                  return val
+              except Exception:
+                  pass
+
+              # 2. Фолбэк источника: Funder JSON API
+              funder_url = f"https://www.funder.co.il/api/fund/{fund_id}"
+              try:
+                  funder_headers = HEADERS.copy()
+                  funder_headers["Referer"] = f"https://www.funder.co.il/fund/{fund_id}"
+                  async with session.get(funder_url, headers=funder_headers, timeout=HTTP_TIMEOUT) as resp:
+                      if resp.status == 200:
+                          data = await resp.json()
+                          if isinstance(data, dict):
+                              raw = data.get("dayChange") or data.get("change") or data.get("dailyChange")
+                              val = parse_float(raw)
+                              if val is not None:
+                                  print(f"✅ [Funder API] [{fund_id}]: {val}%")
+                                  return val
+              except Exception:
+                  pass
+
+              print(f"ℹ️ [{fund_id}] Изменение за день: 0.00% (нет торгов или нулевая динамика)")
+              return 0.0
+
+          async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
+              results = {}
+              async with aiohttp.ClientSession() as session:
+                  tasks = []
+                  keys = []
+                  for key, cfg in sectors_config.items():
+                      fund_id = cfg.get("fund_id", "")
+                      keys.append(key)
+                      tasks.append(fetch_israeli_fund_data(session, fund_id))
+                  
+                  fetched_changes = await asyncio.gather(*tasks)
+                  for key, val in zip(keys, fetched_changes):
+                      results[key] = {"price": 0.0, "change": val}
+                      
+              return results
+          EOF
+          
+          cat << 'EOF' > modules/news.py
+          import aiohttp, urllib.parse, html
+          from modules.config import HTTP_TIMEOUT, HEADERS
+
+          async def translate_to_russian(session: aiohttp.ClientSession, text: str) -> str:
+              if not text:
+                  return text
+              try:
+                  url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ru&dt=t&q={urllib.parse.quote(text)}"
+                  async with session.get(url, timeout=6) as resp:
+                      if resp.status == 200:
+                          data = await resp.json()
+                          translated = "".join([segment[0] for segment in data[0] if segment[0]])
+                          return html.unescape(translated)
+              except Exception as e:
+                  print(f"Ошибка перевода: {e}")
+              return text
+
+          async def fetch_sector_news(session: aiohttp.ClientSession, query_ticker: str) -> list:
+              url = f"https://query1.finance.yahoo.com/v1/finance/search?q={query_ticker}"
+              try:
+                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
+                      if response.status == 200:
+                          items = (await response.json()).get("news", [])
+                          for item in items:
+                              title = item.get("title", "")
+                              if title and len(title) > 15:
+                                  translated_title = await translate_to_russian(session, title)
+                                  return [f"• {translated_title}"]
+              except: pass
+              return ["• Торгуется в рамках текущей рыночной динамики."]
+
+          async def fetch_ipo_news(session: aiohttp.ClientSession) -> list:
+              url = "https://query1.finance.yahoo.com/v1/finance/search?q=IPO"
+              ipo_news = []
+              try:
+                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
+                      if response.status == 200:
+                          items = (await response.json()).get("news", [])
+                          for item in items[:5]:
+                              title = item.get("title", "")
+                              if title:
+                                  translated_title = await translate_to_russian(session, title)
+                                  ipo_news.append(f"📌 {translated_title}")
+              except: pass
+              return ipo_news or ["📌 Публикаций по IPO на этой неделе не зафиксировано."]
+          EOF
+          
+          cat << 'EOF' > modules/formatter.py
+          from datetime import datetime, timezone, timedelta
+          from modules.config import BOT_NAME
+
+          def escape_html(text: str) -> str:
+              return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+          def build_telegram_message(sectors_data: list) -> str:
+              tz_il = timezone(timedelta(hours=3))
+              now_str = datetime.now(tz_il).strftime("%d.%m.%Y | %H:%M")
+              
+              lines = [
+                  "📈 <b>Рыночный Дайджест</b>",
+                  f"📅 {now_str} (IDT) 🇮🇱\n",
+                  "<b>📊 ОБЗОР СЕКТОРОВ (US) И ФОНДОВ (IL)</b>",
+                  "<code>Сектор       US      IL   Рейтинг</code>",
+                  "<code>"
+              ]
+              
+              for s in sectors_data:
+                  icon = s['icon']
+                  name = s['short_eng'][:6]
+                  us_ch = s['avg_change']
+                  il_ch = s['il_fund_data']['change']
+                  
+                  us_str = f"+{us_ch:.1f}%" if us_ch > 0 else f"{us_ch:.1f}%"
+                  il_str = f"+{il_ch:.1f}%" if il_ch > 0 else f"{il_ch:.1f}%"
+                  
+                  score_emoji = "🟢" if s['score'] >= 65 else ("🟡" if s['score'] >= 40 else "🔴")
+                  lines.append(f"{icon}{name:<6} {us_str:>6} {il_str:>6}  {score_emoji}{s['score']:>3}/100")
+              lines.append("</code>\n")
+
+              lines.append("<blockquote expandable>")
+              lines.append("🔍 <b>ДРАЙВЕРЫ ДВИЖЕНИЯ И ПОКАЗАТЕЛИ СЕКТОРОВ</b>\n")
+              for s in sectors_data:
+                  ch_sign = f"+{s['avg_change']:.2f}%" if s['avg_change'] > 0 else f"{s['avg_change']:.2f}%"
+                  lines.append(f"<b>{s['icon']} {escape_html(s['name'])}</b> ({ch_sign})")
+                  
+                  if s.get("top_3_tickers"):
+                      details_str = ", ".join([f"{t}: {c:+.2f}%" for t, c in s["top_3_tickers"]])
+                      lines.append(f"  📊 <i>Топ-3 драйвера: [{escape_html(details_str)}]</i>")
+                      
+                  for n in s['news']:
+                      lines.append(f"  {escape_html(n)}")
+                  lines.append("")
+              lines.append("</blockquote>\n")
+
+              # Сортировка фондов Израиля по ВОЗРАСТАНИЮ (от худшего/меньшего к лучшему)
+              ta_stocks_sorted = sorted(sectors_data, key=lambda x: x['il_fund_data']['change'])
+
+              lines.append("<blockquote expandable>")
+              lines.append("🇮🇱 <b>TA Stocks (По возрастанию)</b>\n")
+              for s in ta_stocks_sorted:
+                  il_ch = s['il_fund_data']['change']
+                  ch_emoji = "🟢" if il_ch > 0 else ("🔴" if il_ch < 0 else "⚪")
+                  ch_sign = f"+{il_ch:.2f}%" if il_ch > 0 else f"{il_ch:.2f}%"
+                  lines.append(f"{ch_emoji} <b>{escape_html(s['il_name_eng'])}</b> ({s['icon']})\n└ <code>{s['fund_id']}</code> · <b>{ch_sign}</b>")
+              lines.append("</blockquote>")
+
+              lines.append(f"\n{BOT_NAME}")
+              return "\n".join(lines)
+
+          def build_ipo_message(ipo_news: list) -> str:
+              tz_il = timezone(timedelta(hours=3))
+              now_str = datetime.now(tz_il).strftime("%d.%m.%Y")
+              
+              lines = [
+                  "🔔 <b>ЕЖЕНЕДЕЛЬНЫЙ IPO ДАЙДЖЕСТ</b>",
+                  f"📅 {now_str} | Субботний обзор 🇮🇱\n",
+                  "<blockquote expandable>"
+              ]
+              for news in ipo_news:
+                  lines.append(f"{escape_html(news)}\n")
+              lines.append("</blockquote>")
+              lines.append(f"\n{BOT_NAME}")
+              return "\n".join(lines)
+          EOF
+          
+          cat << 'EOF' > modules/telegram_sender.py
+          import aiohttp
+          from modules.config import BOT_TOKEN, CHAT_ID, HTTP_TIMEOUT
+
+          def split_message(text: str, max_length: int = 4000) -> list[str]:
+              if len(text) <= max_length:
+                  return [text]
+              
+              chunks = []
+              raw_blocks = text.split("</blockquote>")
+              current_chunk = ""
+
+              for raw_block in raw_blocks:
+                  if not raw_block:
+                      continue
+                  
+                  block = raw_block + "</blockquote>" if "blockquote" in raw_block else raw_block
+
+                  if len(current_chunk) + len(block) > max_length:
+                      if current_chunk:
+                          chunks.append(current_chunk.strip())
+                          current_chunk = ""
+                      
+                      if len(block) > max_length:
+                          lines = block.split("\n")
+                          for line in lines:
+                              if len(current_chunk) + len(line) + 1 > max_length:
+                                  chunks.append(current_chunk.strip())
+                                  current_chunk = line + "\n"
+                              else:
+                                  current_chunk += line + "\n"
+                      else:
+                          current_chunk = block
+                  else:
+                      current_chunk += block
+
+              if current_chunk.strip():
+                  chunks.append(current_chunk.strip())
+
+              return chunks
+
+          async def send_to_telegram(text: str):
+              if not BOT_TOKEN or not CHAT_ID:
+                  print("❌ BOT_TOKEN или CHAT_ID не найдены")
+                  return
+
+              url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+              chunks = split_message(text, max_length=3900)
+              
+              print(f"ℹ️ Общая длина сообщения: {len(text)} символов. Итоговых частей: {len(chunks)}")
+              
+              async with aiohttp.ClientSession() as session:
+                  for idx, chunk in enumerate(chunks, start=1):
+                      payload = {
+                          "chat_id": CHAT_ID, 
+                          "text": chunk, 
+                          "parse_mode": "HTML", 
+                          "disable_web_page_preview": True
+                      }
+                      try:
+                          async with session.post(url, json=payload, timeout=HTTP_TIMEOUT) as resp:
+                              if resp.status == 200:
+                                  print(f"🚀 Часть [{idx}/{len(chunks)}] ({len(chunk)} симв.) успешно отправлена!")
+                              else:
+                                  print(f"❌ Ошибка Telegram (код {resp.status}): {await resp.text()}")
+                      except Exception as e:
+                          print(f"💥 Ошибка отправки: {e}")
+          EOF
+          
+          cat << 'EOF' > main.py
+          import asyncio, aiohttp
+          from datetime import datetime, timezone, timedelta
+          from modules.config import SECTORS_CONFIG
+          from modules.market import fetch_all_yahoo_data, fetch_all_israeli_funds
+          from modules.news import fetch_sector_news, fetch_ipo_news
+          from modules.formatter import build_telegram_message, build_ipo_message
+          from modules.telegram_sender import send_to_telegram
+
+          def calculate_sector_score(avg_change: float) -> int:
+              return max(0, min(100, int(50 + (avg_change * 15.0))))
+
+          async def run_market_analytics():
+              all_tickers = set()
+              for cfg in SECTORS_CONFIG.values():
+                  all_tickers.update(cfg["tickers"])
+              
+              print(f"📦 Сбор данных Yahoo Finance...")
+              global_market_data = await fetch_all_yahoo_data(list(all_tickers))
+
+              print(f"🌐 Опрос израильских фондов...")
+              il_results = await fetch_all_israeli_funds(SECTORS_CONFIG)
+
+              async with aiohttp.ClientSession() as session:
+                  sectors_results = []
+                  
+                  for key, cfg in SECTORS_CONFIG.items():
+                      ticker_details = [(t, global_market_data[t]["change"]) for t in cfg["tickers"] if t in global_market_data and global_market_data[t]["price"] > 0]
+                      
+                      sorted_tickers = sorted(ticker_details, key=lambda x: abs(x[1]), reverse=True)
+                      top_3_tickers = sorted_tickers[:3]
+                      
+                      valid_changes = [c for _, c in ticker_details]
+                      avg_change = sum(valid_changes) / len(valid_changes) if valid_changes else 0.0
+                      
+                      score = calculate_sector_score(avg_change)
+                      news = await fetch_sector_news(session, cfg["news_ticker"])
+                      
+                      sectors_results.append({
+                          "short_eng": cfg["short_eng"],
+                          "name": cfg["name"],
+                          "icon": cfg["icon"],
+                          "fund_id": cfg.get("fund_id", ""),
+                          "avg_change": round(avg_change, 2),
+                          "top_3_tickers": top_3_tickers,
+                          "score": score,
+                          "news": news,
+                          "il_name_eng": cfg["il_name_eng"],
+                          "il_fund_data": il_results.get(key, {"price": 0.0, "change": 0.0})
+                      })
+                  
+                  # Основная таблица секторов сверху вниз от большего к меньшему
+                  sectors_results.sort(key=lambda x: x["avg_change"], reverse=True)
+                      
+                  message = build_telegram_message(sectors_results)
+                  await send_to_telegram(message)
+
+          async def run_ipo_digest():
+              async with aiohttp.ClientSession() as session:
+                  ipo_news = await fetch_ipo_news(session)
+                  message = build_ipo_message(ipo_news)
+                  await send_to_telegram(message)
+
+          async def main():
+              tz_il = timezone(timedelta(hours=3))
+              weekday = datetime.now(tz_il).weekday()
+              
+              if weekday == 5:
+                  await run_ipo_digest()
+              else:
+                  await run_market_analytics()
+
+          if __name__ == "__main__":
+              asyncio.run(main())
           EOF
 
       - name: Install Dependencies
