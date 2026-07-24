@@ -2,9 +2,7 @@ name: Automated Market Analytics
 
 on:
   schedule:
-    # Пн-Пт в 23:10 по Израилю (20:10 UTC) — Рыночная аналитика
     - cron: '10 20 * * 1-5'
-    # Суббота в 22:00 по Израилю (19:00 UTC) — IPO отчет
     - cron: '0 19 * * 6'
   workflow_dispatch:
 
@@ -27,6 +25,7 @@ jobs:
           
           cat << 'EOF' > requirements.txt
           aiohttp==3.11.11
+          brotli==1.1.0
           EOF
           
           cat << 'EOF' > modules/config.py
@@ -34,86 +33,87 @@ jobs:
 
           BOT_TOKEN = os.getenv("BOT_TOKEN")
           CHAT_ID = os.getenv("CHAT_ID")
-          HTTP_TIMEOUT = 25
+          HTTP_TIMEOUT = 30
           BOT_NAME = "@oil_tracker_pavel_bot"
           
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
               "Accept": "application/json, text/plain, */*",
               "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
-              "Referer": "https://www.bizportal.co.il/",
-              "Origin": "https://www.bizportal.co.il"
+              "Referer": "https://www.funder.co.il/",
+              "Origin": "https://www.funder.co.il"
           }
 
+          # Ключевые слова на иврите для поиска по индустриям на Funder
           SECTORS_CONFIG = {
               "Oil": {
                   "name": "Нефть и Энергетика", "icon": "🛢️", "short_eng": "Oil", "news_ticker": "USO", 
-                  "fund_id": "5141841", "il_name_eng": "WTI Ultra x3", 
+                  "fund_id": "5141841", "il_name_eng": "WTI Ultra x3", "hebrew_keyword": "נפט",
                   "tickers": ["BZ=F", "CL=F", "USO", "OVX", "XLE", "VLO"]
               },
               "Cybersecurity": {
                   "name": "Кибербезопасность", "icon": "🛡️", "short_eng": "Cyber", "news_ticker": "CIBR", 
-                  "fund_id": "5140744", "il_name_eng": "IBI Cybersecurity", 
+                  "fund_id": "5140744", "il_name_eng": "IBI Cybersecurity", "hebrew_keyword": "סייבר",
                   "tickers": ["CIBR", "HACK", "CRWD", "PANW", "FTNT", "ZS", "NET"]
               },
               "Gold": {
                   "name": "Золото и Металлы", "icon": "🥇", "short_eng": "Gold", "news_ticker": "GLD", 
-                  "fund_id": "5128624", "il_name_eng": "Tachlit Gold Spot", 
+                  "fund_id": "5128624", "il_name_eng": "Tachlit Gold Spot", "hebrew_keyword": "זהב",
                   "tickers": ["GLD", "GDX", "SLV", "NEM", "GOLD"]
               },
               "Clean Energy": {
                   "name": "Зеленая энергетика", "icon": "☀️", "short_eng": "Clean", "news_ticker": "FSLR", 
-                  "fund_id": "5138136", "il_name_eng": "Meitav Clean Energy", 
+                  "fund_id": "5138136", "il_name_eng": "Meitav Clean Energy", "hebrew_keyword": "אנרגיה",
                   "tickers": ["ICLN", "TAN", "FAN", "FSLR", "ENPH", "SEDG"]
               },
               "Aerospace": {
                   "name": "Авиация и Космос", "icon": "✈️", "short_eng": "Aero", "news_ticker": "ITA", 
-                  "fund_id": "5135116", "il_name_eng": "Tachlit US Aerospace", 
+                  "fund_id": "5135116", "il_name_eng": "Tachlit US Aerospace", "hebrew_keyword": "תעופה",
                   "tickers": ["BA", "EADSY", "LMT", "RTX", "ITA", "NOC"]
               },
               "Biotech": {
                   "name": "Биотех и Медицина", "icon": "🏥", "short_eng": "Bio", "news_ticker": "LLY", 
-                  "fund_id": "5122965", "il_name_eng": "Harel Nasdaq Biotech", 
+                  "fund_id": "5122965", "il_name_eng": "Harel Nasdaq Biotech", "hebrew_keyword": "ביוטק",
                   "tickers": ["LLY", "NVO", "PFE", "MRNA", "AMGN", "XBI", "IBB"]
               },
               "Cloud": {
                   "name": "Облачные технологии", "icon": "☁️", "short_eng": "Cloud", "news_ticker": "WCLD", 
-                  "fund_id": "5131014", "il_name_eng": "Harel Cloud Comp.", 
+                  "fund_id": "5131014", "il_name_eng": "Harel Cloud Comp.", "hebrew_keyword": "ענן",
                   "tickers": ["MSFT", "AMZN", "GOOGL", "ORCL", "SNOW", "WCLD", "CLOU"]
               },
               "Banking": {
                   "name": "Банковский сектор", "icon": "🏦", "short_eng": "Bank", "news_ticker": "JPM", 
-                  "fund_id": "5138144", "il_name_eng": "Meitav Banks US", 
+                  "fund_id": "5138144", "il_name_eng": "Meitav Banks US", "hebrew_keyword": "בנקים",
                   "tickers": ["JPM", "BAC", "GS", "MS", "WFC", "XLF", "KBE"]
               },
               "Uranium": {
                   "name": "Уран и Атомная энергетика", "icon": "☢️", "short_eng": "Uran", "news_ticker": "CCJ", 
-                  "fund_id": "5138763", "il_name_eng": "More Uranium Giants", 
+                  "fund_id": "5138763", "il_name_eng": "More Uranium Giants", "hebrew_keyword": "אורניום",
                   "tickers": ["URA", "URNM", "CCJ", "NXE", "DNN"]
               },
               "Gaming": {
                   "name": "Игровая Индустрия", "icon": "🎮", "short_eng": "Game", "news_ticker": "SONY", 
-                  "fund_id": "5130198", "il_name_eng": "MTF Bluestar E-Games", 
+                  "fund_id": "5130198", "il_name_eng": "MTF Bluestar E-Games", "hebrew_keyword": "משחקים",
                   "tickers": ["NVDA", "MSFT", "TTWO", "EA", "RBLX", "SONY", "NTDOY", "HERO"]
               },
               "EV": {
                   "name": "Электромобили", "icon": "🚗", "short_eng": "EV", "news_ticker": "TSLA", 
-                  "fund_id": "5132228", "il_name_eng": "Migdal EV & Auto", 
+                  "fund_id": "5132228", "il_name_eng": "Migdal EV & Auto", "hebrew_keyword": "רכב",
                   "tickers": ["TSLA", "BYDDY", "RIVN", "LI", "DRIV", "LCID"]
               },
               "E-Commerce": {
                   "name": "Электронная коммерция", "icon": "🛒", "short_eng": "Ecom", "news_ticker": "IBUY", 
-                  "fund_id": "5138128", "il_name_eng": "Meitav E-Commerce", 
+                  "fund_id": "5138128", "il_name_eng": "Meitav E-Commerce", "hebrew_keyword": "מסחר",
                   "tickers": ["AMZN", "SHOP", "MELI", "IBUY", "EBAY", "PDD"]
               },
               "Semiconductors": {
                   "name": "Полупроводники", "icon": "💻", "short_eng": "Semi", "news_ticker": "SOXX", 
-                  "fund_id": "5118716", "il_name_eng": "Kasam Semiconductors", 
+                  "fund_id": "5118716", "il_name_eng": "Kasam Semiconductors", "hebrew_keyword": "מוליכים",
                   "tickers": ["NVDA", "AMD", "AVGO", "QCOM", "TSM", "ASML", "INTC", "SOXX"]
               },
               "AI": {
                   "name": "Искусственный Интеллект", "icon": "🤖", "short_eng": "AI", "news_ticker": "NVDA", 
-                  "fund_id": "5134101", "il_name_eng": "Migdal AI", 
+                  "fund_id": "5134101", "il_name_eng": "Migdal AI", "hebrew_keyword": "בינה",
                   "tickers": ["NVDA", "MSFT", "AMD", "AVGO", "PLTR", "GOOGL", "AMZN", "BOTZ"]
               }
           }
@@ -124,6 +124,7 @@ jobs:
           import asyncio
           import re
           import random
+          import urllib.parse
           from modules.config import HTTP_TIMEOUT, HEADERS
 
           def parse_float(val) -> float | None:
@@ -144,7 +145,6 @@ jobs:
               "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
               "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
               "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
           ]
 
           async def _safe_get(session: aiohttp.ClientSession, url: str, headers: dict, timeout: int = HTTP_TIMEOUT):
@@ -157,185 +157,178 @@ jobs:
                           else:
                               return await resp.text()
                       elif resp.status in (403, 429, 503):
-                          print(f"   🚫 Блокировка {resp.status} для {url[:50]}")
+                          print(f"   🚫 Блокировка {resp.status} для {url[:60]}")
                       else:
-                          print(f"   ⚠️ HTTP {resp.status} для {url[:50]}")
+                          print(f"   ⚠️ HTTP {resp.status} для {url[:60]}")
               except asyncio.TimeoutError:
-                  print(f"   ⏱️ Таймаут для {url[:50]}")
+                  print(f"   ⏱️ Таймаут для {url[:60]}")
               except Exception as e:
-                  print(f"   💥 Ошибка: {str(e)[:60]}")
+                  print(f"   💥 Ошибка: {str(e)[:80]}")
               return None
 
-          def _get_headers(referer: str = "https://www.bizportal.co.il/"):
+          def _get_headers(referer: str = "https://www.funder.co.il/"):
               return {
                   "User-Agent": random.choice(USER_AGENTS),
-                  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                   "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
-                  "Accept-Encoding": "gzip, deflate, br",
                   "Referer": referer,
                   "Origin": referer.rstrip('/'),
-                  "DNT": "1",
-                  "Connection": "keep-alive",
-                  "Upgrade-Insecure-Requests": "1",
-                  "Sec-Fetch-Dest": "document",
-                  "Sec-Fetch-Mode": "navigate",
-                  "Sec-Fetch-Site": "same-origin",
-                  "Sec-Fetch-User": "?1",
-                  "Cache-Control": "max-age=0",
               }
 
           # ═════════════════════════════════════════════════════════════════════
-          # УРОВЕНЬ 1 — r.jina.ai + Bizportal (обход блокировки)
+          # УРОВЕНЬ 1 — Funder Search по ключевому слову (иврит)
           # ═════════════════════════════════════════════════════════════════════
 
-          async def _try_jina_bizportal(session: aiohttp.ClientSession, fund_id: str) -> float | None:
+          async def _try_funder_search(session: aiohttp.ClientSession, fund_id: str, hebrew_keyword: str) -> float | None:
               """
-              Используем r.jina.ai для обхода блокировки Bizportal.
-              Jina AI извлекает чистый текст из страницы.
+              Ищем фонд через поиск по ключевому слову на иврите.
+              URL: https://www.funder.co.il/searchAll/{keyword}
+              В таблице результатов ищем строку с fund_id и извлекаем изменение.
               """
-              url = f"https://r.jina.ai/http://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
-              headers = {
-                  "User-Agent": random.choice(USER_AGENTS),
-                  "Accept": "text/plain,application/json,*/*",
-              }
+              if not hebrew_keyword:
+                  return None
+              
+              encoded_keyword = urllib.parse.quote(hebrew_keyword)
+              url = f"https://www.funder.co.il/searchAll/{encoded_keyword}"
+              headers = _get_headers()
               
               text = await _safe_get(session, url, headers, timeout=30)
               if not isinstance(text, str):
                   return None
               
-              # Ищем структуру: מחיר קנייה (цена покупки) -> число -> процент
-              # Пример: מחיר קנייה\n284.45\n6.25%
+              # Ищем в таблице: строка с fund_id, затем процент изменения
+              # Паттерн: fund_id в строке, затем несколько ячеек с числами, затем процент
+              # Пример: ...5141841... 284.45 ... +6.25% ...
+              
+              # Разбиваем на строки и ищем fund_id
+              lines = text.split('\n')
+              for i, line in enumerate(lines):
+                  if fund_id in line:
+                      # Смотрим текущую и следующие 3 строки
+                      context = '\n'.join(lines[i:min(i+5, len(lines))])
+                      
+                      # Ищем процент в контексте
+                      percent_matches = re.findall(r'([+-]?\d+\.?\d*)%', context)
+                      for match in percent_matches:
+                          val = parse_float(match)
+                          if val is not None and abs(val) <= 25:
+                              print(f"   ✅ Funder Search ({hebrew_keyword}): {val}%")
+                              return val
+              
+              # Fallback: ищем fund_id в HTML с более широким контекстом
+              # Ищем паттерн: fund_id...число...число...процент
+              pattern = rf'{fund_id}.*?(?:\d+\.?\d*).*?([+-]?\d+\.?\d*)%'
+              match = re.search(pattern, text, re.DOTALL)
+              if match:
+                  val = parse_float(match.group(1))
+                  if val is not None:
+                      print(f"   ✅ Funder Search (regex): {val}%")
+                      return val
+              
+              return None
+
+          # ═════════════════════════════════════════════════════════════════════
+          # УРОВЕНЬ 2 — r.jina.ai + Funder Search (обход блокировки)
+          # ═════════════════════════════════════════════════════════════════════
+
+          async def _try_jina_funder_search(session: aiohttp.ClientSession, fund_id: str, hebrew_keyword: str) -> float | None:
+              """
+              Используем r.jina.ai для обхода блокировки Funder Search.
+              """
+              if not hebrew_keyword:
+                  return None
+              
+              encoded_keyword = urllib.parse.quote(hebrew_keyword)
+              url = f"https://r.jina.ai/http://www.funder.co.il/searchAll/{encoded_keyword}"
+              headers = {
+                  "User-Agent": random.choice(USER_AGENTS),
+                  "Accept": "text/plain,*/*",
+              }
+              
+              text = await _safe_get(session, url, headers, timeout=35)
+              if not isinstance(text, str):
+                  return None
+              
+              # Тот же парсинг, что и для прямого Funder
+              lines = text.split('\n')
+              for i, line in enumerate(lines):
+                  if fund_id in line:
+                      context = '\n'.join(lines[i:min(i+5, len(lines))])
+                      percent_matches = re.findall(r'([+-]?\d+\.?\d*)%', context)
+                      for match in percent_matches:
+                          val = parse_float(match)
+                          if val is not None and abs(val) <= 25:
+                              print(f"   ✅ Jina+Funder ({hebrew_keyword}): {val}%")
+                              return val
+              
+              # Fallback: ищем таблицу с fund_id
+              pattern = rf'{fund_id}.*?(?:\d+\.?\d*).*?([+-]?\d+\.?\d*)%'
+              match = re.search(pattern, text, re.DOTALL)
+              if match:
+                  val = parse_float(match.group(1))
+                  if val is not None:
+                      print(f"   ✅ Jina+Funder (regex): {val}%")
+                      return val
+              
+              return None
+
+          # ═════════════════════════════════════════════════════════════════════
+          # УРОВЕНЬ 3 — r.jina.ai + Bizportal прямой (по ID)
+          # ═════════════════════════════════════════════════════════════════════
+
+          async def _try_jina_bizportal(session: aiohttp.ClientSession, fund_id: str) -> float | None:
+              url = f"https://r.jina.ai/http://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
+              headers = {
+                  "User-Agent": random.choice(USER_AGENTS),
+                  "Accept": "text/plain,*/*",
+              }
+              
+              text = await _safe_get(session, url, headers, timeout=35)
+              if not isinstance(text, str):
+                  return None
+              
+              # Ищем: מחיר קנייה (цена покупки) -> число -> процент
               patterns = [
-                  # מחיר קנייה (цена покупки) сразу перед процентом
-                  r'מחיר\s*קנייה\s*\n?\s*(\d+\.?\d*)\s*\n?\s*([+-]?\d+\.?\d*)%',
-                  r'מחיר\s*קנייה[:\s]*(\d+\.?\d*)[:\s]*([+-]?\d+\.?\d*)%',
-                  # Общий паттерн для процентов рядом с ценой
-                  r'(\d+\.?\d*)\s*\n\s*([+-]?\d+\.?\d*)%',
-                  # Таблица גיוסים ופדיונות -> שינוי
-                  r'\|\s*שינוי\s*\|\s*\n\|\s*[-—]?\s*\|\s*([+-]?\d+\.?\d*)\s*\|',
-                  r'שינוי\s*\n\s*([+-]?\d+\.?\d*)',
+                  r'מחיר\s*קנייה\s*\n?\s*\d+\.?\d*\s*\n?\s*([+-]?\d+\.?\d*)%',
+                  r'מחיר\s*פדיון\s*\n?\s*\d+\.?\d*\s*\n?\s*([+-]?\d+\.?\d*)%',
+                  r'>([+-]?\d+\.?\d*)%<',
               ]
               
               for pattern in patterns:
-                  match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+                  match = re.search(pattern, text, re.MULTILINE)
                   if match:
-                      # Для первых двух паттернов процент во второй группе
-                      # Для остальных — в первой
-                      val_str = match.group(2) if len(match.groups()) > 1 and match.group(2) else match.group(1)
-                      val = parse_float(val_str)
+                      val = parse_float(match.group(1))
                       if val is not None:
                           print(f"   ✅ Jina+Bizportal: {val}%")
                           return val
               
-              # Fallback: ищем любой процент в начале текста (после заголовка)
+              # Fallback: первый процент после заголовка (не годовой)
               lines = text.split('\n')
-              for i, line in enumerate(lines[:30]):  # первые 30 строк
+              for i, line in enumerate(lines[:40]):
                   match = re.search(r'([+-]?\d+\.?\d*)%', line)
                   if match:
                       val = parse_float(match.group(1))
                       if val is not None and val != 0.0:
-                          # Проверяем, что это не годовая/месячная доходность
-                          prev_lines = ' '.join(lines[max(0,i-3):i])
-                          if 'שנה' not in prev_lines and 'חודש' not in prev_lines and 'חצי' not in prev_lines:
+                          prev = ' '.join(lines[max(0,i-3):i])
+                          if not any(x in prev for x in ['שנה', 'חודש', 'חצי', 'תשואה']):
                               print(f"   ✅ Jina+Bizportal (fallback): {val}%")
                               return val
               
               return None
 
           # ═════════════════════════════════════════════════════════════════════
-          # УРОВЕНЬ 2 — Bizportal API (прямой)
-          # ═════════════════════════════════════════════════════════════════════
-
-          async def _try_bizportal_api(session: aiohttp.ClientSession, fund_id: str) -> float | None:
-              url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
-              headers = _get_headers()
-              
-              data = await _safe_get(session, url, headers)
-              if isinstance(data, dict):
-                  for key in ["DailyChangePercent", "ChangePercent", "PrcChg", "dailyChange", "change", "DayChange"]:
-                      raw = data.get(key)
-                      val = parse_float(raw)
-                      if val is not None and abs(val) > 0.001:
-                          print(f"   ✅ Bizportal API ({key}): {val}%")
-                          return val
-              return None
-
-          # ═════════════════════════════════════════════════════════════════════
-          # УРОВЕНЬ 3 — Bizportal HTML (прямой)
-          # ═════════════════════════════════════════════════════════════════════
-
-          async def _try_bizportal_html(session: aiohttp.ClientSession, fund_id: str) -> float | None:
-              url = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
-              headers = _get_headers()
-              
-              text = await _safe_get(session, url, headers)
-              if not isinstance(text, str):
-                  return None
-              
-              # Ищем встроенный JSON
-              json_match = re.search(r'window\.__INITIAL_STATE__\s*=\s*({.+?});', text, re.DOTALL)
-              if json_match:
-                  try:
-                      import json
-                      data = json.loads(json_match.group(1))
-                      paths = [
-                          ["fund", "dailyChange"],
-                          ["fund", "changePercent"],
-                          ["data", "dailyChange"],
-                          ["data", "change"],
-                      ]
-                      for path in paths:
-                          node = data
-                          for key in path:
-                              node = node.get(key, {}) if isinstance(node, dict) else {}
-                          val = parse_float(node)
-                          if val is not None:
-                              print(f"   ✅ Bizportal HTML (JSON): {val}%")
-                              return val
-                  except Exception:
-                      pass
-              
-              patterns = [
-                  r'"DailyChangePercent"[:\s]*"?([+-]?\d+\.?\d*)"?',
-                  r'"ChangePercent"[:\s]*"?([+-]?\d+\.?\d*)"?',
-                  r'class="[^"]*change[^"]*">\s*([+-]?\d+\.?\d*)\s*%',
-                  r'data-change="([+-]?\d+\.?\d*)"',
-                  r'>([+-]?\d+\.?\d*)%<',
-              ]
-              
-              for pattern in patterns:
-                  match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-                  if match:
-                      val = parse_float(match.group(1))
-                      if val is not None:
-                          print(f"   ✅ Bizportal HTML: {val}%")
-                          return val
-              
-              last_match = re.search(r'"LastRate"[:\s]*(\d+\.?\d*)', text, re.IGNORECASE)
-              base_match = re.search(r'"BaseRate"[:\s]*(\d+\.?\d*)', text, re.IGNORECASE)
-              if last_match and base_match:
-                  last = float(last_match.group(1))
-                  base = float(base_match.group(1))
-                  if base > 0:
-                      val = round(((last - base) / base) * 100, 2)
-                      print(f"   ✅ Bizportal HTML (calc): {val}%")
-                      return val
-              
-              return None
-
-          # ═════════════════════════════════════════════════════════════════════
-          # УРОВЕНЬ 4 — Funder API
+          # УРОВЕНЬ 4 — Funder API (прямой по ID)
           # ═════════════════════════════════════════════════════════════════════
 
           async def _try_funder_api(session: aiohttp.ClientSession, fund_id: str) -> float | None:
               url = f"https://www.funder.co.il/api/fund/{fund_id}"
-              headers = _get_headers("https://www.funder.co.il/")
+              headers = _get_headers()
               headers["Referer"] = f"https://www.funder.co.il/fund/{fund_id}"
               headers["X-Requested-With"] = "XMLHttpRequest"
               
               data = await _safe_get(session, url, headers)
               if isinstance(data, dict):
-                  for key in ["dayChange", "change", "dailyChange", "ChangePercent", "dailyChangePercent"]:
+                  for key in ["dayChange", "change", "dailyChange", "ChangePercent"]:
                       raw = data.get(key)
                       val = parse_float(raw)
                       if val is not None:
@@ -344,100 +337,17 @@ jobs:
               return None
 
           # ═════════════════════════════════════════════════════════════════════
-          # УРОВЕНЬ 5 — Funder HTML
-          # ═════════════════════════════════════════════════════════════════════
-
-          async def _try_funder_html(session: aiohttp.ClientSession, fund_id: str) -> float | None:
-              url = f"https://www.funder.co.il/fund/{fund_id}"
-              headers = _get_headers("https://www.funder.co.il/")
-              
-              text = await _safe_get(session, url, headers)
-              if not isinstance(text, str):
-                  return None
-              
-              patterns = [
-                  r'"dayChange"[:\s]*([+-]?\d+\.?\d*)',
-                  r'"change"[:\s]*"?([+-]?\d+\.?\d*)"?',
-                  r'class="[^"]*change[^"]*">\s*([+-]?\d+\.?\d*)\s*%',
-                  r'data-change="([+-]?\d+\.?\d*)"',
-                  r'>([+-]?\d+\.?\d*)%<',
-              ]
-              
-              for pattern in patterns:
-                  match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-                  if match:
-                      val = parse_float(match.group(1))
-                      if val is not None:
-                          print(f"   ✅ Funder HTML: {val}%")
-                          return val
-              return None
-
-          # ═════════════════════════════════════════════════════════════════════
-          # УРОВЕНЬ 6 — TASE HTML
-          # ═════════════════════════════════════════════════════════════════════
-
-          async def _try_tase_html(session: aiohttp.ClientSession, fund_id: str) -> float | None:
-              url = f"https://market.tase.co.il/he/market_data/mutualfunds/pages/mutualfund.aspx?fundId={fund_id}"
-              headers = _get_headers("https://market.tase.co.il/")
-              
-              text = await _safe_get(session, url, headers)
-              if not isinstance(text, str):
-                  return None
-              
-              json_match = re.search(r'var\s+fundData\s*=\s*({.+?});', text, re.DOTALL)
-              if json_match:
-                  try:
-                      import json
-                      data = json.loads(json_match.group(1))
-                      for key in ["dailyChange", "changePercent", "ChangePercent", "dayChange"]:
-                          raw = data.get(key)
-                          val = parse_float(raw)
-                          if val is not None:
-                              print(f"   ✅ TASE HTML (JSON): {val}%")
-                              return val
-                  except Exception:
-                      pass
-              
-              patterns = [
-                  r'"dailyChange"[:\s]*"?([+-]?\d+\.?\d*)"?',
-                  r'"changePercent"[:\s]*"?([+-]?\d+\.?\d*)"?',
-                  r'>([+-]?\d+\.?\d*)%<',
-              ]
-              
-              for pattern in patterns:
-                  match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-                  if match:
-                      val = parse_float(match.group(1))
-                      if val is not None:
-                          print(f"   ✅ TASE HTML: {val}%")
-                          return val
-              
-              last_match = re.search(r'"LastRate"[:\s]*(\d+\.?\d*)', text, re.IGNORECASE)
-              base_match = re.search(r'"BaseRate"[:\s]*(\d+\.?\d*)', text, re.IGNORECASE)
-              if last_match and base_match:
-                  last = float(last_match.group(1))
-                  base = float(base_match.group(1))
-                  if base > 0:
-                      val = round(((last - base) / base) * 100, 2)
-                      print(f"   ✅ TASE HTML (calc): {val}%")
-                      return val
-              
-              return None
-
-          # ═════════════════════════════════════════════════════════════════════
           # ГЛАВНАЯ ФУНКЦИЯ
           # ═════════════════════════════════════════════════════════════════════
 
-          async def fetch_israeli_fund_data(session: aiohttp.ClientSession, fund_id: str, il_name_eng: str = "") -> float:
-              print(f"🔍 [{fund_id}] {il_name_eng or 'Fund'}")
+          async def fetch_israeli_fund_data(session: aiohttp.ClientSession, fund_id: str, hebrew_keyword: str = "", il_name_eng: str = "") -> float:
+              print(f"🔍 [{fund_id}] {il_name_eng or 'Fund'} (keyword: {hebrew_keyword})")
               
               sources = [
-                  ("Jina+Bizportal", _try_jina_bizportal),  # НОВЫЙ — обход блокировки
-                  ("Bizportal API", _try_bizportal_api),
-                  ("Bizportal HTML", _try_bizportal_html),
+                  ("Funder Search", lambda s, fid: _try_funder_search(s, fid, hebrew_keyword)),
+                  ("Jina+Funder", lambda s, fid: _try_jina_funder_search(s, fid, hebrew_keyword)),
+                  ("Jina+Bizportal", _try_jina_bizportal),
                   ("Funder API", _try_funder_api),
-                  ("Funder HTML", _try_funder_html),
-                  ("TASE HTML", _try_tase_html),
               ]
               
               for source_name, source_func in sources:
@@ -447,9 +357,9 @@ jobs:
                       if result is not None:
                           return result
                   except Exception as e:
-                      print(f"   💥 [{source_name}] ошибка: {str(e)[:60]}")
+                      print(f"   💥 [{source_name}] ошибка: {str(e)[:80]}")
                   
-                  await asyncio.sleep(random.uniform(0.5, 1.0))
+                  await asyncio.sleep(random.uniform(0.8, 1.5))
               
               print(f"   ❌ Все источники исчерпаны. Возвращаем 0.00%")
               return 0.0
@@ -461,9 +371,10 @@ jobs:
                   keys = []
                   for key, cfg in sectors_config.items():
                       fund_id = cfg.get("fund_id", "")
+                      hebrew_keyword = cfg.get("hebrew_keyword", "")
                       il_name_eng = cfg.get("il_name_eng", "")
                       keys.append(key)
-                      tasks.append(fetch_israeli_fund_data(session, fund_id, il_name_eng))
+                      tasks.append(fetch_israeli_fund_data(session, fund_id, hebrew_keyword, il_name_eng))
                   
                   fetched_changes = await asyncio.gather(*tasks)
                   for key, val in zip(keys, fetched_changes):
