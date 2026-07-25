@@ -21,8 +21,8 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install -q aiohttp playwright
-          sudo playwright install-deps chromium
-          playwright install chromium
+          python -m playwright install-deps chromium
+          python -m playwright install chromium
 
       - name: Run Analytics Engine
         env:
