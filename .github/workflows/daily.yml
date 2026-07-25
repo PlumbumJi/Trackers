@@ -1,10 +1,10 @@
-name: Automated Market Analytics
+name: Automated Market Analytics & IPO Digest
 
 on:
   schedule:
-    # Пн-Пт в 23:10 по Израилю (20:10 UTC) — Рыночная аналитика
-    - cron: '10 20 * * 1-5'
-    # Суббота в 22:00 по Израилю (19:00 UTC) — IPO отчет
+    # Ежедневный дайджест рынка в 23:15 по Израилю (20:15 UTC) — 15 мин после закрытия США
+    - cron: '15 20 * * *'
+    # Еженедельный IPO дайджест в Субботу в 22:00 по Израилю (19:00 UTC)
     - cron: '0 19 * * 6'
   workflow_dispatch:
 
@@ -28,6 +28,7 @@ jobs:
           cat << 'EOF' > requirements.txt
           aiohttp==3.11.11
           beautifulsoup4==4.12.3
+          yfinance==0.2.40
           EOF
           
           cat << 'EOF' > modules/config.py
@@ -165,7 +166,7 @@ jobs:
               return None
 
           async def fetch_israeli_fund_data(session: aiohttp.ClientSession, fund_id: str) -> float:
-              # 1. Основной источник: Bizportal API
+              # 1. Bizportal API
               biz_url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
               try:
                   async with session.get(biz_url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
@@ -175,12 +176,11 @@ jobs:
                               raw = data.get("DailyChangePercent") or data.get("ChangePercent") or data.get("PrcChg")
                               val = parse_float(raw)
                               if val is not None and val != 0.0:
-                                  print(f"✅ [Bizportal API] [{fund_id}]: {val}%")
                                   return val
               except Exception:
                   pass
 
-              # 2. Фолбэк источника: Funder JSON API
+              # 2. Funder JSON API
               funder_url = f"https://www.funder.co.il/api/fund/{fund_id}"
               try:
                   funder_headers = HEADERS.copy()
@@ -192,12 +192,10 @@ jobs:
                               raw = data.get("dayChange") or data.get("change") or data.get("dailyChange")
                               val = parse_float(raw)
                               if val is not None:
-                                  print(f"✅ [Funder API] [{fund_id}]: {val}%")
                                   return val
               except Exception:
                   pass
 
-              print(f"ℹ️ [{fund_id}] Изменение за день: 0.00% (нет торгов или нулевая динамика)")
               return 0.0
 
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
@@ -219,6 +217,7 @@ jobs:
           
           cat << 'EOF' > modules/news.py
           import aiohttp, urllib.parse, html
+          import yfinance as yf
           from modules.config import HTTP_TIMEOUT, HEADERS
 
           async def translate_to_russian(session: aiohttp.ClientSession, text: str) -> str:
@@ -231,8 +230,8 @@ jobs:
                           data = await resp.json()
                           translated = "".join([segment[0] for segment in data[0] if segment[0]])
                           return html.unescape(translated)
-              except Exception as e:
-                  print(f"Ошибка перевода: {e}")
+              except Exception:
+                  pass
               return text
 
           async def fetch_sector_news(session: aiohttp.ClientSession, query_ticker: str) -> list:
@@ -246,23 +245,59 @@ jobs:
                               if title and len(title) > 15:
                                   translated_title = await translate_to_russian(session, title)
                                   return [f"• {translated_title}"]
-              except: pass
+              except Exception:
+                  pass
               return ["• Торгуется в рамках текущей рыночной динамики."]
 
-          async def fetch_ipo_news(session: aiohttp.ClientSession) -> list:
-              url = "https://query1.finance.yahoo.com/v1/finance/search?q=IPO"
-              ipo_news = []
+          def get_single_ipo_card(symbol: str, name: str, ipo_date: str, fallback_price: str) -> str:
               try:
-                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
-                      if response.status == 200:
-                          items = (await response.json()).get("news", [])
-                          for item in items[:5]:
-                              title = item.get("title", "")
-                              if title:
-                                  translated_title = await translate_to_russian(session, title)
-                                  ipo_news.append(f"📌 {translated_title}")
-              except: pass
-              return ipo_news or ["📌 Публикаций по IPO на этой неделе не зафиксировано."]
+                  t = yf.Ticker(symbol)
+                  info = t.info
+                  
+                  current_price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("open")
+                  price_str = f"${current_price:.2f}" if current_price else fallback_price
+                  
+                  rec = str(info.get("recommendationKey", "N/A")).replace("_", " ").upper()
+                  target = info.get("targetMeanPrice")
+                  target_str = f"${target:.2f}" if target else "Н/Д"
+                  
+                  rec_map = {
+                      "STRONG BUY": "🔥 Strong Buy",
+                      "BUY": "🟢 Buy (Покупать)",
+                      "HOLD": "🟡 Hold (Удерживать)",
+                      "UNDERPERFORM": "🟠 Underperform",
+                      "SELL": "🔴 Sell (Продавать)",
+                      "N/A": "⚪️ Ожидает оценки"
+                  }
+                  rec_formatted = rec_map.get(rec, rec)
+
+                  return (
+                      f"📌 <b>{name}</b> (<code>{symbol}</code>)\n"
+                      f"🗓 <b>Дата IPO:</b> {ipo_date}\n"
+                      f"💵 <b>Курс / Диапазон:</b> {price_str}\n"
+                      f"🎯 <b>Цель Wall St:</b> {target_str}\n"
+                      f"🧠 <b>Консенсус:</b> {rec_formatted}\n"
+                  )
+              except Exception:
+                  return (
+                      f"📌 <b>{name}</b> (<code>{symbol}</code>)\n"
+                      f"🗓 <b>Дата IPO:</b> {ipo_date}\n"
+                      f"💵 <b>Курс:</b> {fallback_price}\n"
+                      f"🧠 <b>Консенсус:</b> ⚪️ В процессе оценки\n"
+                  )
+
+          def fetch_ipo_full_analytics() -> list:
+              ipo_targets = [
+                  {"symbol": "ARM", "name": "Arm Holdings", "date": "14.09.2023", "price": "$51.00"},
+                  {"symbol": "RDDT", "name": "Reddit Inc.", "date": "21.03.2024", "price": "$34.00"},
+                  {"symbol": "KVUE", "name": "Kenvue Inc.", "date": "04.05.2023", "price": "$22.00"},
+                  {"symbol": "IPO", "name": "Renaissance IPO ETF", "date": "ETF Фонд", "price": "Рыночная"}
+              ]
+              cards = []
+              for target in ipo_targets:
+                  card = get_single_ipo_card(target["symbol"], target["name"], target["date"], target["price"])
+                  cards.append(card)
+              return cards
           EOF
           
           cat << 'EOF' > modules/formatter.py
@@ -312,11 +347,11 @@ jobs:
                   lines.append("")
               lines.append("</blockquote>\n")
 
-              # Сортировка фондов Израиля по ВОЗРАСТАНИЮ (от худшего/меньшего к лучшему)
-              ta_stocks_sorted = sorted(sectors_data, key=lambda x: x['il_fund_data']['change'])
+              # Сортировка фондов Израиля ПО УБЫВАНИЮ (от большего к меньшему)
+              ta_stocks_sorted = sorted(sectors_data, key=lambda x: x['il_fund_data']['change'], reverse=True)
 
               lines.append("<blockquote expandable>")
-              lines.append("🇮🇱 <b>TA Stocks (По возрастанию)</b>\n")
+              lines.append("🇮🇱 <b>TA Stocks (По убыванию)</b>\n")
               for s in ta_stocks_sorted:
                   il_ch = s['il_fund_data']['change']
                   ch_emoji = "🟢" if il_ch > 0 else ("🔴" if il_ch < 0 else "⚪")
@@ -327,7 +362,7 @@ jobs:
               lines.append(f"\n{BOT_NAME}")
               return "\n".join(lines)
 
-          def build_ipo_message(ipo_news: list) -> str:
+          def build_ipo_message(ipo_cards: list) -> str:
               tz_il = timezone(timedelta(hours=3))
               now_str = datetime.now(tz_il).strftime("%d.%m.%Y")
               
@@ -336,8 +371,8 @@ jobs:
                   f"📅 {now_str} | Субботний обзор 🇮🇱\n",
                   "<blockquote expandable>"
               ]
-              for news in ipo_news:
-                  lines.append(f"{escape_html(news)}\n")
+              for card in ipo_cards:
+                  lines.append(f"{card}")
               lines.append("</blockquote>")
               lines.append(f"\n{BOT_NAME}")
               return "\n".join(lines)
@@ -392,7 +427,7 @@ jobs:
               url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
               chunks = split_message(text, max_length=3900)
               
-              print(f"ℹ️ Общая длина сообщения: {len(text)} символов. Итоговых частей: {len(chunks)}")
+              print(f"ℹ️ Сообщение длинной {len(text)} символов. Отправка {len(chunks)} частей...")
               
               async with aiohttp.ClientSession() as session:
                   for idx, chunk in enumerate(chunks, start=1):
@@ -405,9 +440,9 @@ jobs:
                       try:
                           async with session.post(url, json=payload, timeout=HTTP_TIMEOUT) as resp:
                               if resp.status == 200:
-                                  print(f"🚀 Часть [{idx}/{len(chunks)}] ({len(chunk)} симв.) успешно отправлена!")
+                                  print(f"🚀 Часть [{idx}/{len(chunks)}] успешно отправлена!")
                               else:
-                                  print(f"❌ Ошибка Telegram (код {resp.status}): {await resp.text()}")
+                                  print(f"❌ Ошибка Telegram ({resp.status}): {await resp.text()}")
                       except Exception as e:
                           print(f"💥 Ошибка отправки: {e}")
           EOF
@@ -417,7 +452,7 @@ jobs:
           from datetime import datetime, timezone, timedelta
           from modules.config import SECTORS_CONFIG
           from modules.market import fetch_all_yahoo_data, fetch_all_israeli_funds
-          from modules.news import fetch_sector_news, fetch_ipo_news
+          from modules.news import fetch_sector_news, fetch_ipo_full_analytics
           from modules.formatter import build_telegram_message, build_ipo_message
           from modules.telegram_sender import send_to_telegram
 
@@ -463,25 +498,26 @@ jobs:
                           "il_fund_data": il_results.get(key, {"price": 0.0, "change": 0.0})
                       })
                   
-                  # Основная таблица секторов сверху вниз от большего к меньшему
                   sectors_results.sort(key=lambda x: x["avg_change"], reverse=True)
                       
                   message = build_telegram_message(sectors_results)
                   await send_to_telegram(message)
 
           async def run_ipo_digest():
-              async with aiohttp.ClientSession() as session:
-                  ipo_news = await fetch_ipo_news(session)
-                  message = build_ipo_message(ipo_news)
-                  await send_to_telegram(message)
+              print("📊 Формирование IPO отчета...")
+              ipo_cards = fetch_ipo_full_analytics()
+              message = build_ipo_message(ipo_cards)
+              await send_to_telegram(message)
 
           async def main():
               tz_il = timezone(timedelta(hours=3))
-              weekday = datetime.now(tz_il).weekday()
+              now = datetime.now(tz_il)
               
-              if weekday == 5:
+              # В субботу в 22:00 IDT (19:00 UTC) запускается еженедельный IPO-дайджест
+              if now.weekday() == 5 and now.hour == 22:
                   await run_ipo_digest()
               else:
+                  # Во все остальные дни и часы (включая ежедневные 23:15 IDT) отправляется аналитика
                   await run_market_analytics()
 
           if __name__ == "__main__":
