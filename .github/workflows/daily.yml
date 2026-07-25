@@ -124,6 +124,7 @@ jobs:
           import aiohttp
           import asyncio
           import re
+          from bs4 import BeautifulSoup
           from modules.config import HTTP_TIMEOUT, HEADERS
 
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
@@ -165,8 +166,56 @@ jobs:
                   pass
               return None
 
+          def extract_change_from_html(html_content: str) -> float | None:
+              """Извлечение дневного изменения с помощью BeautifulSoup и фоллбек-регулярок."""
+              try:
+                  soup = BeautifulSoup(html_content, 'html.parser')
+                  
+                  # 1. Поиск по специфичным тегам/классам Funder (изменение дня)
+                  target_tags = soup.find_all(['span', 'div', 'td'], class_=re.compile(r'(change|dayChange|pChange|num)', re.I))
+                  for tag in target_tags:
+                      text = tag.get_text(strip=True)
+                      if '%' in text or '+' in text or '-' in text:
+                          val = parse_float(text)
+                          if val is not None and val != 0.0:
+                              return val
+              except Exception:
+                  pass
+
+              # 2. Набор регулярных выражений на случай изменения верстки
+              regex_patterns = [
+                  r'שינוי יומי[:\s]*([+-]?\d+(?:[\.,]\d+)?%?)',
+                  r'class="[^"]*change[^"]*"[^>]*>([+-]?\d+(?:[\.,]\d+)?%?)<',
+                  r'id="[^"]*change[^"]*"[^>]*>([+-]?\d+(?:[\.,]\d+)?%?)<',
+                  r'([+-]\d+(?:[\.,]\d+)?\s*%)'
+              ]
+              
+              for pattern in regex_patterns:
+                  matches = re.findall(pattern, html_content, re.IGNORECASE)
+                  for m in matches:
+                      val = parse_float(m)
+                      if val is not None and val != 0.0:
+                          return val
+
+              return None
+
           async def fetch_israeli_fund_data(session: aiohttp.ClientSession, fund_id: str) -> float:
-              # 1. Bizportal API
+              funder_url = f"https://www.funder.co.il/fund/{fund_id}"
+              funder_headers = HEADERS.copy()
+              funder_headers["Referer"] = "https://www.funder.co.il/"
+
+              # 1. Основной источник: Прямой парсинг HTML страницы Funder
+              try:
+                  async with session.get(funder_url, headers=funder_headers, timeout=HTTP_TIMEOUT) as resp:
+                      if resp.status == 200:
+                          html_text = await resp.text()
+                          val = extract_change_from_html(html_text)
+                          if val is not None:
+                              return val
+              except Exception:
+                  pass
+
+              # 2. Резервный источник: Bizportal API / HTML
               biz_url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
               try:
                   async with session.get(biz_url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
@@ -175,21 +224,19 @@ jobs:
                           if isinstance(data, dict):
                               raw = data.get("DailyChangePercent") or data.get("ChangePercent") or data.get("PrcChg")
                               val = parse_float(raw)
-                              if val is not None and val != 0.0:
+                              if val is not None:
                                   return val
               except Exception:
                   pass
 
-              # 2. Funder JSON API
-              funder_url = f"https://www.funder.co.il/api/fund/{fund_id}"
+              # 3. Дополнительный резервный JSON API от Funder
+              funder_api_url = f"https://www.funder.co.il/api/fund/{fund_id}"
               try:
-                  funder_headers = HEADERS.copy()
-                  funder_headers["Referer"] = f"https://www.funder.co.il/fund/{fund_id}"
-                  async with session.get(funder_url, headers=funder_headers, timeout=HTTP_TIMEOUT) as resp:
+                  async with session.get(funder_api_url, headers=funder_headers, timeout=HTTP_TIMEOUT) as resp:
                       if resp.status == 200:
                           data = await resp.json()
                           if isinstance(data, dict):
-                              raw = data.get("dayChange") or data.get("change") or data.get("dailyChange")
+                              raw = data.get("dayChange") or data.get("change") or data.get("lastChange")
                               val = parse_float(raw)
                               if val is not None:
                                   return val
