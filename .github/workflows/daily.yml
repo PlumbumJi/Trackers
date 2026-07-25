@@ -123,7 +123,6 @@ jobs:
           import aiohttp
           import asyncio
           import re
-          from bs4 import BeautifulSoup
           from modules.config import HTTP_TIMEOUT, HEADERS
 
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
@@ -165,45 +164,40 @@ jobs:
                   pass
               return None
 
-          async def fetch_bizportal_fund_data(session: aiohttp.ClientSession, fund_id: str) -> float:
-              # 1. Прямой опрос JSON API Bizportal
-              api_url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
+          async def fetch_israeli_fund_data(session: aiohttp.ClientSession, fund_id: str) -> float:
+              # 1. Основной источник: Bizportal API
+              biz_url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
               try:
-                  async with session.get(api_url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
-                      if response.status == 200:
-                          data = await response.json()
+                  async with session.get(biz_url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
+                      if resp.status == 200:
+                          data = await resp.json()
                           if isinstance(data, dict):
-                              raw_change = (
-                                  data.get("DailyChangePercent") 
-                                  or data.get("ChangePercent") 
-                                  or data.get("PrcChg")
-                              )
-                              val = parse_float(raw_change)
-                              if val is not None:
+                              raw = data.get("DailyChangePercent") or data.get("ChangePercent") or data.get("PrcChg")
+                              val = parse_float(raw)
+                              if val is not None and val != 0.0:
                                   print(f"✅ [Bizportal API] [{fund_id}]: {val}%")
                                   return val
-              except Exception as e:
-                  print(f"⚠️ [Bizportal API Error] [{fund_id}]: {e}")
+              except Exception:
+                  pass
 
-              # 2. Фолбэк: Прямой запрос HTML-страницы Bizportal
-              page_url = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
+              # 2. Фолбэк источника: Funder JSON API
+              funder_url = f"https://www.funder.co.il/api/fund/{fund_id}"
               try:
-                  async with session.get(page_url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
-                      if response.status == 200:
-                          html_text = await response.text()
-                          soup = BeautifulSoup(html_text, 'html.parser')
-                          
-                          # Поиск элементов изменения
-                          target = soup.find('span', class_=re.compile(r'(num|daily|change)', re.I))
-                          if target:
-                              val = parse_float(target.get_text())
+                  funder_headers = HEADERS.copy()
+                  funder_headers["Referer"] = f"https://www.funder.co.il/fund/{fund_id}"
+                  async with session.get(funder_url, headers=funder_headers, timeout=HTTP_TIMEOUT) as resp:
+                      if resp.status == 200:
+                          data = await resp.json()
+                          if isinstance(data, dict):
+                              raw = data.get("dayChange") or data.get("change") or data.get("dailyChange")
+                              val = parse_float(raw)
                               if val is not None:
-                                  print(f"✅ [Bizportal HTML] [{fund_id}]: {val}%")
+                                  print(f"✅ [Funder API] [{fund_id}]: {val}%")
                                   return val
-              except Exception as e:
-                  print(f"⚠️ [Bizportal HTML Error] [{fund_id}]: {e}")
+              except Exception:
+                  pass
 
-              print(f"❌ [{fund_id}] Данные не получены. Возврат 0.0")
+              print(f"ℹ️ [{fund_id}] Изменение за день: 0.00% (нет торгов или нулевая динамика)")
               return 0.0
 
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
@@ -214,7 +208,7 @@ jobs:
                   for key, cfg in sectors_config.items():
                       fund_id = cfg.get("fund_id", "")
                       keys.append(key)
-                      tasks.append(fetch_bizportal_fund_data(session, fund_id))
+                      tasks.append(fetch_israeli_fund_data(session, fund_id))
                   
                   fetched_changes = await asyncio.gather(*tasks)
                   for key, val in zip(keys, fetched_changes):
@@ -318,9 +312,12 @@ jobs:
                   lines.append("")
               lines.append("</blockquote>\n")
 
+              # Сортировка фондов Израиля по ВОЗРАСТАНИЮ (от худшего/меньшего к лучшему)
+              ta_stocks_sorted = sorted(sectors_data, key=lambda x: x['il_fund_data']['change'])
+
               lines.append("<blockquote expandable>")
-              lines.append("🇮🇱 <b>TA Stocks</b>\n")
-              for s in sectors_data:
+              lines.append("🇮🇱 <b>TA Stocks (По возрастанию)</b>\n")
+              for s in ta_stocks_sorted:
                   il_ch = s['il_fund_data']['change']
                   ch_emoji = "🟢" if il_ch > 0 else ("🔴" if il_ch < 0 else "⚪")
                   ch_sign = f"+{il_ch:.2f}%" if il_ch > 0 else f"{il_ch:.2f}%"
@@ -435,7 +432,7 @@ jobs:
               print(f"📦 Сбор данных Yahoo Finance...")
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
 
-              print(f"🌐 Опрос израильских фондов через Bizportal API...")
+              print(f"🌐 Опрос израильских фондов...")
               il_results = await fetch_all_israeli_funds(SECTORS_CONFIG)
 
               async with aiohttp.ClientSession() as session:
@@ -466,7 +463,7 @@ jobs:
                           "il_fund_data": il_results.get(key, {"price": 0.0, "change": 0.0})
                       })
                   
-                  # Сортировка от большего к меньшего
+                  # Основная таблица секторов сверху вниз от большего к меньшему
                   sectors_results.sort(key=lambda x: x["avg_change"], reverse=True)
                       
                   message = build_telegram_message(sectors_results)
