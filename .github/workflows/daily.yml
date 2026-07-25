@@ -2,617 +2,419 @@ name: Automated Market Analytics
 
 on:
   schedule:
-    - cron: '10 20 * * 1-5'
-    - cron: '0 19 * * 6'
+    - cron: '15 20 * * 1-5'
+    - cron: '15 21 * * 1-5'
+    - cron: '15 20 * * 6'
+    - cron: '15 21 * * 6'
   workflow_dispatch:
 
 jobs:
   build-and-send:
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4.2.2
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install System Dependencies for Playwright
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libglib2.0-0 libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libdbus-1-3 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2
-
-      - name: Install Python Dependencies
-        run: |
-          pip install aiohttp playwright
-
-      - name: Install Playwright Browsers
-        run: |
-          playwright install chromium
-          playwright install-deps chromium
-
-      - name: Deploy Architecture Files
-        run: |
-          mkdir -p modules
-          touch modules/__init__.py
-          
-          cat << 'PYEOF' > requirements.txt
-          aiohttp==3.11.11
-          playwright==1.41.0
-          PYEOF
-          
-          cat << 'PYEOF' > modules/config.py
-          import os
-
-          BOT_TOKEN = os.getenv("BOT_TOKEN")
-          CHAT_ID = os.getenv("CHAT_ID")
-          HTTP_TIMEOUT = 20
-          BOT_NAME = "@oil_tracker_pavel_bot"
-          
-          HEADERS = {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-              "Accept": "application/json, text/plain, */*",
-              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
-              "Referer": "https://www.bizportal.co.il/",
-              "Origin": "https://www.bizportal.co.il"
-          }
-
-          SECTORS_CONFIG = {
-              "Oil": {
-                  "name": "Нефть и Энергетика", "icon": "🛢️", "short_eng": "Oil", "news_ticker": "USO", 
-                  "fund_id": "5141841", "il_name_eng": "WTI Ultra x3", 
-                  "tickers": ["BZ=F", "CL=F", "USO", "OVX", "XLE", "VLO"]
-              },
-              "Cybersecurity": {
-                  "name": "Кибербезопасность", "icon": "🛡️", "short_eng": "Cyber", "news_ticker": "CIBR", 
-                  "fund_id": "5140744", "il_name_eng": "IBI Cybersecurity", 
-                  "tickers": ["CIBR", "HACK", "CRWD", "PANW", "FTNT", "ZS", "NET"]
-              },
-              "Gold": {
-                  "name": "Золото и Металлы", "icon": "🥇", "short_eng": "Gold", "news_ticker": "GLD", 
-                  "fund_id": "5128624", "il_name_eng": "Tachlit Gold Spot", 
-                  "tickers": ["GLD", "GDX", "SLV", "NEM", "GOLD"]
-              },
-              "Clean Energy": {
-                  "name": "Зеленая энергетика", "icon": "☀️", "short_eng": "Clean", "news_ticker": "FSLR", 
-                  "fund_id": "5138136", "il_name_eng": "Meitav Clean Energy", 
-                  "tickers": ["ICLN", "TAN", "FAN", "FSLR", "ENPH", "SEDG"]
-              },
-              "Aerospace": {
-                  "name": "Авиация и Космос", "icon": "✈️", "short_eng": "Aero", "news_ticker": "ITA", 
-                  "fund_id": "5135116", "il_name_eng": "Tachlit US Aerospace", 
-                  "tickers": ["BA", "EADSY", "LMT", "RTX", "ITA", "NOC"]
-              },
-              "Biotech": {
-                  "name": "Биотех и Медицина", "icon": "🏥", "short_eng": "Bio", "news_ticker": "LLY", 
-                  "fund_id": "5122965", "il_name_eng": "Harel Nasdaq Biotech", 
-                  "tickers": ["LLY", "NVO", "PFE", "MRNA", "AMGN", "XBI", "IBB"]
-              },
-              "Cloud": {
-                  "name": "Облачные технологии", "icon": "☁️", "short_eng": "Cloud", "news_ticker": "WCLD", 
-                  "fund_id": "5131014", "il_name_eng": "Harel Cloud Comp.", 
-                  "tickers": ["MSFT", "AMZN", "GOOGL", "ORCL", "SNOW", "WCLD", "CLOU"]
-              },
-              "Banking": {
-                  "name": "Банковский сектор", "icon": "🏦", "short_eng": "Bank", "news_ticker": "JPM", 
-                  "fund_id": "5138144", "il_name_eng": "Meitav Banks US", 
-                  "tickers": ["JPM", "BAC", "GS", "MS", "WFC", "XLF", "KBE"]
-              },
-              "Uranium": {
-                  "name": "Уран и Атомная энергетика", "icon": "☢️", "short_eng": "Uran", "news_ticker": "CCJ", 
-                  "fund_id": "5138763", "il_name_eng": "More Uranium Giants", 
-                  "tickers": ["URA", "URNM", "CCJ", "NXE", "DNN"]
-              },
-              "Gaming": {
-                  "name": "Игровая Индустрия", "icon": "🎮", "short_eng": "Game", "news_ticker": "SONY", 
-                  "fund_id": "5130198", "il_name_eng": "MTF Bluestar E-Games", 
-                  "tickers": ["NVDA", "MSFT", "TTWO", "EA", "RBLX", "SONY", "NTDOY", "HERO"]
-              },
-              "EV": {
-                  "name": "Электромобили", "icon": "🚗", "short_eng": "EV", "news_ticker": "TSLA", 
-                  "fund_id": "5132228", "il_name_eng": "Migdal EV & Auto", 
-                  "tickers": ["TSLA", "BYDDY", "RIVN", "LI", "DRIV", "LCID"]
-              },
-              "E-Commerce": {
-                  "name": "Электронная коммерция", "icon": "🛒", "short_eng": "Ecom", "news_ticker": "IBUY", 
-                  "fund_id": "5138128", "il_name_eng": "Meitav E-Commerce", 
-                  "tickers": ["AMZN", "SHOP", "MELI", "IBUY", "EBAY", "PDD"]
-              },
-              "Semiconductors": {
-                  "name": "Полупроводники", "icon": "💻", "short_eng": "Semi", "news_ticker": "SOXX", 
-                  "fund_id": "5118716", "il_name_eng": "Kasam Semiconductors", 
-                  "tickers": ["NVDA", "AMD", "AVGO", "QCOM", "TSM", "ASML", "INTC", "SOXX"]
-              },
-              "AI": {
-                  "name": "Искусственный Интеллект", "icon": "🤖", "short_eng": "AI", "news_ticker": "NVDA", 
-                  "fund_id": "5134101", "il_name_eng": "Migdal AI", 
-                  "tickers": ["NVDA", "MSFT", "AMD", "AVGO", "PLTR", "GOOGL", "AMZN", "BOTZ"]
-              }
-          }
-          PYEOF
-          
-          cat << 'PYEOF' > modules/market.py
-          import aiohttp
-          import asyncio
-          import re
-          import random
-          from modules.config import HTTP_TIMEOUT, HEADERS
-
-          # Playwright
-          _playwright_available = False
-          try:
-              from playwright.async_api import async_playwright
-              _playwright_available = True
-          except ImportError:
-              pass
-
-          def parse_float(val) -> float | None:
-              if val is None:
-                  return None
-              try:
-                  cleaned = str(val).replace(',', '.').replace('%', '').replace('+', '').strip()
-                  match = re.search(r'([+-]?\d+(?:\.\d+)?)', cleaned)
-                  if match:
-                      res = float(match.group(1))
-                      if -25.0 <= res <= 25.0:
-                          return round(res, 2)
-              except Exception:
-                  pass
-              return None
-
-          async def _try_playwright_bizportal(fund_id: str) -> float | None:
-              if not _playwright_available:
-                  return None
-              
-              url = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
-              
-              try:
-                  async with async_playwright() as p:
-                      browser = await p.chromium.launch(headless=True)
-                      context = await browser.new_context(
-                          user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                          locale="he-IL",
-                          timezone_id="Asia/Jerusalem",
-                      )
-                      page = await context.new_page()
-                      await page.goto(url, wait_until="networkidle", timeout=30000)
-                      await asyncio.sleep(3)
-                      
-                      html = await page.content()
-                      await browser.close()
-                      
-                      patterns = [
-                          r'מחיר\s*קנייה\s*</td>\s*<td[^>]*>\s*(\d+\.?\d*)\s*</td>\s*<td[^>]*>\s*([+-]?\d+\.?\d*)%',
-                          r'>([+-]?\d+\.?\d*)%<',
-                          r'"DailyChangePercent"[:\s]*"?([+-]?\d+\.?\d*)"?',
-                          r'"ChangePercent"[:\s]*"?([+-]?\d+\.?\d*)"?',
-                      ]
-                      
-                      for pattern in patterns:
-                          match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
-                          if match:
-                              val_str = match.group(2) if len(match.groups()) > 1 and match.group(2) else match.group(1)
-                              val = parse_float(val_str)
-                              if val is not None:
-                                  print(f"   ✅ Playwright: {val}%")
-                                  return val
-                              
-              except Exception as e:
-                  print(f"   💥 Playwright: {str(e)[:60]}")
-              
-              return None
-
-          async def _try_jina_with_retry(session: aiohttp.ClientSession, fund_id: str, max_retries: int = 3) -> float | None:
-              url = f"https://r.jina.ai/http://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
-              headers = {
-                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                  "Accept": "text/plain,*/*",
-              }
-              
-              for attempt in range(max_retries):
-                  try:
-                      async with session.get(url, headers=headers, timeout=40) as resp:
-                          if resp.status == 200:
-                              text = await resp.text()
-                              
-                              match = re.search(r'מחיר\s*קנייה\s*\n?\s*\d+\.?\d*\s*\n?\s*([+-]?\d+\.?\d*)%', text, re.MULTILINE)
-                              if match:
-                                  val = parse_float(match.group(1))
-                                  if val is not None:
-                                      print(f"   ✅ Jina (attempt {attempt+1}): {val}%")
-                                      return val
-                              
-                              lines = text.split('\n')
-                              for i, line in enumerate(lines[:40]):
-                                  m = re.search(r'([+-]?\d+\.?\d*)%', line)
-                                  if m:
-                                      val = parse_float(m.group(1))
-                                      if val is not None and val != 0.0:
-                                          prev = ' '.join(lines[max(0,i-3):i])
-                                          if not any(x in prev for x in ['שנה', 'חודש', 'חצי', 'תשואה', 'שנתי']):
-                                              print(f"   ✅ Jina fallback (attempt {attempt+1}): {val}%")
-                                              return val
-                          
-                          elif resp.status == 403:
-                              print(f"   🚫 Jina 403 (attempt {attempt+1})")
-                          else:
-                              print(f"   ⚠️ Jina HTTP {resp.status} (attempt {attempt+1})")
-                  except Exception as e:
-                      print(f"   💥 Jina error (attempt {attempt+1}): {str(e)[:60]}")
-                  
-                  if attempt < max_retries - 1:
-                      await asyncio.sleep(2 ** attempt)
-              
-              return None
-
-          async def _try_textise(session: aiohttp.ClientSession, fund_id: str) -> float | None:
-              proxies = [
-                  f"https://r.jina.ai/http://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}",
-                  f"https://r.jina.ai/http://www.funder.co.il/fund/{fund_id}",
-              ]
-              
-              for url in proxies:
-                  try:
-                      async with session.get(url, timeout=35) as resp:
-                          if resp.status == 200:
-                              text = await resp.text()
-                              match = re.search(r'([+-]?\d+\.?\d*)%', text)
-                              if match:
-                                  val = parse_float(match.group(1))
-                                  if val is not None:
-                                      print(f"   ✅ Textise: {val}%")
-                                      return val
-                  except:
-                      pass
-              return None
-
-          async def fetch_israeli_fund_data(session: aiohttp.ClientSession, fund_id: str, il_name_eng: str = "") -> float:
-              print(f"🔍 [{fund_id}] {il_name_eng or 'Fund'}")
-              
-              result = await _try_playwright_bizportal(fund_id)
-              if result is not None:
-                  return result
-              
-              result = await _try_jina_with_retry(session, fund_id)
-              if result is not None:
-                  return result
-              
-              result = await _try_textise(session, fund_id)
-              if result is not None:
-                  return result
-              
-              print(f"   ❌ Все источники исчерпаны. Возвращаем 0.00%")
-              return 0.0
-
-          async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
-              results = {}
-              async with aiohttp.ClientSession() as session:
-                  tasks = []
-                  keys = []
-                  for key, cfg in sectors_config.items():
-                      fund_id = cfg.get("fund_id", "")
-                      il_name_eng = cfg.get("il_name_eng", "")
-                      keys.append(key)
-                      tasks.append(fetch_israeli_fund_data(session, fund_id, il_name_eng))
-                  
-                  fetched_changes = await asyncio.gather(*tasks)
-                  for key, val in zip(keys, fetched_changes):
-                      results[key] = {"price": 0.0, "change": val}
-              return results
-
-          async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
-              api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
-              url = f"https://query1.finance.yahoo.com/v8/finance/chart/{api_ticker}?range=1d&interval=1m"
-              try:
-                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
-                      if response.status == 200:
-                          data = await response.json()
-                          result = data.get("chart", {}).get("result", [])
-                          if result:
-                              meta = result[0].get("meta", {})
-                              price = meta.get("regularMarketPrice")
-                              prev_close = meta.get("chartPreviousClose")
-                              if price is not None and prev_close:
-                                  change = ((price - prev_close) / prev_close) * 100
-                                  return ticker, {"price": round(price, 2), "change": round(change, 2)}
-              except Exception:
-                  pass
-              return ticker, {"price": 0.0, "change": 0.0}
-
-          async def fetch_all_yahoo_data(tickers: list) -> dict:
-              async with aiohttp.ClientSession() as session:
-                  tasks = [fetch_single_ticker(session, t) for t in tickers]
-                  results = await asyncio.gather(*tasks)
-                  return dict(results)
-          PYEOF
-          
-          cat << 'PYEOF' > modules/news.py
-          import aiohttp, urllib.parse, html
-          from modules.config import HTTP_TIMEOUT, HEADERS
-
-          async def translate_to_russian(session: aiohttp.ClientSession, text: str) -> str:
-              if not text:
-                  return text
-              try:
-                  url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ru&dt=t&q={urllib.parse.quote(text)}"
-                  async with session.get(url, timeout=6) as resp:
-                      if resp.status == 200:
-                          data = await resp.json()
-                          translated = "".join([segment[0] for segment in data[0] if segment[0]])
-                          return html.unescape(translated)
-              except Exception as e:
-                  print(f"Ошибка перевода: {e}")
-              return text
-
-          async def fetch_sector_news(session: aiohttp.ClientSession, query_ticker: str) -> list:
-              url = f"https://query1.finance.yahoo.com/v1/finance/search?q={query_ticker}"
-              try:
-                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
-                      if response.status == 200:
-                          items = (await response.json()).get("news", [])
-                          for item in items:
-                              title = item.get("title", "")
-                              if title and len(title) > 15:
-                                  translated_title = await translate_to_russian(session, title)
-                                  return [f"• {translated_title}"]
-              except: pass
-              return ["• Торгуется в рамках текущей рыночной динамики."]
-
-          async def fetch_ipo_news(session: aiohttp.ClientSession) -> list:
-              url = "https://query1.finance.yahoo.com/v1/finance/search?q=IPO"
-              ipo_news = []
-              try:
-                  async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
-                      if response.status == 200:
-                          items = (await response.json()).get("news", [])
-                          for item in items[:5]:
-                              title = item.get("title", "")
-                              if title:
-                                  translated_title = await translate_to_russian(session, title)
-                                  ipo_news.append(f"📌 {translated_title}")
-              except: pass
-              return ipo_news or ["📌 Публикаций по IPO на этой неделе не зафиксировано."]
-          PYEOF
-          
-          cat << 'PYEOF' > modules/formatter.py
-          from datetime import datetime, timezone, timedelta
-          from modules.config import BOT_NAME
-
-          def escape_html(text: str) -> str:
-              return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-          def build_telegram_message(sectors_data: list) -> str:
-              tz_il = timezone(timedelta(hours=3))
-              now_str = datetime.now(tz_il).strftime("%d.%m.%Y | %H:%M")
-              
-              lines = [
-                  "📈 <b>Рыночный Дайджест</b>",
-                  f"📅 {now_str} (IDT) 🇮🇱",
-                  "",
-                  "<b>📊 ОБЗОР СЕКТОРОВ (US) И ФОНДОВ (IL)</b>",
-                  "<code>Сектор       US      IL   Рейтинг</code>",
-                  "<code>"
-              ]
-              
-              for s in sectors_data:
-                  icon = s['icon']
-                  name = s['short_eng'][:6]
-                  us_ch = s['avg_change']
-                  il_ch = s['il_fund_data']['change']
-                  
-                  us_str = f"+{us_ch:.1f}%" if us_ch > 0 else f"{us_ch:.1f}%"
-                  il_str = f"+{il_ch:.1f}%" if il_ch > 0 else f"{il_ch:.1f}%"
-                  
-                  score_emoji = "🟢" if s['score'] >= 65 else ("🟡" if s['score'] >= 40 else "🔴")
-                  lines.append(f"{icon}{name:<6} {us_str:>6} {il_str:>6}  {score_emoji}{s['score']:>3}/100")
-              lines.append("</code>")
-              lines.append("")
-
-              lines.append("<blockquote expandable>")
-              lines.append("🔍 <b>ДРАЙВЕРЫ ДВИЖЕНИЯ И ПОКАЗАТЕЛИ СЕКТОРОВ</b>")
-              lines.append("")
-              for s in sectors_data:
-                  ch_sign = f"+{s['avg_change']:.2f}%" if s['avg_change'] > 0 else f"{s['avg_change']:.2f}%"
-                  lines.append(f"<b>{s['icon']} {escape_html(s['name'])}</b> ({ch_sign})")
-                  
-                  if s.get("top_3_tickers"):
-                      details_str = ", ".join([f"{t}: {c:+.2f}%" for t, c in s["top_3_tickers"]])
-                      lines.append(f"  📊 <i>Топ-3 драйвера: [{escape_html(details_str)}]</i>")
-                      
-                  for n in s['news']:
-                      lines.append(f"  {escape_html(n)}")
-                  lines.append("")
-              lines.append("</blockquote>")
-              lines.append("")
-
-              ta_stocks_sorted = sorted(sectors_data, key=lambda x: x['il_fund_data']['change'])
-
-              lines.append("<blockquote expandable>")
-              lines.append("🇮🇱 <b>TA Stocks (По возрастанию)</b>")
-              lines.append("")
-              for s in ta_stocks_sorted:
-                  il_ch = s['il_fund_data']['change']
-                  ch_emoji = "🟢" if il_ch > 0 else ("🔴" if il_ch < 0 else "⚪")
-                  ch_sign = f"+{il_ch:.2f}%" if il_ch > 0 else f"{il_ch:.2f}%"
-                  lines.append(f"{ch_emoji} <b>{escape_html(s['il_name_eng'])}</b> ({s['icon']})")
-                  lines.append(f"└ <code>{s['fund_id']}</code> · <b>{ch_sign}</b>")
-              lines.append("</blockquote>")
-
-              lines.append("")
-              lines.append(f"{BOT_NAME}")
-              return "\n".join(lines)
-
-          def build_ipo_message(ipo_news: list) -> str:
-              tz_il = timezone(timedelta(hours=3))
-              now_str = datetime.now(tz_il).strftime("%d.%m.%Y")
-              
-              lines = [
-                  "🔔 <b>ЕЖЕНЕДЕЛЬНЫЙ IPO ДАЙДЖЕСТ</b>",
-                  f"📅 {now_str} | Субботний обзор 🇮🇱",
-                  "",
-                  "<blockquote expandable>"
-              ]
-              for news in ipo_news:
-                  lines.append(f"{escape_html(news)}")
-                  lines.append("")
-              lines.append("</blockquote>")
-              lines.append("")
-              lines.append(f"{BOT_NAME}")
-              return "\n".join(lines)
-          PYEOF
-          
-          cat << 'PYEOF' > modules/telegram_sender.py
-          import aiohttp
-          from modules.config import BOT_TOKEN, CHAT_ID, HTTP_TIMEOUT
-
-          def split_message(text: str, max_length: int = 4000) -> list[str]:
-              if len(text) <= max_length:
-                  return [text]
-              
-              chunks = []
-              raw_blocks = text.split("</blockquote>")
-              current_chunk = ""
-
-              for raw_block in raw_blocks:
-                  if not raw_block:
-                      continue
-                  
-                  block = raw_block + "</blockquote>" if "blockquote" in raw_block else raw_block
-
-                  if len(current_chunk) + len(block) > max_length:
-                      if current_chunk:
-                          chunks.append(current_chunk.strip())
-                          current_chunk = ""
-                      
-                      if len(block) > max_length:
-                          lines = block.split("\n")
-                          for line in lines:
-                              if len(current_chunk) + len(line) + 1 > max_length:
-                                  chunks.append(current_chunk.strip())
-                                  current_chunk = line + "\n"
-                              else:
-                                  current_chunk += line + "\n"
-                      else:
-                          current_chunk = block
-                  else:
-                      current_chunk += block
-
-              if current_chunk.strip():
-                  chunks.append(current_chunk.strip())
-
-              return chunks
-
-          async def send_to_telegram(text: str):
-              if not BOT_TOKEN or not CHAT_ID:
-                  print("❌ BOT_TOKEN или CHAT_ID не найдены")
-                  return
-
-              url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-              chunks = split_message(text, max_length=3900)
-              
-              print(f"ℹ️ Общая длина сообщения: {len(text)} символов. Итоговых частей: {len(chunks)}")
-              
-              async with aiohttp.ClientSession() as session:
-                  for idx, chunk in enumerate(chunks, start=1):
-                      payload = {
-                          "chat_id": CHAT_ID, 
-                          "text": chunk, 
-                          "parse_mode": "HTML", 
-                          "disable_web_page_preview": True
-                      }
-                      try:
-                          async with session.post(url, json=payload, timeout=HTTP_TIMEOUT) as resp:
-                              if resp.status == 200:
-                                  print(f"🚀 Часть [{idx}/{len(chunks)}] ({len(chunk)} симв.) успешно отправлена!")
-                              else:
-                                  print(f"❌ Ошибка Telegram (код {resp.status}): {await resp.text()}")
-                      except Exception as e:
-                          print(f"💥 Ошибка отправки: {e}")
-          PYEOF
-          
-          cat << 'PYEOF' > main.py
-          import asyncio, aiohttp
-          from datetime import datetime, timezone, timedelta
-          from modules.config import SECTORS_CONFIG
-          from modules.market import fetch_all_yahoo_data, fetch_all_israeli_funds
-          from modules.news import fetch_sector_news, fetch_ipo_news
-          from modules.formatter import build_telegram_message, build_ipo_message
-          from modules.telegram_sender import send_to_telegram
-
-          def calculate_sector_score(avg_change: float) -> int:
-              return max(0, min(100, int(50 + (avg_change * 15.0))))
-
-          async def run_market_analytics():
-              all_tickers = set()
-              for cfg in SECTORS_CONFIG.values():
-                  all_tickers.update(cfg["tickers"])
-              
-              print(f"📦 Сбор данных Yahoo Finance...")
-              global_market_data = await fetch_all_yahoo_data(list(all_tickers))
-
-              print(f"🌐 Опрос израильских фондов...")
-              il_results = await fetch_all_israeli_funds(SECTORS_CONFIG)
-
-              async with aiohttp.ClientSession() as session:
-                  sectors_results = []
-                  
-                  for key, cfg in SECTORS_CONFIG.items():
-                      ticker_details = [(t, global_market_data[t]["change"]) for t in cfg["tickers"] if t in global_market_data and global_market_data[t]["price"] > 0]
-                      
-                      sorted_tickers = sorted(ticker_details, key=lambda x: abs(x[1]), reverse=True)
-                      top_3_tickers = sorted_tickers[:3]
-                      
-                      valid_changes = [c for _, c in ticker_details]
-                      avg_change = sum(valid_changes) / len(valid_changes) if valid_changes else 0.0
-                      
-                      score = calculate_sector_score(avg_change)
-                      news = await fetch_sector_news(session, cfg["news_ticker"])
-                      
-                      sectors_results.append({
-                          "short_eng": cfg["short_eng"],
-                          "name": cfg["name"],
-                          "icon": cfg["icon"],
-                          "fund_id": cfg.get("fund_id", ""),
-                          "avg_change": round(avg_change, 2),
-                          "top_3_tickers": top_3_tickers,
-                          "score": score,
-                          "news": news,
-                          "il_name_eng": cfg["il_name_eng"],
-                          "il_fund_data": il_results.get(key, {"price": 0.0, "change": 0.0})
-                      })
-                  
-                  sectors_results.sort(key=lambda x: x["avg_change"], reverse=True)
-                      
-                  message = build_telegram_message(sectors_results)
-                  await send_to_telegram(message)
-
-          async def run_ipo_digest():
-              async with aiohttp.ClientSession() as session:
-                  ipo_news = await fetch_ipo_news(session)
-                  message = build_ipo_message(ipo_news)
-                  await send_to_telegram(message)
-
-          async def main():
-              tz_il = timezone(timedelta(hours=3))
-              weekday = datetime.now(tz_il).weekday()
-              
-              if weekday == 5:
-                  await run_ipo_digest()
-              else:
-                  await run_market_analytics()
-
-          if __name__ == "__main__":
-              asyncio.run(main())
-          PYEOF
-
       - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libglib2.0-0 libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libdbus-1-3 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2
+          pip install -q aiohttp playwright
+          playwright install chromium
 
       - name: Run Analytics Engine
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: python main.py
+        run: |
+          mkdir -p modules
+          touch modules/__init__.py
+
+          cat << 'PYEOF' > modules/config.py
+          import os, ssl
+          BOT_TOKEN = os.getenv("BOT_TOKEN")
+          CHAT_ID = os.getenv("CHAT_ID")
+          if not BOT_TOKEN or not CHAT_ID:
+              raise ValueError("BOT_TOKEN and CHAT_ID required")
+          HTTP_TIMEOUT = 25
+          YAHOO_RETRIES = 3
+          YAHOO_DELAY = 1.5
+          BOT_NAME = "@oil_tracker_pavel_bot"
+          HEADERS = {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+              "Accept": "application/json, text/plain, */*",
+              "Accept-Language": "en-US,en;q=0.9",
+              "Referer": "https://finance.yahoo.com/"
+          }
+          SSL = ssl.create_default_context()
+          SSL.check_hostname = False
+          SSL.verify_mode = ssl.CERT_NONE
+          SECTORS_CONFIG = {
+              "Oil": {
+                  "name": "Нефть и Энергетика", "icon": "🛢️", "short_eng": "Oil", "news_ticker": "USO",
+                  "fund_id": "5141841", "il_name_eng": "WTI Ultra x3",
+                  "tickers": ["BZ=F", "CL=F", "USO", "OVX", "XLE", "VLO"]
+              },
+              "Cybersecurity": {
+                  "name": "Кибербезопасность", "icon": "🛡️", "short_eng": "Cyber", "news_ticker": "CIBR",
+                  "fund_id": "5140744", "il_name_eng": "IBI Cybersecurity",
+                  "tickers": ["CIBR", "HACK", "CRWD", "PANW", "FTNT", "ZS", "NET"]
+              },
+              "Gold": {
+                  "name": "Золото и Металлы", "icon": "🥇", "short_eng": "Gold", "news_ticker": "GLD",
+                  "fund_id": "5128624", "il_name_eng": "Tachlit Gold Spot",
+                  "tickers": ["GLD", "GDX", "SLV", "NEM", "GOLD"]
+              },
+              "Clean Energy": {
+                  "name": "Зеленая энергетика", "icon": "☀️", "short_eng": "Clean", "news_ticker": "FSLR",
+                  "fund_id": "5138136", "il_name_eng": "Meitav Clean Energy",
+                  "tickers": ["ICLN", "TAN", "FAN", "FSLR", "ENPH", "SEDG"]
+              },
+              "Aerospace": {
+                  "name": "Авиация и Космос", "icon": "✈️", "short_eng": "Aero", "news_ticker": "ITA",
+                  "fund_id": "5135116", "il_name_eng": "Tachlit US Aerospace",
+                  "tickers": ["BA", "EADSY", "LMT", "RTX", "ITA", "NOC"]
+              },
+              "Biotech": {
+                  "name": "Биотех и Медицина", "icon": "🏥", "short_eng": "Bio", "news_ticker": "LLY",
+                  "fund_id": "5122965", "il_name_eng": "Harel Nasdaq Biotech",
+                  "tickers": ["LLY", "NVO", "PFE", "MRNA", "AMGN", "XBI", "IBB"]
+              },
+              "Cloud": {
+                  "name": "Облачные технологии", "icon": "☁️", "short_eng": "Cloud", "news_ticker": "WCLD",
+                  "fund_id": "5131014", "il_name_eng": "Harel Cloud Comp.",
+                  "tickers": ["MSFT", "AMZN", "GOOGL", "ORCL", "SNOW", "WCLD", "CLOU"]
+              },
+              "Banking": {
+                  "name": "Банковский сектор", "icon": "🏦", "short_eng": "Bank", "news_ticker": "JPM",
+                  "fund_id": "5138144", "il_name_eng": "Meitav Banks US",
+                  "tickers": ["JPM", "BAC", "GS", "MS", "WFC", "XLF", "KBE"]
+              },
+              "Uranium": {
+                  "name": "Уран и Атомная энергетика", "icon": "☢️", "short_eng": "Uran", "news_ticker": "CCJ",
+                  "fund_id": "5138763", "il_name_eng": "More Uranium Giants",
+                  "tickers": ["URA", "URNM", "CCJ", "NXE", "DNN"]
+              },
+              "Gaming": {
+                  "name": "Игровая Индустрия", "icon": "🎮", "short_eng": "Game", "news_ticker": "SONY",
+                  "fund_id": "5130198", "il_name_eng": "MTF Bluestar E-Games",
+                  "tickers": ["NVDA", "MSFT", "TTWO", "EA", "RBLX", "SONY", "NTDOY", "HERO"]
+              },
+              "EV": {
+                  "name": "Электромобили", "icon": "🚗", "short_eng": "EV", "news_ticker": "TSLA",
+                  "fund_id": "5132228", "il_name_eng": "Migdal EV & Auto",
+                  "tickers": ["TSLA", "BYDDY", "RIVN", "LI", "DRIV", "LCID"]
+              },
+              "E-Commerce": {
+                  "name": "Электронная коммерция", "icon": "🛒", "short_eng": "Ecom", "news_ticker": "IBUY",
+                  "fund_id": "5138128", "il_name_eng": "Meitav E-Commerce",
+                  "tickers": ["AMZN", "SHOP", "MELI", "IBUY", "EBAY", "PDD"]
+              },
+              "Semiconductors": {
+                  "name": "Полупроводники", "icon": "💻", "short_eng": "Semi", "news_ticker": "SOXX",
+                  "fund_id": "5118716", "il_name_eng": "Kasam Semiconductors",
+                  "tickers": ["NVDA", "AMD", "AVGO", "QCOM", "TSM", "ASML", "INTC", "SOXX"]
+              },
+              "AI": {
+                  "name": "Искусственный Интеллект", "icon": "🤖", "short_eng": "AI", "news_ticker": "NVDA",
+                  "fund_id": "5134101", "il_name_eng": "Migdal AI",
+                  "tickers": ["NVDA", "MSFT", "AMD", "AVGO", "PLTR", "GOOGL", "AMZN", "BOTZ"]
+              }
+          }
+          PYEOF
+
+          cat << 'PYEOF' > modules/market.py
+          import aiohttp, asyncio, re
+          from modules.config import HTTP_TIMEOUT, HEADERS, SSL, YAHOO_RETRIES, YAHOO_DELAY
+          try:
+              from playwright.async_api import async_playwright
+              PW = True
+          except ImportError:
+              PW = False
+          def pf(v):
+              if v is None: return None
+              try:
+                  m = re.search(r'([+-]?\d+(?:\.\d+)?)', str(v).replace(',','.').replace('%','').replace('+','').strip())
+                  if m: return round(float(m.group(1)), 2)
+              except: pass
+              return None
+          async def _pw(fid):
+              if not PW: return None
+              try:
+                  async with async_playwright() as p:
+                      b = await p.chromium.launch(headless=True)
+                      c = await b.new_context(user_agent=HEADERS["User-Agent"], locale="he-IL", timezone_id="Asia/Jerusalem")
+                      pg = await c.new_page()
+                      await pg.goto(f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fid}", wait_until="networkidle", timeout=30000)
+                      await asyncio.sleep(2)
+                      h = await pg.content()
+                      await b.close()
+                      for pat in [r'מחיר\s*קנייה\s*</td>\s*<td[^>]*>\s*\d+\.?\d*\s*</td>\s*<td[^>]*>\s*([+-]?\d+\.?\d*)%', r'>([+-]?\d+\.?\d*)%<', r'"DailyChangePercent"[:\s]*"?([+-]?\d+\.?\d*)"?', r'"ChangePercent"[:\s]*"?([+-]?\d+\.?\d*)"?']:
+                          m = re.search(pat, h, re.I|re.S)
+                          if m:
+                              v = pf(m.group(1))
+                              if v is not None: return v
+              except Exception as e: print(f"PW err: {e}"[:80])
+              return None
+          async def _jina(s, fid):
+              url = f"https://r.jina.ai/http://www.bizportal.co.il/mutualfunds/quote/generalview/{fid}"
+              for a in range(3):
+                  try:
+                      async with s.get(url, headers={"User-Agent": HEADERS["User-Agent"], "Accept": "text/plain,*/*"}, timeout=40, ssl=SSL) as r:
+                          if r.status == 200:
+                              t = await r.text()
+                              m = re.search(r'מחיר\s*קנייה\s*\n?\s*\d+\.?\d*\s*\n?\s*([+-]?\d+\.?\d*)%', t, re.M)
+                              if m:
+                                  v = pf(m.group(1))
+                                  if v is not None: return v
+                              for i, line in enumerate(t.split('\n')[:40]):
+                                  m = re.search(r'([+-]?\d+\.?\d*)%', line)
+                                  if m:
+                                      v = pf(m.group(1))
+                                      if v and v != 0.0:
+                                          prev = ' '.join(t.split('\n')[max(0,i-3):i])
+                                          if not any(x in prev for x in ['שנה','חודש','חצי','תשואה','שנתי','3 שנים','5 שנים']):
+                                              return v
+                          elif r.status == 403: print(f"Jina 403")
+                          else: print(f"Jina {r.status}")
+                  except Exception as e: print(f"Jina err: {e}"[:60])
+                  if a < 2: await asyncio.sleep(2**a)
+              return None
+          async def _txt(s, fid):
+              for url in [f"https://r.jina.ai/http://www.bizportal.co.il/mutualfunds/quote/generalview/{fid}", f"https://r.jina.ai/http://www.funder.co.il/fund/{fid}"]:
+                  try:
+                      async with s.get(url, timeout=35, ssl=SSL) as r:
+                          if r.status == 200:
+                              m = re.search(r'([+-]?\d+\.?\d*)%', await r.text())
+                              if m:
+                                  v = pf(m.group(1))
+                                  if v is not None: return v
+                  except: pass
+              return None
+          async def fetch_il(s, fid, name=""):
+              print(f"🔍 [{fid}] {name or 'Fund'}")
+              for fn in [_pw, _jina, _txt]:
+                  r = await fn(s, fid) if fn != _pw else await fn(fid)
+                  if r is not None: return r
+              print("   ❌ No data")
+              return 0.0
+          async def fetch_all_il(cfg):
+              results = {}
+              conn = aiohttp.TCPConnector(ssl=SSL, limit=30)
+              async with aiohttp.ClientSession(connector=conn) as s:
+                  keys, tasks = [], []
+                  for k, c in cfg.items():
+                      keys.append(k)
+                      tasks.append(fetch_il(s, c.get("fund_id",""), c.get("il_name_eng","")))
+                  for k, v in zip(keys, await asyncio.gather(*tasks, return_exceptions=True)):
+                      results[k] = {"price": 0.0, "change": 0.0 if isinstance(v, Exception) else v}
+              return results
+          async def fetch_yt(s, t, retries=0):
+              api = f"^{t}" if t == "OVX" else t
+              url = f"https://query1.finance.yahoo.com/v8/finance/chart/{api}?range=1d&interval=1m"
+              try:
+                  async with s.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT, ssl=SSL) as r:
+                      if r.status == 200:
+                          d = (await r.json()).get("chart",{}).get("result",[])
+                          if d:
+                              m = d[0].get("meta",{})
+                              p, pc = m.get("regularMarketPrice"), m.get("chartPreviousClose") or m.get("previousClose")
+                              if p is not None and pc:
+                                  return t, {"price": round(p,2), "change": round(((p-pc)/pc)*100, 2)}
+                      elif r.status == 429 and retries < YAHOO_RETRIES:
+                          await asyncio.sleep(YAHOO_DELAY * (2**retries))
+                          return await fetch_yt(s, t, retries+1)
+              except asyncio.TimeoutError:
+                  if retries < YAHOO_RETRIES:
+                      await asyncio.sleep(YAHOO_DELAY)
+                      return await fetch_yt(s, t, retries+1)
+              except Exception as e: print(f"Yahoo err {t}: {e}"[:60])
+              return t, {"price": 0.0, "change": 0.0}
+          async def fetch_all_yahoo(tickers):
+              conn = aiohttp.TCPConnector(ssl=SSL, limit=50)
+              async with aiohttp.ClientSession(connector=conn) as s:
+                  return dict(await asyncio.gather(*[fetch_yt(s, t) for t in tickers]))
+          PYEOF
+
+          cat << 'PYEOF' > modules/news.py
+          import aiohttp, urllib.parse, html
+          from modules.config import HTTP_TIMEOUT, SSL
+          _cache = {}
+          async def tr(s, text):
+              if not text: return text
+              k = text.lower().strip()
+              if k in _cache: return _cache[k]
+              try:
+                  url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ru&dt=t&q={urllib.parse.quote(text)}"
+                  async with s.get(url, timeout=8, ssl=SSL) as r:
+                      if r.status == 200:
+                          d = await r.json()
+                          if d and d[0]:
+                              res = html.unescape("".join([seg[0] for seg in d[0] if seg and seg[0]]))
+                              _cache[k] = res
+                              return res
+              except Exception as e: print(f"Tr err: {e}")
+              return text
+          async def fetch_news(s, q):
+              try:
+                  async with s.get(f"https://query1.finance.yahoo.com/v1/finance/search?q={q}", headers={"User-Agent": "Mozilla/5.0"}, timeout=HTTP_TIMEOUT, ssl=SSL) as r:
+                      if r.status == 200:
+                          for item in (await r.json()).get("news",[]):
+                              t = item.get("title","")
+                              if len(t) > 15:
+                                  return [f"• {await tr(s, t)}"]
+              except Exception as e: print(f"News err: {e}")
+              return ["• Торгуется в рамках текущей рыночной динамики."]
+          async def fetch_ipo(s):
+              try:
+                  async with s.get("https://query1.finance.yahoo.com/v1/finance/search?q=IPO", headers={"User-Agent": "Mozilla/5.0"}, timeout=HTTP_TIMEOUT, ssl=SSL) as r:
+                      if r.status == 200:
+                          news = []
+                          for item in (await r.json()).get("news",[])[:5]:
+                              t = item.get("title","")
+                              if t: news.append(f"📌 {await tr(s, t)}")
+                          return news or ["📌 Публикаций по IPO на этой неделе не зафиксировано."]
+              except Exception as e: print(f"IPO err: {e}")
+              return ["📌 Публикаций по IPO на этой неделе не зафиксировано."]
+          PYEOF
+
+          cat << 'PYEOF' > modules/formatter.py
+          from datetime import datetime, timezone, timedelta
+          from modules.config import BOT_NAME
+          def eh(t):
+              return t.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;") if t else ""
+          def build_msg(data):
+              tz = timezone(timedelta(hours=3))
+              now = datetime.now(tz).strftime("%d.%m.%Y | %H:%M")
+              lines = [f"📈 <b>Рыночный Дайджест</b>", f"📅 {now} (IDT) 🇮🇱", "", "<b>📊 ОБЗОР СЕКТОРОВ (US) И ФОНДОВ (IL)</b>", "<code>Сектор       US      IL   Рейтинг</code>", "<code>----------------------------------</code>"]
+              for s in data:
+                  us = f"+{s['avg_change']:.1f}%" if s['avg_change'] > 0 else f"{s['avg_change']:.1f}%"
+                  il = f"+{s['il_fund_data']['change']:.1f}%" if s['il_fund_data']['change'] > 0 else f"{s['il_fund_data']['change']:.1f}%"
+                  em = "🟢" if s['score'] >= 65 else ("🟡" if s['score'] >= 40 else "🔴")
+                  lines.append(f"{s['icon']}{s['short_eng']:<6} {us:>6} {il:>6}  {em}{s['score']:>3}/100")
+              lines.append("</code>")
+              lines.append("")
+              lines.append("<blockquote expandable>")
+              lines.append("🔍 <b>ДРАЙВЕРЫ ДВИЖЕНИЯ И ПОКАЗАТЕЛИ СЕКТОРОВ</b>")
+              for s in data:
+                  ch = f"+{s['avg_change']:.2f}%" if s['avg_change'] > 0 else f"{s['avg_change']:.2f}%"
+                  lines.append(f"<b>{s['icon']} {eh(s['name'])}</b> ({ch})")
+                  if s.get("top_3_tickers"):
+                      lines.append(f"  📊 <i>Топ-3: [{eh(', '.join([f'{t}: {c:+.2f}%' for t,c in s['top_3_tickers']]))}]</i>")
+                  for n in s['news']: lines.append(f"  {eh(n)}")
+                  lines.append("")
+              lines.append("</blockquote>")
+              lines.append("")
+              ta = sorted(data, key=lambda x: x['il_fund_data']['change'])
+              lines.append("<blockquote expandable>")
+              lines.append("🇮🇱 <b>TA Stocks (По возрастанию)</b>")
+              for s in ta:
+                  ch = s['il_fund_data']['change']
+                  em = "🟢" if ch > 0 else ("🔴" if ch < 0 else "⚪")
+                  cs = f"+{ch:.2f}%" if ch > 0 else f"{ch:.2f}%"
+                  lines.append(f"{em} <b>{eh(s['il_name_eng'])}</b> ({s['icon']})")
+                  lines.append(f"└ <code>{s['fund_id']}</code> · <b>{cs}</b>")
+              lines.append("</blockquote>")
+              lines.append("")
+              lines.append(BOT_NAME)
+              return "\n".join(lines)
+          def build_ipo(news):
+              now = datetime.now(timezone(timedelta(hours=3))).strftime("%d.%m.%Y")
+              lines = [f"🔔 <b>ЕЖЕНЕДЕЛЬНЫЙ IPO ДАЙДЖЕСТ</b>", f"📅 {now} | Субботний обзор 🇮🇱", "", "<blockquote expandable>"]
+              for n in news: lines.append(f"{eh(n)}")
+              lines.append("</blockquote>")
+              lines.append("")
+              lines.append(BOT_NAME)
+              return "\n".join(lines)
+          PYEOF
+
+          cat << 'PYEOF' > modules/telegram_sender.py
+          import aiohttp, asyncio
+          from modules.config import BOT_TOKEN, CHAT_ID, HTTP_TIMEOUT
+          def split_msg(text, max_len=4000):
+              if len(text) <= max_len: return [text]
+              chunks, cur = [], ""
+              for p in text.split("\n\n"):
+                  p = p.strip()
+                  if not p: continue
+                  if len(cur) + len(p) + 2 > max_len:
+                      if cur.strip(): chunks.append(cur.strip())
+                      cur = p
+                  else:
+                      cur += "\n\n" + p if cur else p
+              if cur.strip(): chunks.append(cur.strip())
+              return chunks
+          async def send(text):
+              if not BOT_TOKEN or not CHAT_ID: return
+              url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+              chunks = split_msg(text, 3900)
+              print(f"📤 {len(text)} chars, {len(chunks)} parts")
+              async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as s:
+                  for i, chunk in enumerate(chunks, 1):
+                      pl = {"chat_id": CHAT_ID, "text": chunk, "parse_mode": "HTML", "disable_web_page_preview": True}
+                      try:
+                          async with s.post(url, json=pl, timeout=HTTP_TIMEOUT) as r:
+                              if r.status == 200: print(f"✅ Part {i}/{len(chunks)}")
+                              else:
+                                  print(f"❌ TG {r.status}")
+                                  if "can't parse" in (await r.text()).lower():
+                                      pl.pop("parse_mode")
+                                      async with s.post(url, json=pl, timeout=HTTP_TIMEOUT) as r2:
+                                          if r2.status == 200: print(f"✅ Part {i} plain")
+                      except Exception as e: print(f"❌ Send err: {e}")
+                      if i < len(chunks): await asyncio.sleep(0.5)
+          PYEOF
+
+          cat << 'PYEOF' > main.py
+          import asyncio, aiohttp, sys
+          from datetime import datetime, timezone, timedelta
+          from modules.config import SECTORS_CONFIG, BOT_TOKEN, CHAT_ID
+          from modules.market import fetch_all_yahoo, fetch_all_il
+          from modules.news import fetch_news, fetch_ipo
+          from modules.formatter import build_msg, build_ipo as fmt_ipo
+          from modules.telegram_sender import send
+          def score(ch): return max(0, min(100, int(50 + ch * 15)))
+          async def market():
+              print("="*40 + "\n📦 Market Analytics\n" + "="*40)
+              t0 = datetime.now()
+              tickers = set()
+              for c in SECTORS_CONFIG.values(): tickers.update(c["tickers"])
+              yd = await fetch_all_yahoo(list(tickers))
+              ok_y = sum(1 for v in yd.values() if v["price"] > 0)
+              print(f"Yahoo: {ok_y}/{len(tickers)}")
+              il = await fetch_all_il(SECTORS_CONFIG)
+              ok_i = sum(1 for v in il.values() if v["change"] != 0.0)
+              print(f"IL: {ok_i}/{len(SECTORS_CONFIG)}")
+              async with aiohttp.ClientSession() as s:
+                  res = []
+                  for k, c in SECTORS_CONFIG.items():
+                      td = [(t, yd[t]["change"]) for t in c["tickers"] if t in yd and yd[t]["price"] > 0]
+                      vc = [ch for _, ch in td]
+                      avg = sum(vc)/len(vc) if vc else 0.0
+                      res.append({
+                          "short_eng": c["short_eng"], "name": c["name"], "icon": c["icon"],
+                          "fund_id": c.get("fund_id",""), "avg_change": round(avg,2),
+                          "top_3_tickers": sorted(td, key=lambda x: abs(x[1]), reverse=True)[:3],
+                          "score": score(avg), "news": await fetch_news(s, c["news_ticker"]),
+                          "il_name_eng": c["il_name_eng"], "il_fund_data": il.get(k, {"price":0.0,"change":0.0})
+                      })
+                  res.sort(key=lambda x: x["avg_change"], reverse=True)
+                  await send(build_msg(res))
+              print(f"⏱️ Done in {(datetime.now()-t0).total_seconds():.1f}s")
+          async def ipo():
+              print("="*40 + "\n🔔 IPO Digest\n" + "="*40)
+              async with aiohttp.ClientSession() as s:
+                  await send(fmt_ipo(await fetch_ipo(s)))
+          async def main():
+              if not BOT_TOKEN or not CHAT_ID:
+                  print("❌ BOT_TOKEN and CHAT_ID required"); sys.exit(1)
+              wd = datetime.now(timezone(timedelta(hours=3))).weekday()
+              await (ipo if wd == 5 else market)()
+          if __name__ == "__main__":
+              asyncio.run(main())
+          PYEOF
+
+          python main.py
