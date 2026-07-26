@@ -29,6 +29,7 @@ jobs:
           aiohttp==3.11.11
           beautifulsoup4==4.12.3
           yfinance==0.2.40
+          playwright==1.49.1
           EOF
           
           cat << 'EOF' > modules/config.py
@@ -40,10 +41,10 @@ jobs:
           
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-              "Accept": "application/json, text/plain, */*",
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
               "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
-              "Referer": "https://www.bizportal.co.il/",
-              "Origin": "https://www.bizportal.co.il"
+              "Cache-Control": "no-cache",
+              "Pragma": "no-cache"
           }
 
           SECTORS_CONFIG = {
@@ -121,11 +122,25 @@ jobs:
           EOF
           
           cat << 'EOF' > modules/market.py
-          import aiohttp
           import asyncio
           import re
-          from bs4 import BeautifulSoup
+          from playwright.async_api import async_playwright
+          import aiohttp
           from modules.config import HTTP_TIMEOUT, HEADERS
+
+          def parse_float(val: str) -> float | None:
+              if not val:
+                  return None
+              try:
+                  cleaned = str(val).replace(',', '.').replace('%', '').replace('+', '').strip()
+                  match = re.search(r'([+-]?\d+(?:\.\d+)?)', cleaned)
+                  if match:
+                      res = float(match.group(1))
+                      if -40.0 <= res <= 40.0:
+                          return round(res, 2)
+              except Exception:
+                  pass
+              return None
 
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
               api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
@@ -152,113 +167,85 @@ jobs:
                   results = await asyncio.gather(*tasks)
                   return dict(results)
 
-          def parse_float(val) -> float | None:
-              if val is None:
-                  return None
+          async def scrape_funder_fund_change(page, fund_id: str) -> float:
+              url = f"https://www.funder.co.il/fund/{fund_id}"
               try:
-                  cleaned = str(val).replace(',', '.').replace('%', '').replace('+', '').strip()
-                  match = re.search(r'([+-]?\d+(?:\.\d+)?)', cleaned)
-                  if match:
-                      res = float(match.group(1))
-                      if -25.0 <= res <= 25.0:
-                          return round(res, 2)
-              except Exception:
-                  pass
-              return None
+                  await page.goto(url, wait_until="domcontentloaded", timeout=15000)
 
-          def extract_change_from_html(html_content: str) -> float | None:
-              """Извлечение дневного изменения с помощью BeautifulSoup и фоллбек-регулярок."""
-              try:
-                  soup = BeautifulSoup(html_content, 'html.parser')
+                  # Закрытие контекстной рекламы/баннера
+                  close_selectors = [
+                      "button.close",
+                      ".modal-close",
+                      ".close-button",
+                      "[aria-label='Close']",
+                      "div[class*='close']",
+                      ".popup-close",
+                      "span.close"
+                  ]
                   
-                  # 1. Поиск по специфичным тегам/классам Funder (изменение дня)
-                  target_tags = soup.find_all(['span', 'div', 'td'], class_=re.compile(r'(change|dayChange|pChange|num)', re.I))
-                  for tag in target_tags:
-                      text = tag.get_text(strip=True)
-                      if '%' in text or '+' in text or '-' in text:
-                          val = parse_float(text)
-                          if val is not None and val != 0.0:
-                              return val
-              except Exception:
-                  pass
+                  for selector in close_selectors:
+                      try:
+                          close_btn = page.locator(selector).first
+                          if await close_btn.is_visible(timeout=1000):
+                              await close_btn.click(force=True)
+                              await page.wait_for_timeout(300)
+                              break
+                      except Exception:
+                          continue
 
-              # 2. Набор регулярных выражений на случай изменения верстки
-              regex_patterns = [
-                  r'שינוי יומי[:\s]*([+-]?\d+(?:[\.,]\d+)?%?)',
-                  r'class="[^"]*change[^"]*"[^>]*>([+-]?\d+(?:[\.,]\d+)?%?)<',
-                  r'id="[^"]*change[^"]*"[^>]*>([+-]?\d+(?:[\.,]\d+)?%?)<',
-                  r'([+-]\d+(?:[\.,]\d+)?\s*%)'
-              ]
-              
-              for pattern in regex_patterns:
-                  matches = re.findall(pattern, html_content, re.IGNORECASE)
-                  for m in matches:
-                      val = parse_float(m)
-                      if val is not None and val != 0.0:
+                  await page.keyboard.press("Escape")
+
+                  # Сбор показателя изменения
+                  change_element = page.locator("#MainContent_lblChange, #lblChange, .fund-change, span[id*='Change']").first
+                  if await change_element.is_visible(timeout=2000):
+                      text = await change_element.inner_text()
+                      val = parse_float(text)
+                      if val is not None:
                           return val
 
-              return None
+                  page_content = await page.content()
+                  match = re.search(r'(?:יומית|יומי|שינוי)[^\d%+\-]*([+-]?\d+(?:\.\d+)?%)', page_content)
+                  if match:
+                      val = parse_float(match.group(1))
+                      if val is not None:
+                          return val
 
-          async def fetch_israeli_fund_data(session: aiohttp.ClientSession, fund_id: str) -> float:
-              funder_url = f"https://www.funder.co.il/fund/{fund_id}"
-              funder_headers = HEADERS.copy()
-              funder_headers["Referer"] = "https://www.funder.co.il/"
-
-              # 1. Основной источник: Прямой парсинг HTML страницы Funder
-              try:
-                  async with session.get(funder_url, headers=funder_headers, timeout=HTTP_TIMEOUT) as resp:
-                      if resp.status == 200:
-                          html_text = await resp.text()
-                          val = extract_change_from_html(html_text)
-                          if val is not None:
-                              return val
-              except Exception:
-                  pass
-
-              # 2. Резервный источник: Bizportal API / HTML
-              biz_url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
-              try:
-                  async with session.get(biz_url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
-                      if resp.status == 200:
-                          data = await resp.json()
-                          if isinstance(data, dict):
-                              raw = data.get("DailyChangePercent") or data.get("ChangePercent") or data.get("PrcChg")
-                              val = parse_float(raw)
-                              if val is not None:
-                                  return val
-              except Exception:
-                  pass
-
-              # 3. Дополнительный резервный JSON API от Funder
-              funder_api_url = f"https://www.funder.co.il/api/fund/{fund_id}"
-              try:
-                  async with session.get(funder_api_url, headers=funder_headers, timeout=HTTP_TIMEOUT) as resp:
-                      if resp.status == 200:
-                          data = await resp.json()
-                          if isinstance(data, dict):
-                              raw = data.get("dayChange") or data.get("change") or data.get("lastChange")
-                              val = parse_float(raw)
-                              if val is not None:
-                                  return val
-              except Exception:
-                  pass
+              except Exception as e:
+                  print(f"⚠️ Ошибка Funder ID {fund_id}: {e}")
 
               return 0.0
 
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
               results = {}
-              async with aiohttp.ClientSession() as session:
-                  tasks = []
-                  keys = []
+              async with async_playwright() as p:
+                  browser = await p.chromium.launch(
+                      headless=True,
+                      args=[
+                          "--no-sandbox",
+                          "--disable-setuid-sandbox",
+                          "--disable-blink-features=AutomationControlled"
+                      ]
+                  )
+                  
+                  context = await browser.new_context(
+                      user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                      viewport={"width": 1280, "height": 800},
+                      locale="he-IL"
+                  )
+                  
+                  page = await context.new_page()
+
                   for key, cfg in sectors_config.items():
                       fund_id = cfg.get("fund_id", "")
-                      keys.append(key)
-                      tasks.append(fetch_israeli_fund_data(session, fund_id))
+                      if fund_id:
+                          print(f"🔍 Парсинг Funder для {key} (ID: {fund_id})...")
+                          change_val = await scrape_funder_fund_change(page, fund_id)
+                          results[key] = {"price": 0.0, "change": change_val}
+                      else:
+                          results[key] = {"price": 0.0, "change": 0.0}
+
+                  await browser.close()
                   
-                  fetched_changes = await asyncio.gather(*tasks)
-                  for key, val in zip(keys, fetched_changes):
-                      results[key] = {"price": 0.0, "change": val}
-                      
               return results
           EOF
           
@@ -394,7 +381,6 @@ jobs:
                   lines.append("")
               lines.append("</blockquote>\n")
 
-              # Сортировка фондов Израиля ПО УБЫВАНИЮ (от большего к меньшему)
               ta_stocks_sorted = sorted(sectors_data, key=lambda x: x['il_fund_data']['change'], reverse=True)
 
               lines.append("<blockquote expandable>")
@@ -514,7 +500,7 @@ jobs:
               print(f"📦 Сбор данных Yahoo Finance...")
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
 
-              print(f"🌐 Опрос израильских фондов...")
+              print(f"🌐 Опрос фондов Funder via Playwright...")
               il_results = await fetch_all_israeli_funds(SECTORS_CONFIG)
 
               async with aiohttp.ClientSession() as session:
@@ -560,21 +546,20 @@ jobs:
               tz_il = timezone(timedelta(hours=3))
               now = datetime.now(tz_il)
               
-              # В субботу в 22:00 IDT (19:00 UTC) запускается еженедельный IPO-дайджест
               if now.weekday() == 5 and now.hour == 22:
                   await run_ipo_digest()
               else:
-                  # Во все остальные дни и часы (включая ежедневные 23:15 IDT) отправляется аналитика
                   await run_market_analytics()
 
           if __name__ == "__main__":
               asyncio.run(main())
           EOF
 
-      - name: Install Dependencies
+      - name: Install Dependencies & Playwright Browsers
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          playwright install --with-deps chromium
 
       - name: Run Analytics Engine
         env:
