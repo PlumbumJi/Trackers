@@ -2,7 +2,7 @@ name: Automated Market Analytics & IPO Digest
 
 on:
   schedule:
-    # Ежедневный дайджест рынка в 23:15 по Израилю (20:15 UTC) — 15 мин после закрытия США
+    # Ежедневный дайджест рынка в 23:15 по Израилю (20:15 UTC)
     - cron: '15 20 * * *'
     # Еженедельный IPO дайджест в Субботу в 22:00 по Израилю (19:00 UTC)
     - cron: '0 19 * * 6'
@@ -124,23 +124,22 @@ jobs:
           cat << 'EOF' > modules/market.py
           import asyncio
           import re
+          from bs4 import BeautifulSoup
           from playwright.async_api import async_playwright
           import aiohttp
           from modules.config import HTTP_TIMEOUT, HEADERS
 
-          def parse_float(val: str) -> float | None:
+          def parse_float(val: str) -> float:
               if not val:
-                  return None
+                  return 0.0
               try:
                   cleaned = str(val).replace(',', '.').replace('%', '').replace('+', '').strip()
                   match = re.search(r'([+-]?\d+(?:\.\d+)?)', cleaned)
                   if match:
-                      res = float(match.group(1))
-                      if -40.0 <= res <= 40.0:
-                          return round(res, 2)
+                      return round(float(match.group(1)), 2)
               except Exception:
                   pass
-              return None
+              return 0.0
 
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
               api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
@@ -167,64 +166,51 @@ jobs:
                   results = await asyncio.gather(*tasks)
                   return dict(results)
 
-          async def scrape_funder_fund_change(page, fund_id: str) -> float:
+          async def scrape_funder_fund_returns(page, fund_id: str) -> dict:
+              """Парсит таблицу תשואות с Funder: День (יומית), Месяц (מתחילת החודש), Год (מתחילת השנה)"""
               url = f"https://www.funder.co.il/fund/{fund_id}"
+              data = {"daily": 0.0, "mtd": 0.0, "ytd": 0.0}
               try:
                   await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-
-                  # Закрытие контекстной рекламы/баннера
-                  close_selectors = [
-                      "button.close",
-                      ".modal-close",
-                      ".close-button",
-                      "[aria-label='Close']",
-                      "div[class*='close']",
-                      ".popup-close",
-                      "span.close"
-                  ]
                   
-                  for selector in close_selectors:
-                      try:
-                          close_btn = page.locator(selector).first
-                          if await close_btn.is_visible(timeout=1000):
-                              await close_btn.click(force=True)
-                              await page.wait_for_timeout(300)
-                              break
-                      except Exception:
-                          continue
+                  # Ожидание элемента таблицы
+                  await page.wait_for_selector("table, div", timeout=5000)
+                  html_text = await page.content()
+                  soup = BeautifulSoup(html_text, 'html.parser')
 
-                  await page.keyboard.press("Escape")
+                  # Точечный поиск по заголовкам таблицы תשואות
+                  headers = soup.find_all(text=re.compile(r'תשואות|יומית|מתחילת החודש|מתחילת השנה'))
+                  
+                  for h in headers:
+                      parent = h.find_parent(['td', 'th', 'tr', 'table', 'div'])
+                      if parent:
+                          block_text = parent.get_text(separator=' ')
+                          # Извлекаем все числа с процентами
+                          percentages = re.findall(r'([+-]?\d+(?:\.\d+)?\s*%)', block_text)
+                          if len(percentages) >= 3:
+                              data["daily"] = parse_float(percentages[0])
+                              data["mtd"] = parse_float(percentages[1])
+                              data["ytd"] = parse_float(percentages[2])
+                              return data
 
-                  # Сбор показателя изменения
-                  change_element = page.locator("#MainContent_lblChange, #lblChange, .fund-change, span[id*='Change']").first
-                  if await change_element.is_visible(timeout=2000):
-                      text = await change_element.inner_text()
-                      val = parse_float(text)
-                      if val is not None:
-                          return val
-
-                  page_content = await page.content()
-                  match = re.search(r'(?:יומית|יומי|שינוי)[^\d%+\-]*([+-]?\d+(?:\.\d+)?%)', page_content)
-                  if match:
-                      val = parse_float(match.group(1))
-                      if val is not None:
-                          return val
+                  # Резервный поиск всех процентов в блоке HTML
+                  all_pcts = re.findall(r'([+-]?\d+\.\d+\s*%)', html_text)
+                  if len(all_pcts) >= 3:
+                      data["daily"] = parse_float(all_pcts[0])
+                      data["mtd"] = parse_float(all_pcts[1])
+                      data["ytd"] = parse_float(all_pcts[2])
 
               except Exception as e:
-                  print(f"⚠️ Ошибка Funder ID {fund_id}: {e}")
+                  print(f"⚠️ Ошибка сбора Funder ID {fund_id}: {e}")
 
-              return 0.0
+              return data
 
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
               results = {}
               async with async_playwright() as p:
                   browser = await p.chromium.launch(
                       headless=True,
-                      args=[
-                          "--no-sandbox",
-                          "--disable-setuid-sandbox",
-                          "--disable-blink-features=AutomationControlled"
-                      ]
+                      args=["--no-sandbox", "--disable-setuid-sandbox"]
                   )
                   
                   context = await browser.new_context(
@@ -238,11 +224,11 @@ jobs:
                   for key, cfg in sectors_config.items():
                       fund_id = cfg.get("fund_id", "")
                       if fund_id:
-                          print(f"🔍 Парсинг Funder для {key} (ID: {fund_id})...")
-                          change_val = await scrape_funder_fund_change(page, fund_id)
-                          results[key] = {"price": 0.0, "change": change_val}
+                          print(f"🔍 Парсинг תשואות для {key} (ID: {fund_id})...")
+                          fund_returns = await scrape_funder_fund_returns(page, fund_id)
+                          results[key] = fund_returns
                       else:
-                          results[key] = {"price": 0.0, "change": 0.0}
+                          results[key] = {"daily": 0.0, "mtd": 0.0, "ytd": 0.0}
 
                   await browser.close()
                   
@@ -357,7 +343,7 @@ jobs:
                   icon = s['icon']
                   name = s['short_eng'][:6]
                   us_ch = s['avg_change']
-                  il_ch = s['il_fund_data']['change']
+                  il_ch = s['il_fund_data']['daily']
                   
                   us_str = f"+{us_ch:.1f}%" if us_ch > 0 else f"{us_ch:.1f}%"
                   il_str = f"+{il_ch:.1f}%" if il_ch > 0 else f"{il_ch:.1f}%"
@@ -381,15 +367,26 @@ jobs:
                   lines.append("")
               lines.append("</blockquote>\n")
 
-              ta_stocks_sorted = sorted(sectors_data, key=lambda x: x['il_fund_data']['change'], reverse=True)
+              ta_stocks_sorted = sorted(sectors_data, key=lambda x: x['il_fund_data']['daily'], reverse=True)
 
               lines.append("<blockquote expandable>")
-              lines.append("🇮🇱 <b>TA Stocks (По убыванию)</b>\n")
+              lines.append("🇮🇱 <b>ДОХОДНОСТЬ ИЗРАИЛЬСКИХ ФОНДОВ (תשואות)</b>\n")
               for s in ta_stocks_sorted:
-                  il_ch = s['il_fund_data']['change']
-                  ch_emoji = "🟢" if il_ch > 0 else ("🔴" if il_ch < 0 else "⚪")
-                  ch_sign = f"+{il_ch:.2f}%" if il_ch > 0 else f"{il_ch:.2f}%"
-                  lines.append(f"{ch_emoji} <b>{escape_html(s['il_name_eng'])}</b> ({s['icon']})\n└ <code>{s['fund_id']}</code> · <b>{ch_sign}</b>")
+                  f_data = s['il_fund_data']
+                  d_ch = f_data['daily']
+                  mtd_ch = f_data['mtd']
+                  ytd_ch = f_data['ytd']
+                  
+                  ch_emoji = "🟢" if d_ch > 0 else ("🔴" if d_ch < 0 else "⚪")
+                  
+                  d_str = f"+{d_ch:.2f}%" if d_ch > 0 else f"{d_ch:.2f}%"
+                  mtd_str = f"+{mtd_ch:.2f}%" if mtd_ch > 0 else f"{mtd_ch:.2f}%"
+                  ytd_str = f"+{ytd_ch:.2f}%" if ytd_ch > 0 else f"{ytd_ch:.2f}%"
+                  
+                  lines.append(
+                      f"{ch_emoji} <b>{escape_html(s['il_name_eng'])}</b> ({s['icon']})\n"
+                      f"└ <code>{s['fund_id']}</code> · <b>День: {d_str}</b> | <b>Месяц: {mtd_str}</b> | <b>Год: {ytd_str}</b>"
+                  )
               lines.append("</blockquote>")
 
               lines.append(f"\n{BOT_NAME}")
@@ -500,7 +497,7 @@ jobs:
               print(f"📦 Сбор данных Yahoo Finance...")
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
 
-              print(f"🌐 Опрос фондов Funder via Playwright...")
+              print(f"🌐 Опрос таблицы תשואות Funder via Playwright...")
               il_results = await fetch_all_israeli_funds(SECTORS_CONFIG)
 
               async with aiohttp.ClientSession() as session:
@@ -528,7 +525,7 @@ jobs:
                           "score": score,
                           "news": news,
                           "il_name_eng": cfg["il_name_eng"],
-                          "il_fund_data": il_results.get(key, {"price": 0.0, "change": 0.0})
+                          "il_fund_data": il_results.get(key, {"daily": 0.0, "mtd": 0.0, "ytd": 0.0})
                       })
                   
                   sectors_results.sort(key=lambda x: x["avg_change"], reverse=True)
