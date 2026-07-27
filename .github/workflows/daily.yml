@@ -20,6 +20,13 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install Google Chrome (Headless)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget curl unzip libxi6 libgconf-2-4 libnss3 xvfb
+          wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt install -y ./google-chrome-stable_current_amd64.deb
+
       - name: Deploy Architecture Files
         run: |
           mkdir -p modules
@@ -29,7 +36,8 @@ jobs:
           aiohttp==3.11.11
           beautifulsoup4==4.12.3
           yfinance==0.2.40
-          playwright==1.49.1
+          selenium==4.26.1
+          webdriver-manager==4.0.2
           EOF
           
           cat << 'EOF' > modules/config.py
@@ -40,7 +48,7 @@ jobs:
           BOT_NAME = "@oil_tracker_pavel_bot"
           
           HEADERS = {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
               "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
               "Cache-Control": "no-cache",
@@ -122,24 +130,228 @@ jobs:
           EOF
           
           cat << 'EOF' > modules/market.py
+          import time
+          import logging
           import asyncio
           import re
-          from bs4 import BeautifulSoup
-          from playwright.async_api import async_playwright
           import aiohttp
+          from dataclasses import dataclass
+          from typing import Optional, List
+
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+          from selenium.webdriver.support import expected_conditions as EC
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.chrome.service import Service
+          from selenium.common.exceptions import (
+              TimeoutException,
+              NoSuchElementException,
+              ElementNotInteractableException,
+          )
+          from webdriver_manager.chrome import ChromeDriverManager
           from modules.config import HTTP_TIMEOUT, HEADERS
 
-          def parse_float(val: str) -> float:
-              if not val:
-                  return 0.0
-              try:
-                  cleaned = str(val).replace(',', '.').replace('%', '').replace('+', '').strip()
-                  match = re.search(r'([+-]?\d+(?:\.\d+)?)', cleaned)
-                  if match:
-                      return round(float(match.group(1)), 2)
-              except Exception:
-                  pass
-              return 0.0
+          logger = logging.getLogger(__name__)
+
+          @dataclass
+          class FundReturns:
+              nav_year: str = "N/A"
+              nav_new: str = "N/A"
+              daily: str = "N/A"
+              days_90: str = "N/A"
+              days_30: str = "N/A"
+              days_14: str = "N/A"
+              days_7: str = "N/A"
+              fund_name: str = "N/A"
+
+              def to_dict(self) -> dict:
+                  return {
+                      "nav_year": self.nav_year,
+                      "nav_new": self.nav_new,
+                      "daily": self.daily,
+                      "days_90": self.days_90,
+                      "days_30": self.days_30,
+                      "days_14": self.days_14,
+                      "days_7": self.days_7,
+                      "fund_name": self.fund_name,
+                  }
+
+          class FunderParser:
+              def __init__(self, headless: bool = True, timeout: int = 30):
+                  self.headless = headless
+                  self.timeout = timeout
+                  self.driver: Optional[webdriver.Chrome] = None
+
+              def _create_driver(self) -> webdriver.Chrome:
+                  chrome_options = Options()
+                  chrome_options.add_argument("--no-sandbox")
+                  chrome_options.add_argument("--disable-dev-shm-usage")
+                  chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+                  chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                  chrome_options.add_experimental_option("useAutomationExtension", False)
+
+                  chrome_options.add_argument("--window-size=1920,1080")
+                  chrome_options.add_argument("--lang=he-IL,en-US")
+                  chrome_options.add_argument(
+                      "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+                  )
+
+                  if self.headless:
+                      chrome_options.add_argument("--headless=new")
+                      chrome_options.add_argument("--disable-gpu")
+
+                  service = Service(ChromeDriverManager().install())
+                  driver = webdriver.Chrome(service=service, options=chrome_options)
+
+                  driver.execute_cdp_cmd(
+                      "Page.addScriptToEvaluateOnNewDocument",
+                      {
+                          "source": """
+                              Object.defineProperty(navigator, 'webdriver', {
+                                  get: () => undefined
+                              });
+                              window.chrome = { runtime: {} };
+                          """
+                      },
+                  )
+                  return driver
+
+              def _close_banner(self) -> None:
+                  banner_selectors: List[tuple] = [
+                      (By.XPATH, "//button[contains(@style, 'left') and contains(@style, 'top')]"),
+                      (By.XPATH, "//div[contains(@class, 'close') or contains(@class, 'dismiss') or contains(@class, 'exit')]"),
+                      (By.XPATH, "//button[contains(@class, 'close') or contains(@class, 'dismiss')]"),
+                      (By.XPATH, "//*[@aria-label='close' or @aria-label='סגור' or @aria-label='Close']"),
+                      (By.XPATH, "//svg[contains(@d, 'M') and contains(@viewBox, '0 0')]/ancestor::button[1]"),
+                      (By.XPATH, "//*[name()='path' and contains(@d,'M')]/ancestor::button[1]"),
+                      (By.CSS_SELECTOR, "[data-testid='close-button']"),
+                      (By.CSS_SELECTOR, ".modal-close, .popup-close, .banner-close"),
+                  ]
+
+                  for by, selector in banner_selectors:
+                      try:
+                          btn = self.driver.find_element(by, selector)
+                          if btn.is_displayed() and btn.is_enabled():
+                              btn.click()
+                              logger.info("Баннер закрыт селектором: %s", selector)
+                              time.sleep(0.8)
+                              return
+                      except (NoSuchElementException, ElementNotInteractableException):
+                          continue
+
+                  logger.debug("Баннер не обнаружен")
+
+              def _get_all_percentages(self) -> List[str]:
+                  try:
+                      elements = self.driver.find_elements(By.XPATH, "//*[contains(text(), '%')]")
+                      values = []
+                      for el in elements:
+                          text = el.text.strip()
+                          if text and ('%' in text) and any(c.isdigit() for c in text):
+                              values.append(text)
+                      seen = set()
+                      unique = []
+                      for v in values:
+                          if v not in seen:
+                              seen.add(v)
+                              unique.append(v)
+                      return unique
+                  except Exception as e:
+                      logger.error("Ошибка извлечения процентов: %s", e)
+                      return []
+
+              def _get_by_label(self, label_text: str) -> str:
+                  xpaths = [
+                      f"//td[contains(text(), '{label_text}')]/following-sibling::td[1]",
+                      f"//th[contains(text(), '{label_text}')]/following-sibling::th[1]",
+                      f"//div[contains(text(), '{label_text}')]/following-sibling::div[1]",
+                      f"//span[contains(text(), '{label_text}')]/following-sibling::span[1]",
+                      f"//p[contains(text(), '{label_text}')]/following-sibling::p[1]",
+                      f"//*[contains(text(), '{label_text}')]/parent::*//span[contains(@class, 'value')]",
+                      f"//*[contains(text(), '{label_text}')]/parent::*//div[contains(@class, 'value')]",
+                      f"//*[@data-label='{label_text}']",
+                  ]
+                  for xpath in xpaths:
+                      try:
+                          el = self.driver.find_element(By.XPATH, xpath)
+                          val = el.text.strip()
+                          if val:
+                              return val
+                      except NoSuchElementException:
+                          continue
+                  return "N/A"
+
+              def _extract_fund_name(self) -> str:
+                  selectors = [
+                      (By.TAG_NAME, "h1"),
+                      (By.CSS_SELECTOR, "[data-testid='fund-name']"),
+                      (By.CSS_SELECTOR, ".fund-name, .fund-title"),
+                      (By.XPATH, "//div[contains(@class, 'title')]//h1"),
+                  ]
+                  for by, sel in selectors:
+                      try:
+                          el = self.driver.find_element(by, sel)
+                          name = el.text.strip()
+                          if name:
+                              return name
+                      except NoSuchElementException:
+                          continue
+                  return "N/A"
+
+              def parse(self, url: str) -> FundReturns:
+                  data = FundReturns()
+                  try:
+                      self.driver = self._create_driver()
+                      logger.info("Загрузка: %s", url)
+                      self.driver.get(url)
+
+                      WebDriverWait(self.driver, self.timeout).until(
+                          EC.presence_of_element_located((By.TAG_NAME, "body"))
+                      )
+
+                      time.sleep(4)
+                      self._close_banner()
+                      time.sleep(1)
+
+                      percents = self._get_all_percentages()
+                      logger.info("Найдено процентов: %s", percents)
+
+                      if len(percents) >= 7:
+                          data.nav_year = percents[0]
+                          data.nav_new = percents[1]
+                          data.daily = percents[2]
+                          data.days_90 = percents[3]
+                          data.days_30 = percents[4]
+                          data.days_14 = percents[5]
+                          data.days_7 = percents[6]
+                      else:
+                          logger.warning("Мало процентов, переключаюсь на fallback")
+                          data.nav_year = self._get_by_label("מחיר הנכס")
+                          data.nav_new = self._get_by_label("NAV") or self._get_by_label("נכס")
+                          data.daily = self._get_by_label("יומית")
+                          data.days_90 = self._get_by_label("90 ימים")
+                          data.days_30 = self._get_by_label("30 ימים")
+                          data.days_14 = self._get_by_label("14 ימים")
+                          data.days_7 = self._get_by_label("7 ימים")
+
+                      data.fund_name = self._extract_fund_name()
+
+                  except TimeoutException:
+                      logger.error("Таймаут загрузки страницы")
+                  except Exception as e:
+                      logger.error("Критическая ошибка парсинга: %s", e)
+                  finally:
+                      if self.driver:
+                          self.driver.quit()
+                          self.driver = None
+
+                  return data
+
+          def get_fund_data(url: str, headless: bool = True) -> FundReturns:
+              parser = FunderParser(headless=headless)
+              return parser.parse(url)
 
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
               api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
@@ -166,72 +378,20 @@ jobs:
                   results = await asyncio.gather(*tasks)
                   return dict(results)
 
-          async def scrape_funder_fund_returns(page, fund_id: str) -> dict:
-              """Парсит таблицу תשואות с Funder: День (יומית), Месяц (מתחילת החודש), Год (מתחילת השנה)"""
-              url = f"https://www.funder.co.il/fund/{fund_id}"
-              data = {"daily": 0.0, "mtd": 0.0, "ytd": 0.0}
-              try:
-                  await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-                  
-                  # Ожидание элемента таблицы
-                  await page.wait_for_selector("table, div", timeout=5000)
-                  html_text = await page.content()
-                  soup = BeautifulSoup(html_text, 'html.parser')
-
-                  # Точечный поиск по заголовкам таблицы תשואות
-                  headers = soup.find_all(text=re.compile(r'תשואות|יומית|מתחילת החודש|מתחילת השנה'))
-                  
-                  for h in headers:
-                      parent = h.find_parent(['td', 'th', 'tr', 'table', 'div'])
-                      if parent:
-                          block_text = parent.get_text(separator=' ')
-                          # Извлекаем все числа с процентами
-                          percentages = re.findall(r'([+-]?\d+(?:\.\d+)?\s*%)', block_text)
-                          if len(percentages) >= 3:
-                              data["daily"] = parse_float(percentages[0])
-                              data["mtd"] = parse_float(percentages[1])
-                              data["ytd"] = parse_float(percentages[2])
-                              return data
-
-                  # Резервный поиск всех процентов в блоке HTML
-                  all_pcts = re.findall(r'([+-]?\d+\.\d+\s*%)', html_text)
-                  if len(all_pcts) >= 3:
-                      data["daily"] = parse_float(all_pcts[0])
-                      data["mtd"] = parse_float(all_pcts[1])
-                      data["ytd"] = parse_float(all_pcts[2])
-
-              except Exception as e:
-                  print(f"⚠️ Ошибка сбора Funder ID {fund_id}: {e}")
-
-              return data
-
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
               results = {}
-              async with async_playwright() as p:
-                  browser = await p.chromium.launch(
-                      headless=True,
-                      args=["--no-sandbox", "--disable-setuid-sandbox"]
-                  )
-                  
-                  context = await browser.new_context(
-                      user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                      viewport={"width": 1280, "height": 800},
-                      locale="he-IL"
-                  )
-                  
-                  page = await context.new_page()
-
-                  for key, cfg in sectors_config.items():
-                      fund_id = cfg.get("fund_id", "")
-                      if fund_id:
-                          print(f"🔍 Парсинг תשואות для {key} (ID: {fund_id})...")
-                          fund_returns = await scrape_funder_fund_returns(page, fund_id)
-                          results[key] = fund_returns
-                      else:
-                          results[key] = {"daily": 0.0, "mtd": 0.0, "ytd": 0.0}
-
-                  await browser.close()
-                  
+              parser = FunderParser(headless=True)
+              
+              for key, cfg in sectors_config.items():
+                  fund_id = cfg.get("fund_id", "")
+                  if fund_id:
+                      url = f"https://www.funder.co.il/fund/{fund_id}"
+                      print(f"🔍 Парсинг Selenium для {key} (ID: {fund_id})...")
+                      fund_returns: FundReturns = await asyncio.to_thread(parser.parse, url)
+                      results[key] = fund_returns.to_dict()
+                  else:
+                      results[key] = FundReturns().to_dict()
+                      
               return results
           EOF
           
@@ -321,8 +481,21 @@ jobs:
           EOF
           
           cat << 'EOF' > modules/formatter.py
+          import re
           from datetime import datetime, timezone, timedelta
           from modules.config import BOT_NAME
+
+          def parse_float_val(val_str: str) -> float:
+              if not val_str or val_str == "N/A":
+                  return 0.0
+              try:
+                  cleaned = val_str.replace(',', '.').replace('%', '').replace('+', '').strip()
+                  match = re.search(r'([+-]?\d+(?:\.\d+)?)', cleaned)
+                  if match:
+                      return float(match.group(1))
+              except Exception:
+                  pass
+              return 0.0
 
           def escape_html(text: str) -> str:
               return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -343,10 +516,10 @@ jobs:
                   icon = s['icon']
                   name = s['short_eng'][:6]
                   us_ch = s['avg_change']
-                  il_ch = s['il_fund_data']['daily']
+                  il_daily_str = s['il_fund_data'].get('daily', 'N/A')
                   
                   us_str = f"+{us_ch:.1f}%" if us_ch > 0 else f"{us_ch:.1f}%"
-                  il_str = f"+{il_ch:.1f}%" if il_ch > 0 else f"{il_ch:.1f}%"
+                  il_str = f"{il_daily_str}" if il_daily_str != "N/A" else "0.0%"
                   
                   score_emoji = "🟢" if s['score'] >= 65 else ("🟡" if s['score'] >= 40 else "🔴")
                   lines.append(f"{icon}{name:<6} {us_str:>6} {il_str:>6}  {score_emoji}{s['score']:>3}/100")
@@ -367,25 +540,25 @@ jobs:
                   lines.append("")
               lines.append("</blockquote>\n")
 
-              ta_stocks_sorted = sorted(sectors_data, key=lambda x: x['il_fund_data']['daily'], reverse=True)
+              ta_stocks_sorted = sorted(
+                  sectors_data, 
+                  key=lambda x: parse_float_val(x['il_fund_data'].get('daily', 'N/A')), 
+                  reverse=True
+              )
 
               lines.append("<blockquote expandable>")
-              lines.append("🇮🇱 <b>ДОХОДНОСТЬ ИЗРАИЛЬСКИХ ФОНДОВ (תשואות)</b>\n")
+              lines.append("🇮🇱 <b>ПОЛНАЯ ДОХОДНОСТЬ ФОНДОВ (תשואות)</b>\n")
               for s in ta_stocks_sorted:
                   f_data = s['il_fund_data']
-                  d_ch = f_data['daily']
-                  mtd_ch = f_data['mtd']
-                  ytd_ch = f_data['ytd']
-                  
-                  ch_emoji = "🟢" if d_ch > 0 else ("🔴" if d_ch < 0 else "⚪")
-                  
-                  d_str = f"+{d_ch:.2f}%" if d_ch > 0 else f"{d_ch:.2f}%"
-                  mtd_str = f"+{mtd_ch:.2f}%" if mtd_ch > 0 else f"{mtd_ch:.2f}%"
-                  ytd_str = f"+{ytd_ch:.2f}%" if ytd_ch > 0 else f"{ytd_ch:.2f}%"
+                  daily = f_data.get('daily', 'N/A')
+                  d_val = parse_float_val(daily)
+                  ch_emoji = "🟢" if d_val > 0 else ("🔴" if d_val < 0 else "⚪")
                   
                   lines.append(
                       f"{ch_emoji} <b>{escape_html(s['il_name_eng'])}</b> ({s['icon']})\n"
-                      f"└ <code>{s['fund_id']}</code> · <b>День: {d_str}</b> | <b>Месяц: {mtd_str}</b> | <b>Год: {ytd_str}</b>"
+                      f"└ <code>{s['fund_id']}</code> | <b>День:</b> {daily} | <b>7 дней:</b> {f_data.get('days_7', 'N/A')}\n"
+                      f"  <b>30 дней:</b> {f_data.get('days_30', 'N/A')} | <b>90 дней:</b> {f_data.get('days_90', 'N/A')}\n"
+                      f"  <b>Месяц (NAV):</b> {f_data.get('nav_new', 'N/A')} | <b>Год:</b> {f_data.get('nav_year', 'N/A')}\n"
                   )
               lines.append("</blockquote>")
 
@@ -486,6 +659,19 @@ jobs:
           from modules.formatter import build_telegram_message, build_ipo_message
           from modules.telegram_sender import send_to_telegram
 
+          def parse_float_val(val_str: str) -> float:
+              import re
+              if not val_str or val_str == "N/A":
+                  return 0.0
+              try:
+                  cleaned = val_str.replace(',', '.').replace('%', '').replace('+', '').strip()
+                  match = re.search(r'([+-]?\d+(?:\.\d+)?)', cleaned)
+                  if match:
+                      return float(match.group(1))
+              except Exception:
+                  pass
+              return 0.0
+
           def calculate_sector_score(avg_change: float) -> int:
               return max(0, min(100, int(50 + (avg_change * 15.0))))
 
@@ -497,7 +683,7 @@ jobs:
               print(f"📦 Сбор данных Yahoo Finance...")
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
 
-              print(f"🌐 Опрос таблицы תשואות Funder via Playwright...")
+              print(f"🌐 Опрос Funder через Selenium...")
               il_results = await fetch_all_israeli_funds(SECTORS_CONFIG)
 
               async with aiohttp.ClientSession() as session:
@@ -525,7 +711,7 @@ jobs:
                           "score": score,
                           "news": news,
                           "il_name_eng": cfg["il_name_eng"],
-                          "il_fund_data": il_results.get(key, {"daily": 0.0, "mtd": 0.0, "ytd": 0.0})
+                          "il_fund_data": il_results.get(key, {})
                       })
                   
                   sectors_results.sort(key=lambda x: x["avg_change"], reverse=True)
@@ -552,11 +738,10 @@ jobs:
               asyncio.run(main())
           EOF
 
-      - name: Install Dependencies & Playwright Browsers
+      - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          playwright install --with-deps chromium
 
       - name: Run Analytics Engine
         env:
