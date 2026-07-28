@@ -1,169 +1,254 @@
 name: Automated Market Analytics & IPO Digest
+
 on:
   schedule:
     - cron: '15 20 * * *'
     - cron: '0 19 * * 6'
   workflow_dispatch:
+
 jobs:
   build-and-send:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4.2.2
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - uses: actions/cache@v4
+
+      - name: Restore Israeli funds cache
+        uses: actions/cache@v4
         with:
           path: .cache/israeli_funds.json
           key: israeli-funds-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
             israeli-funds-${{ runner.os }}-
-      - name: Deploy
+
+      - name: Deploy application
         run: |
           mkdir -p modules .cache
           touch modules/__init__.py
+
           cat << 'EOF' > requirements.txt
           aiohttp==3.11.11
           beautifulsoup4==4.12.3
           yfinance==0.2.40
           EOF
+
           cat << 'EOF' > modules/config.py
           import os
+
           BOT_TOKEN=os.getenv("BOT_TOKEN")
           CHAT_ID=os.getenv("CHAT_ID")
           HTTP_TIMEOUT=20
           BOT_NAME="@oil_tracker_pavel_bot"
+
           HEADERS={
               "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
               "Accept":"application/json,text/plain,*/*",
               "Accept-Language":"he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
               "Referer":"https://www.funder.co.il/"
           }
+
           SECTORS_CONFIG={
               "Oil":{
-                  "name":"Нефть и Энергетика","icon":"🛢️","short_eng":"Oil",
-                  "news_ticker":"USO","fund_id":"5141841",
+                  "name":"Нефть и Энергетика",
+                  "icon":"🛢️",
+                  "short_eng":"Oil",
+                  "news_ticker":"USO",
+                  "fund_id":"5141841",
                   "il_name_eng":"Barak Ultra WTI x3",
                   "expected_name":["ברק","WTI","נפט"],
                   "tickers":["BZ=F","CL=F","USO","OVX","XLE","VLO"]
               },
               "Cybersecurity":{
-                  "name":"Кибербезопасность","icon":"🛡️","short_eng":"Cyber",
-                  "news_ticker":"CIBR","fund_id":"5132527",
+                  "name":"Кибербезопасность",
+                  "icon":"🛡️",
+                  "short_eng":"Cyber",
+                  "news_ticker":"CIBR",
+                  "fund_id":"5132527",
                   "il_name_eng":"IBI ISE Cyber Security",
                   "expected_name":["אי.בי.אי","ISE","Cyber"],
                   "tickers":["CIBR","HACK","CRWD","PANW","FTNT","ZS","NET"]
               },
               "Gold":{
-                  "name":"Золото и Металлы","icon":"🥇","short_eng":"Gold",
-                  "news_ticker":"GLD","fund_id":"5140801",
+                  "name":"Золото и Металлы",
+                  "icon":"🥇",
+                  "short_eng":"Gold",
+                  "news_ticker":"GLD",
+                  "fund_id":"5140801",
                   "il_name_eng":"Barak Ultra Gold x3",
                   "expected_name":["ברק","זהב"],
                   "tickers":["GLD","GDX","SLV","NEM","GOLD"]
               },
               "Clean Energy":{
-                  "name":"Зеленая энергетика","icon":"☀️","short_eng":"Clean",
-                  "news_ticker":"FSLR","fund_id":"5131040",
+                  "name":"Зеленая энергетика",
+                  "icon":"☀️",
+                  "short_eng":"Clean",
+                  "news_ticker":"FSLR",
+                  "fund_id":"5131040",
                   "il_name_eng":"More Global Clean Energy",
                   "expected_name":["מור","אנרגיה","נקיה"],
                   "tickers":["ICLN","TAN","FAN","FSLR","ENPH","SEDG"]
               },
               "Aerospace":{
-                  "name":"Авиация и Космос","icon":"✈️","short_eng":"Aero",
-                  "news_ticker":"ITA","fund_id":"5125752",
+                  "name":"Авиация и Космос",
+                  "icon":"✈️",
+                  "short_eng":"Aero",
+                  "news_ticker":"ITA",
+                  "fund_id":"5125752",
                   "il_name_eng":"MTF Global Aerospace & Defense",
                   "expected_name":["MTF","Aerospace","Defense"],
                   "tickers":["BA","LMT","RTX","ITA","NOC"]
               },
               "Biotech":{
-                  "name":"Биотех и Медицина","icon":"🏥","short_eng":"Bio",
-                  "news_ticker":"LLY","fund_id":"5131206",
+                  "name":"Биотех и Медицина",
+                  "icon":"🏥",
+                  "short_eng":"Bio",
+                  "news_ticker":"LLY",
+                  "fund_id":"5131206",
                   "il_name_eng":"KSM Nasdaq Biotechnology",
                   "expected_name":["קסם","NASDAQ","Biotechnology"],
                   "tickers":["LLY","NVO","PFE","MRNA","AMGN","XBI","IBB"]
               },
               "Cloud":{
-                  "name":"Облачные технологии","icon":"☁️","short_eng":"Cloud",
-                  "news_ticker":"WCLD","fund_id":"5132279",
+                  "name":"Облачные технологии",
+                  "icon":"☁️",
+                  "short_eng":"Cloud",
+                  "news_ticker":"WCLD",
+                  "fund_id":"5132279",
                   "il_name_eng":"KSM US Cloud Computing",
                   "expected_name":["קסם","Cloud","Computing"],
                   "tickers":["MSFT","AMZN","GOOGL","ORCL","SNOW","WCLD","CLOU"]
               },
               "Banking":{
-                  "name":"Банковский сектор","icon":"🏦","short_eng":"Bank",
-                  "news_ticker":"JPM","fund_id":"5131446",
+                  "name":"Банковский сектор",
+                  "icon":"🏦",
+                  "short_eng":"Bank",
+                  "news_ticker":"JPM",
+                  "fund_id":"5131446",
                   "il_name_eng":"MTF Top 10 US Banks",
                   "expected_name":["MTF","US","Banks"],
                   "tickers":["JPM","BAC","GS","MS","WFC","XLF","KBE"]
               },
               "Uranium":{
-                  "name":"Уран и Атомная энергетика","icon":"☢️","short_eng":"Uran",
-                  "news_ticker":"CCJ","fund_id":"5140298",
+                  "name":"Уран и Атомная энергетика",
+                  "icon":"☢️",
+                  "short_eng":"Uran",
+                  "news_ticker":"CCJ",
+                  "fund_id":"5140298",
                   "il_name_eng":"IBI Nuclear Energy Industry",
                   "expected_name":["אי.בי.אי","Nuclear","Energy"],
                   "tickers":["URA","URNM","CCJ","NXE","DNN"]
               },
               "Gaming":{
-                  "name":"Игровая индустрия","icon":"🎮","short_eng":"Game",
-                  "news_ticker":"SONY","fund_id":"5128624",
+                  "name":"Игровая индустрия",
+                  "icon":"🎮",
+                  "short_eng":"Game",
+                  "news_ticker":"SONY",
+                  "fund_id":"5128624",
                   "il_name_eng":"MTF Bluestar E-Games",
                   "expected_name":["MTF","Bluestar","E-Games"],
                   "tickers":["NVDA","MSFT","TTWO","EA","RBLX","SONY","NTDOY","HERO"]
               },
               "EV":{
-                  "name":"Электромобили","icon":"🚗","short_eng":"EV",
-                  "news_ticker":"TSLA","fund_id":"5132709",
+                  "name":"Электромобили",
+                  "icon":"🚗",
+                  "short_eng":"EV",
+                  "news_ticker":"TSLA",
+                  "fund_id":"5132709",
                   "il_name_eng":"IBI Global Electric Vehicles",
                   "expected_name":["אי.בי.אי","רכב","חשמלי"],
                   "tickers":["TSLA","BYDDY","RIVN","LI","DRIV","LCID"]
               },
               "E-Commerce":{
-                  "name":"Электронная коммерция","icon":"🛒","short_eng":"Ecom",
-                  "news_ticker":"IBUY","fund_id":"5128814",
+                  "name":"Электронная коммерция",
+                  "icon":"🛒",
+                  "short_eng":"Ecom",
+                  "news_ticker":"IBUY",
+                  "fund_id":"5128814",
                   "il_name_eng":"Tamir Fishman Digital Economy",
                   "expected_name":["תמיר","פישמן","digital","economy"],
                   "tickers":["AMZN","SHOP","MELI","IBUY","EBAY","PDD"]
               },
               "Semiconductors":{
-                  "name":"Полупроводники","icon":"💻","short_eng":"Semi",
-                  "news_ticker":"SOXX","fund_id":"5133657",
+                  "name":"Полупроводники",
+                  "icon":"💻",
+                  "short_eng":"Semi",
+                  "news_ticker":"SOXX",
+                  "fund_id":"5133657",
                   "il_name_eng":"IBI Global Semiconductors",
                   "expected_name":["אי.בי.אי","שבבים","גלובלי"],
                   "tickers":["NVDA","AMD","AVGO","QCOM","TSM","ASML","INTC","SOXX"]
               },
               "AI":{
-                  "name":"Искусственный интеллект","icon":"🤖","short_eng":"AI",
-                  "news_ticker":"NVDA","fund_id":"5140744",
+                  "name":"Искусственный интеллект",
+                  "icon":"🤖",
+                  "short_eng":"AI",
+                  "news_ticker":"NVDA",
+                  "fund_id":"5140744",
                   "il_name_eng":"Migdal AI",
                   "expected_name":["מגדל","AI","בינה","מלאכותית"],
                   "tickers":["NVDA","MSFT","AMD","AVGO","PLTR","GOOGL","AMZN","BOTZ"]
               }
           }
           EOF
+
           cat << 'EOF' > modules/market.py
-          import asyncio,json,re
+          import asyncio
+          import json
+          import re
           from datetime import datetime,timezone
           from pathlib import Path
           from typing import Any
+
           import aiohttp
           from bs4 import BeautifulSoup
+
           from modules.config import HEADERS,HTTP_TIMEOUT
+
           CACHE_FILE=Path(".cache/israeli_funds.json")
-          EMPTY={"daily":None,"mtd":None,"ytd":None,"source":None,"stale":False}
+
+          EMPTY={
+              "daily":None,
+              "mtd":None,
+              "ytd":None,
+              "source":None,
+              "stale":False
+          }
+
           ALIASES={
               "daily":[
-                  "dailychangepercent","dailychange","daychange","dailyreturn",
-                  "dailyyield","daily","prcchg","DailyChangePercent"
+                  "dailychangepercent",
+                  "dailychange",
+                  "daychange",
+                  "dailyreturn",
+                  "dailyyield",
+                  "daily",
+                  "prcchg",
+                  "DailyChangePercent"
               ],
               "mtd":[
-                  "mtd","monthlyreturn","monthlychange","monthchange",
-                  "frommonthstart","monthyield"
+                  "mtd",
+                  "monthlyreturn",
+                  "monthlychange",
+                  "monthchange",
+                  "frommonthstart",
+                  "monthyield"
               ],
               "ytd":[
-                  "ytd","yearlyreturn","yearchange","fromyearstart",
-                  "yearreturn","annualreturn"
+                  "ytd",
+                  "yearlyreturn",
+                  "yearchange",
+                  "fromyearstart",
+                  "yearreturn",
+                  "annualreturn"
               ]
           }
+
           API_URLS=[
               "https://www.funder.co.il/api/fund/{id}",
               "https://www.funder.co.il/api/funds/{id}",
@@ -172,51 +257,102 @@ jobs:
               "https://www.bizportal.co.il/mutualfunds/quote/generalview/{id}",
               "https://www.bizportal.co.il/mutualfunds/quote/generalview/{id}?format=json"
           ]
+
           def text(value:Any)->str:
-              return re.sub(r"\s+"," ",str(value or "")).strip()
+              return re.sub(
+                  r"\s+",
+                  " ",
+                  str(value or "")
+              ).strip()
+
           def key(value:Any)->str:
-              return re.sub(r"[^a-z0-9\u0590-\u05ff]","",text(value).lower())
+              return re.sub(
+                  r"[^a-z0-9\u0590-\u05ff]",
+                  "",
+                  text(value).lower()
+              )
+
           def number(value:Any,limit:float)->float|None:
               if value is None or isinstance(value,bool):
                   return None
+
               if isinstance(value,(int,float)):
                   result=float(value)
               else:
-                  match=re.search(r"[-+]?\d+(?:[.,]\d+)?",text(value).replace("%",""))
+                  match=re.search(
+                      r"[-+]?\d+(?:[.,]\d+)?",
+                      text(value).replace("%","")
+                  )
+
                   if not match:
                       return None
+
                   try:
-                      result=float(match.group(0).replace(",","."))
+                      result=float(
+                          match.group(0).replace(",",".")
+                      )
                   except ValueError:
                       return None
+
               if abs(result)>limit:
                   return None
+
               return round(result,2)
+
           def valid(data:dict)->bool:
-              return any(data.get(field) is not None for field in ("daily","mtd","ytd"))
+              return any(
+                  data.get(field) is not None
+                  for field in ("daily","mtd","ytd")
+              )
+
           def complete(data:dict)->bool:
-              return all(data.get(field) is not None for field in ("daily","mtd","ytd"))
+              return all(
+                  data.get(field) is not None
+                  for field in ("daily","mtd","ytd")
+              )
+
           def merge(target:dict,candidate:dict)->dict:
               for field in ("daily","mtd","ytd"):
-                  if target.get(field) is None and candidate.get(field) is not None:
+                  if (
+                      target.get(field) is None
+                      and candidate.get(field) is not None
+                  ):
                       target[field]=candidate[field]
-              if not target.get("source") and candidate.get("source"):
+
+              if (
+                  not target.get("source")
+                  and candidate.get("source")
+              ):
                   target["source"]=candidate["source"]
+
               return target
+
           def load_cache()->dict:
               try:
                   if CACHE_FILE.exists():
-                      payload=json.loads(CACHE_FILE.read_text(encoding="utf-8"))
+                      payload=json.loads(
+                          CACHE_FILE.read_text(
+                              encoding="utf-8"
+                          )
+                      )
                       return payload.get("funds",{})
               except Exception:
                   pass
+
               return {}
+
           def save_cache(data:dict)->None:
-              CACHE_FILE.parent.mkdir(parents=True,exist_ok=True)
+              CACHE_FILE.parent.mkdir(
+                  parents=True,
+                  exist_ok=True
+              )
+
               CACHE_FILE.write_text(
                   json.dumps(
                       {
-                          "updated_at":datetime.now(timezone.utc).isoformat(),
+                          "updated_at":datetime.now(
+                              timezone.utc
+                          ).isoformat(),
                           "funds":data
                       },
                       ensure_ascii=False,
@@ -224,73 +360,146 @@ jobs:
                   ),
                   encoding="utf-8"
               )
+
           def find_name(node:Any)->str:
               if isinstance(node,dict):
                   for raw_key,value in node.items():
                       normalized=key(raw_key)
-                      if normalized in {
-                          "fundname","name","fullname","fundfullname",
-                          "securityname","instrumentname","שםקרן"
-                      } and isinstance(value,str):
+
+                      if (
+                          normalized in {
+                              "fundname",
+                              "name",
+                              "fullname",
+                              "fundfullname",
+                              "securityname",
+                              "instrumentname",
+                              "שםקרן"
+                          }
+                          and isinstance(value,str)
+                      ):
                           return text(value)
+
                   for value in node.values():
                       found=find_name(value)
+
                       if found:
                           return found
+
               elif isinstance(node,list):
                   for item in node:
                       found=find_name(item)
+
                       if found:
                           return found
+
               return ""
-          def matches_name(name:str,expected:list[str])->bool:
+
+          def matches_name(
+              name:str,
+              expected:list[str]
+          )->bool:
               normalized=key(name)
+
               if not normalized:
                   return True
-              hits=sum(1 for token in expected if key(token) in normalized)
-              return hits>=max(1,min(2,len(expected)))
-          def walk(node:Any,result:dict|None=None)->dict:
+
+              hits=sum(
+                  1
+                  for token in expected
+                  if key(token) in normalized
+              )
+
+              return hits>=max(
+                  1,
+                  min(2,len(expected))
+              )
+
+          def walk(
+              node:Any,
+              result:dict|None=None
+          )->dict:
               if result is None:
                   result=dict(EMPTY)
+
               if isinstance(node,dict):
-                  normalized={key(k):v for k,v in node.items()}
+                  normalized={
+                      key(raw_key):value
+                      for raw_key,value in node.items()
+                  }
+
                   for field,aliases in ALIASES.items():
                       if result[field] is not None:
                           continue
-                      limit=50.0 if field=="daily" else 500.0
+
+                      limit=(
+                          50.0
+                          if field=="daily"
+                          else 500.0
+                      )
+
                       for alias in aliases:
                           alias_key=key(alias)
+
                           for raw_key,value in normalized.items():
-                              if raw_key==alias_key or raw_key.endswith(alias_key):
+                              if (
+                                  raw_key==alias_key
+                                  or raw_key.endswith(alias_key)
+                              ):
                                   parsed=number(value,limit)
+
                                   if parsed is not None:
                                       result[field]=parsed
                                       break
+
                           if result[field] is not None:
                               break
+
                   for value in node.values():
                       walk(value,result)
+
                       if complete(result):
                           return result
+
               elif isinstance(node,list):
                   for item in node:
                       walk(item,result)
+
                       if complete(result):
                           return result
+
               return result
+
           def parse_html(body:str)->dict:
               result=dict(EMPTY)
               soup=BeautifulSoup(body,"html.parser")
+
               for script in soup.find_all("script"):
-                  raw=script.string or script.get_text(" ",strip=True)
+                  raw=(
+                      script.string
+                      or script.get_text(" ",strip=True)
+                  )
+
                   if not raw:
                       continue
-                  for candidate in re.findall(r"\{.*?\}",raw,re.DOTALL):
+
+                  for candidate in re.findall(
+                      r"\{.*?\}",
+                      raw,
+                      re.DOTALL
+                  ):
                       try:
-                          merge(result,walk(json.loads(candidate)))
+                          merge(
+                              result,
+                              walk(json.loads(candidate))
+                          )
                       except Exception:
                           pass
-              plain=text(soup.get_text(" ",strip=True))
+
+              plain=text(
+                  soup.get_text(" ",strip=True)
+              )
+
               patterns={
                   "daily":[
                       r"תשואה\s*יומית.{0,80}?([-+]?\d+(?:[.,]\d+)?)\s*%",
@@ -303,24 +512,36 @@ jobs:
                       r"מתחילת\s*השנה.{0,80}?([-+]?\d+(?:[.,]\d+)?)\s*%"
                   ]
               }
+
               for field,items in patterns.items():
                   if result[field] is not None:
                       continue
+
                   for pattern in items:
-                      match=re.search(pattern,plain,re.DOTALL)
+                      match=re.search(
+                          pattern,
+                          plain,
+                          re.DOTALL
+                      )
+
                       if match:
                           result[field]=number(
                               match.group(1),
-                              50.0 if field=="daily" else 500.0
+                              50.0
+                              if field=="daily"
+                              else 500.0
                           )
                           break
+
               return result
+
           async def fetch_url(
               session:aiohttp.ClientSession,
               url:str,
               expected_name:list[str]
           )->dict:
               result=dict(EMPTY)
+
               try:
                   async with session.get(
                       url,
@@ -330,56 +551,135 @@ jobs:
                   ) as response:
                       if response.status!=200:
                           return result
-                      body=await response.text(errors="ignore")
-                      content_type=response.headers.get("content-type","").lower()
-                      if "json" in content_type or body.lstrip().startswith(("{","[")):
+
+                      body=await response.text(
+                          errors="ignore"
+                      )
+
+                      content_type=response.headers.get(
+                          "content-type",
+                          ""
+                      ).lower()
+
+                      if (
+                          "json" in content_type
+                          or body.lstrip().startswith(
+                              ("{","[")
+                          )
+                      ):
                           try:
                               payload=json.loads(body)
                           except Exception:
                               return result
+
                           found_name=find_name(payload)
-                          if found_name and not matches_name(found_name,expected_name):
+
+                          if (
+                              found_name
+                              and not matches_name(
+                                  found_name,
+                                  expected_name
+                              )
+                          ):
                               return result
+
                           result=walk(payload)
+
                       else:
-                          soup=BeautifulSoup(body,"html.parser")
-                          title=text(soup.title.get_text(" ",strip=True) if soup.title else "")
+                          soup=BeautifulSoup(
+                              body,
+                              "html.parser"
+                          )
+
+                          title=text(
+                              soup.title.get_text(
+                                  " ",
+                                  strip=True
+                              )
+                              if soup.title
+                              else ""
+                          )
+
                           heading=soup.find("h1")
-                          page_name=text(heading.get_text(" ",strip=True) if heading else title)
-                          if page_name and not matches_name(page_name,expected_name):
+
+                          page_name=text(
+                              heading.get_text(
+                                  " ",
+                                  strip=True
+                              )
+                              if heading
+                              else title
+                          )
+
+                          if (
+                              page_name
+                              and not matches_name(
+                                  page_name,
+                                  expected_name
+                              )
+                          ):
                               return result
+
                           result=parse_html(body)
+
                       if valid(result):
                           result["source"]=url
+
                       return result
+
               except Exception:
                   return result
+
           async def fetch_fund(
               session:aiohttp.ClientSession,
               fund_id:str,
               expected_name:list[str]
           )->dict:
               result=dict(EMPTY)
+
               tasks=[
-                  fetch_url(session,url.format(id=fund_id),expected_name)
+                  fetch_url(
+                      session,
+                      url.format(id=fund_id),
+                      expected_name
+                  )
                   for url in API_URLS
               ]
-              responses=await asyncio.gather(*tasks,return_exceptions=True)
+
+              responses=await asyncio.gather(
+                  *tasks,
+                  return_exceptions=True
+              )
+
               for response in responses:
                   if isinstance(response,dict):
                       merge(result,response)
+
                       if complete(result):
                           break
+
               return result
-          async def fetch_all_israeli_funds(config:dict)->dict:
+
+          async def fetch_all_israeli_funds(
+              config:dict
+          )->dict:
               cache=load_cache()
-              timeout=aiohttp.ClientTimeout(total=40)
-              connector=aiohttp.TCPConnector(limit=20,ttl_dns_cache=300)
+
+              timeout=aiohttp.ClientTimeout(
+                  total=40
+              )
+
+              connector=aiohttp.TCPConnector(
+                  limit=20,
+                  ttl_dns_cache=300
+              )
+
               async with aiohttp.ClientSession(
                   timeout=timeout,
                   connector=connector
               ) as session:
                   keys=list(config)
+
                   tasks=[
                       fetch_fund(
                           session,
@@ -388,10 +688,19 @@ jobs:
                       )
                       for item in keys
                   ]
-                  fetched=await asyncio.gather(*tasks)
+
+                  fetched=await asyncio.gather(
+                      *tasks
+                  )
+
               results={}
-              for sector,current in zip(keys,fetched):
+
+              for sector,current in zip(
+                  keys,
+                  fetched
+              ):
                   cached=cache.get(sector,{})
+
                   if valid(current):
                       results[sector]={
                           "daily":current.get("daily"),
@@ -400,24 +709,41 @@ jobs:
                           "source":current.get("source"),
                           "stale":False
                       }
+
                   elif valid(cached):
                       results[sector]={
                           "daily":cached.get("daily"),
                           "mtd":cached.get("mtd"),
                           "ytd":cached.get("ytd"),
-                          "source":cached.get("source","cache"),
+                          "source":cached.get(
+                              "source",
+                              "cache"
+                          ),
                           "stale":True
                       }
+
                   else:
                       results[sector]=dict(EMPTY)
+
               save_cache(results)
               return results
+
           async def fetch_single_ticker(
               session:aiohttp.ClientSession,
               ticker:str
           )->tuple:
-              api_ticker=f"^{ticker}" if ticker=="OVX" else ticker
-              url=f"https://query1.finance.yahoo.com/v8/finance/chart/{api_ticker}?range=1d&interval=5m"
+              api_ticker=(
+                  f"^{ticker}"
+                  if ticker=="OVX"
+                  else ticker
+              )
+
+              url=(
+                  "https://query1.finance.yahoo.com/"
+                  f"v8/finance/chart/{api_ticker}"
+                  "?range=1d&interval=5m"
+              )
+
               try:
                   async with session.get(
                       url,
@@ -425,64 +751,132 @@ jobs:
                       timeout=HTTP_TIMEOUT
                   ) as response:
                       if response.status==200:
-                          payload=await response.json(content_type=None)
-                          rows=payload.get("chart",{}).get("result",[])
+                          payload=await response.json(
+                              content_type=None
+                          )
+
+                          rows=payload.get(
+                              "chart",
+                              {}
+                          ).get("result",[])
+
                           if rows:
-                              meta=rows[0].get("meta",{})
-                              price=meta.get("regularMarketPrice")
-                              previous=meta.get("chartPreviousClose")
-                              if price is not None and previous:
-                                  change=(price-previous)/previous*100
+                              meta=rows[0].get(
+                                  "meta",
+                                  {}
+                              )
+
+                              price=meta.get(
+                                  "regularMarketPrice"
+                              )
+
+                              previous=meta.get(
+                                  "chartPreviousClose"
+                              )
+
+                              if (
+                                  price is not None
+                                  and previous
+                              ):
+                                  change=(
+                                      price-previous
+                                  )/previous*100
+
                                   return ticker,{
-                                      "price":round(price,2),
-                                      "change":round(change,2)
+                                      "price":round(
+                                          price,
+                                          2
+                                      ),
+                                      "change":round(
+                                          change,
+                                          2
+                                      )
                                   }
+
               except Exception:
                   pass
-              return ticker,{"price":0.0,"change":0.0}
-          async def fetch_all_yahoo_data(tickers:list[str])->dict:
+
+              return ticker,{
+                  "price":0.0,
+                  "change":0.0
+              }
+
+          async def fetch_all_yahoo_data(
+              tickers:list[str]
+          )->dict:
               async with aiohttp.ClientSession() as session:
                   rows=await asyncio.gather(
                       *[
-                          fetch_single_ticker(session,ticker)
+                          fetch_single_ticker(
+                              session,
+                              ticker
+                          )
                           for ticker in tickers
                       ]
                   )
+
               return dict(rows)
           EOF
                     cat << 'EOF' > modules/news.py
-          import html,urllib.parse
+          import html
+          import urllib.parse
+
           import aiohttp
           import yfinance as yf
+
           from modules.config import HEADERS,HTTP_TIMEOUT
+
           async def translate_to_russian(
               session:aiohttp.ClientSession,
               value:str
           )->str:
               if not value:
                   return value
+
               try:
                   url=(
-                      "https://translate.googleapis.com/translate_a/single"
-                      f"?client=gtx&sl=auto&tl=ru&dt=t&q={urllib.parse.quote(value)}"
+                      "https://translate.googleapis.com/"
+                      "translate_a/single"
+                      "?client=gtx"
+                      "&sl=auto"
+                      "&tl=ru"
+                      "&dt=t"
+                      f"&q={urllib.parse.quote(value)}"
                   )
-                  async with session.get(url,timeout=6) as response:
+
+                  async with session.get(
+                      url,
+                      timeout=6
+                  ) as response:
                       if response.status==200:
-                          payload=await response.json(content_type=None)
+                          payload=await response.json(
+                              content_type=None
+                          )
+
                           translated="".join(
                               part[0]
                               for part in payload[0]
                               if part and part[0]
                           )
-                          return html.unescape(translated)
+
+                          return html.unescape(
+                              translated
+                          )
+
               except Exception:
                   pass
+
               return value
+
           async def fetch_sector_news(
               session:aiohttp.ClientSession,
               ticker:str
           )->list[str]:
-              url=f"https://query1.finance.yahoo.com/v1/finance/search?q={ticker}"
+              url=(
+                  "https://query1.finance.yahoo.com/"
+                  f"v1/finance/search?q={ticker}"
+              )
+
               try:
                   async with session.get(
                       url,
@@ -490,16 +884,38 @@ jobs:
                       timeout=HTTP_TIMEOUT
                   ) as response:
                       if response.status==200:
-                          payload=await response.json(content_type=None)
-                          for item in payload.get("news",[]):
-                              title=item.get("title","")
+                          payload=await response.json(
+                              content_type=None
+                          )
+
+                          for item in payload.get(
+                              "news",
+                              []
+                          ):
+                              title=item.get(
+                                  "title",
+                                  ""
+                              )
+
                               if len(title)>15:
+                                  translated=(
+                                      await translate_to_russian(
+                                          session,
+                                          title
+                                      )
+                                  )
+
                                   return [
-                                      f"• {await translate_to_russian(session,title)}"
+                                      f"• {translated}"
                                   ]
+
               except Exception:
                   pass
-              return ["• Значимых новостей не найдено."]
+
+              return [
+                  "• Значимых новостей не найдено."
+              ]
+
           def get_ipo_card(
               symbol:str,
               name:str,
@@ -508,15 +924,29 @@ jobs:
           )->str:
               try:
                   info=yf.Ticker(symbol).info
+
                   price=(
                       info.get("currentPrice")
-                      or info.get("regularMarketPrice")
+                      or info.get(
+                          "regularMarketPrice"
+                      )
                       or info.get("open")
                   )
-                  target=info.get("targetMeanPrice")
+
+                  target=info.get(
+                      "targetMeanPrice"
+                  )
+
                   recommendation=str(
-                      info.get("recommendationKey","N/A")
-                  ).replace("_"," ").upper()
+                      info.get(
+                          "recommendationKey",
+                          "N/A"
+                      )
+                  ).replace(
+                      "_",
+                      " "
+                  ).upper()
+
                   recommendation_map={
                       "STRONG BUY":"🔥 Strong Buy",
                       "BUY":"🟢 Buy",
@@ -525,38 +955,101 @@ jobs:
                       "SELL":"🔴 Sell",
                       "N/A":"⚪ Нет оценки"
                   }
-                  return (
-                      f"📌 <b>{name}</b> (<code>{symbol}</code>)\n"
-                      f"🗓 <b>Дата IPO:</b> {ipo_date}\n"
-                      f"💵 <b>Цена:</b> "
-                      f"{f'${price:.2f}' if price else fallback_price}\n"
-                      f"🎯 <b>Цель аналитиков:</b> "
-                      f"{f'${target:.2f}' if target else 'Н/Д'}\n"
-                      f"🧠 <b>Консенсус:</b> "
-                      f"{recommendation_map.get(recommendation,recommendation)}\n"
+
+                  price_value=(
+                      f"${price:.2f}"
+                      if price
+                      else fallback_price
                   )
+
+                  target_value=(
+                      f"${target:.2f}"
+                      if target
+                      else "Н/Д"
+                  )
+
+                  consensus=(
+                      recommendation_map.get(
+                          recommendation,
+                          recommendation
+                      )
+                  )
+
+                  return (
+                      f"📌 <b>{name}</b> "
+                      f"(<code>{symbol}</code>)\n"
+                      f"🗓 <b>Дата IPO:</b> "
+                      f"{ipo_date}\n"
+                      f"💵 <b>Цена:</b> "
+                      f"{price_value}\n"
+                      f"🎯 <b>Цель аналитиков:</b> "
+                      f"{target_value}\n"
+                      f"🧠 <b>Консенсус:</b> "
+                      f"{consensus}\n"
+                  )
+
               except Exception:
                   return (
-                      f"📌 <b>{name}</b> (<code>{symbol}</code>)\n"
-                      f"🗓 <b>Дата IPO:</b> {ipo_date}\n"
-                      f"💵 <b>Цена:</b> {fallback_price}\n"
-                      f"🧠 <b>Консенсус:</b> ⚪ Нет данных\n"
+                      f"📌 <b>{name}</b> "
+                      f"(<code>{symbol}</code>)\n"
+                      f"🗓 <b>Дата IPO:</b> "
+                      f"{ipo_date}\n"
+                      f"💵 <b>Цена:</b> "
+                      f"{fallback_price}\n"
+                      f"🧠 <b>Консенсус:</b> "
+                      f"⚪ Нет данных\n"
                   )
-          def fetch_ipo_full_analytics()->list[str]:
+
+          def fetch_ipo_full_analytics(
+          )->list[str]:
               targets=[
-                  ("ARM","Arm Holdings","14.09.2023","$51.00"),
-                  ("RDDT","Reddit Inc.","21.03.2024","$34.00"),
-                  ("KVUE","Kenvue Inc.","04.05.2023","$22.00"),
-                  ("IPO","Renaissance IPO ETF","ETF","Рыночная")
+                  (
+                      "ARM",
+                      "Arm Holdings",
+                      "14.09.2023",
+                      "$51.00"
+                  ),
+                  (
+                      "RDDT",
+                      "Reddit Inc.",
+                      "21.03.2024",
+                      "$34.00"
+                  ),
+                  (
+                      "KVUE",
+                      "Kenvue Inc.",
+                      "04.05.2023",
+                      "$22.00"
+                  ),
+                  (
+                      "IPO",
+                      "Renaissance IPO ETF",
+                      "ETF",
+                      "Рыночная"
+                  )
               ]
+
               return [
-                  get_ipo_card(symbol,name,date,price)
-                  for symbol,name,date,price in targets
+                  get_ipo_card(
+                      symbol,
+                      name,
+                      date,
+                      price
+                  )
+                  for symbol,name,date,price
+                  in targets
               ]
           EOF
+
           cat << 'EOF' > modules/formatter.py
-          from datetime import datetime,timedelta,timezone
+          from datetime import (
+              datetime,
+              timedelta,
+              timezone
+          )
+
           from modules.config import BOT_NAME
+
           def escape_html(value:str)->str:
               return (
                   str(value)
@@ -564,167 +1057,508 @@ jobs:
                   .replace("<","&lt;")
                   .replace(">","&gt;")
               )
-          def format_percent(value,stale:bool=False)->str:
+
+          def format_percent(
+              value,
+              stale:bool=False
+          )->str:
               if value is None:
                   return "Н/Д"
-              result=f"{value:+.2f}%" if value>0 else f"{value:.2f}%"
-              return f"{result}*" if stale else result
-          def build_telegram_message(sectors:list[dict])->str:
+
+              result=(
+                  f"{value:+.2f}%"
+                  if value>0
+                  else f"{value:.2f}%"
+              )
+
+              return (
+                  f"{result}*"
+                  if stale
+                  else result
+              )
+
+          def build_telegram_message(
+              sectors:list[dict]
+          )->str:
               now=datetime.now(
-                  timezone(timedelta(hours=3))
-              ).strftime("%d.%m.%Y | %H:%M")
+                  timezone(
+                      timedelta(hours=3)
+                  )
+              ).strftime(
+                  "%d.%m.%Y | %H:%M"
+              )
+
               lines=[
                   "📈 <b>Рыночный дайджест</b>",
                   f"📅 {now} (IDT) 🇮🇱\n",
-                  "<b>📊 СЕКТОРЫ США И ФОНДЫ ИЗРАИЛЯ</b>",
-                  "<code>Сектор       US      IL   Рейтинг</code>",
+                  "<b>📊 СЕКТОРЫ США И "
+                  "ФОНДЫ ИЗРАИЛЯ</b>",
+                  "<code>Сектор       US      IL   "
+                  "Рейтинг</code>",
                   "<code>"
               ]
+
               for sector in sectors:
                   us=sector["avg_change"]
                   fund=sector["il_fund_data"]
                   daily=fund.get("daily")
-                  us_value=f"{us:+.1f}%" if us>0 else f"{us:.1f}%"
-                  il_value="Н/Д" if daily is None else (
-                      f"{daily:+.1f}%" if daily>0 else f"{daily:.1f}%"
+
+                  us_value=(
+                      f"{us:+.1f}%"
+                      if us>0
+                      else f"{us:.1f}%"
                   )
+
+                  il_value=(
+                      "Н/Д"
+                      if daily is None
+                      else (
+                          f"{daily:+.1f}%"
+                          if daily>0
+                          else f"{daily:.1f}%"
+                      )
+                  )
+
                   score=sector["score"]
-                  score_icon="🟢" if score>=65 else (
-                      "🟡" if score>=40 else "🔴"
+
+                  score_icon=(
+                      "🟢"
+                      if score>=65
+                      else (
+                          "🟡"
+                          if score>=40
+                          else "🔴"
+                      )
                   )
+
                   lines.append(
-                      f"{sector['icon']}{sector['short_eng'][:6]:<6} "
-                      f"{us_value:>6} {il_value:>6} "
+                      f"{sector['icon']}"
+                      f"{sector['short_eng'][:6]:<6} "
+                      f"{us_value:>6} "
+                      f"{il_value:>6} "
                       f"{score_icon}{score:>3}/100"
                   )
+
               lines.append("</code>\n")
-              lines.append("<blockquote expandable>")
+
               lines.append(
-                  "🔍 <b>ДРАЙВЕРЫ ДВИЖЕНИЯ И НОВОСТИ</b>\n"
+                  "<blockquote expandable>"
               )
+              lines.append(
+                  "🔍 <b>ДРАЙВЕРЫ ДВИЖЕНИЯ "
+                  "И НОВОСТИ</b>\n"
+              )
+
               for sector in sectors:
                   change=sector["avg_change"]
+
                   change_value=(
                       f"+{change:.2f}%"
                       if change>0
                       else f"{change:.2f}%"
                   )
+
                   lines.append(
                       f"<b>{sector['icon']} "
-                      f"{escape_html(sector['name'])}</b> "
-                      f"({change_value})"
+                      f"{escape_html(sector['name'])}"
+                      f"</b> ({change_value})"
                   )
-                  drivers=sector.get("top_3_tickers",[])
+
+                  drivers=sector.get(
+                      "top_3_tickers",
+                      []
+                  )
+
                   if drivers:
-                      text=", ".join(
-                          f"{ticker}: {value:+.2f}%"
-                          for ticker,value in drivers
+                      driver_text=", ".join(
+                          f"{ticker}: "
+                          f"{value:+.2f}%"
+                          for ticker,value
+                          in drivers
                       )
+
                       lines.append(
-                          f"📊 <i>{escape_html(text)}</i>"
+                          f"📊 <i>"
+                          f"{escape_html(driver_text)}"
+                          f"</i>"
                       )
-                  for news in sector.get("news",[]):
-                      lines.append(escape_html(news))
+
+                  for news in sector.get(
+                      "news",
+                      []
+                  ):
+                      lines.append(
+                          escape_html(news)
+                      )
+
                   lines.append("")
+
               lines.append("</blockquote>\n")
-              lines.append("<blockquote expandable>")
+
               lines.append(
-                  "🇮🇱 <b>ДОХОДНОСТЬ ИЗРАИЛЬСКИХ ФОНДОВ "
+                  "<blockquote expandable>"
+              )
+              lines.append(
+                  "🇮🇱 <b>ДОХОДНОСТЬ "
+                  "ИЗРАИЛЬСКИХ ФОНДОВ "
                   "(תשואות)</b>\n"
               )
+
               sorted_funds=sorted(
                   sectors,
                   key=lambda item:(
-                      item["il_fund_data"].get("daily")
+                      item[
+                          "il_fund_data"
+                      ].get("daily")
                       is not None,
-                      item["il_fund_data"].get("daily")
-                      if item["il_fund_data"].get("daily") is not None
+                      item[
+                          "il_fund_data"
+                      ].get("daily")
+                      if item[
+                          "il_fund_data"
+                      ].get("daily")
+                      is not None
                       else -9999
                   ),
                   reverse=True
               )
+
               stale_exists=False
+
               for sector in sorted_funds:
-                  fund=sector["il_fund_data"]
+                  fund=sector[
+                      "il_fund_data"
+                  ]
+
                   daily=fund.get("daily")
-                  stale=bool(fund.get("stale"))
-                  stale_exists=stale_exists or stale
+                  stale=bool(
+                      fund.get("stale")
+                  )
+
+                  stale_exists=(
+                      stale_exists
+                      or stale
+                  )
+
                   icon=(
                       "⚪"
                       if daily is None
-                      else "🟢"
-                      if daily>0
-                      else "🔴"
-                      if daily<0
-                      else "⚪"
+                      else (
+                          "🟢"
+                          if daily>0
+                          else (
+                              "🔴"
+                              if daily<0
+                              else "⚪"
+                          )
+                      )
                   )
+
                   lines.append(
-                      f"{icon} <b>{escape_html(sector['il_name_eng'])}</b> "
+                      f"{icon} <b>"
+                      f"{escape_html("
+                      f"sector['il_name_eng']"
+                      f")}</b> "
                       f"({sector['icon']})"
                   )
+
                   lines.append(
-                      f"└ <code>{sector['fund_id']}</code> · "
-                      f"День: <b>{format_percent(daily,stale)}</b> | "
-                      f"Месяц: <b>{format_percent(fund.get('mtd'),stale)}</b> | "
-                      f"Год: <b>{format_percent(fund.get('ytd'),stale)}</b>"
+                      f"└ <code>"
+                      f"{sector['fund_id']}"
+                      f"</code> · "
+                      f"День: <b>"
+                      f"{format_percent("
+                      f"daily,"
+                      f"stale"
+                      f")}</b> | "
+                      f"Месяц: <b>"
+                      f"{format_percent("
+                      f"fund.get('mtd'),"
+                      f"stale"
+                      f")}</b> | "
+                      f"Год: <b>"
+                      f"{format_percent("
+                      f"fund.get('ytd'),"
+                      f"stale"
+                      f")}</b>"
                   )
+
               if stale_exists:
                   lines.append(
-                      "\n<i>* Использовано последнее успешное "
+                      "\n<i>* Использовано "
+                      "последнее успешное "
                       "значение из кэша.</i>"
                   )
+
               lines.append("</blockquote>")
               lines.append(f"\n{BOT_NAME}")
+
               return "\n".join(lines)
-          def build_ipo_message(cards:list[str])->str:
+
+          def build_ipo_message(
+              cards:list[str]
+          )->str:
               date=datetime.now(
-                  timezone(timedelta(hours=3))
+                  timezone(
+                      timedelta(hours=3)
+                  )
               ).strftime("%d.%m.%Y")
+
               lines=[
-                  "🔔 <b>ЕЖЕНЕДЕЛЬНЫЙ IPO-ДАЙДЖЕСТ</b>",
+                  "🔔 <b>ЕЖЕНЕДЕЛЬНЫЙ "
+                  "IPO-ДАЙДЖЕСТ</b>",
                   f"📅 {date} 🇮🇱\n",
                   "<blockquote expandable>"
               ]
+
               lines.extend(cards)
               lines.append("</blockquote>")
               lines.append(f"\n{BOT_NAME}")
+
               return "\n".join(lines)
           EOF
+
           cat << 'EOF' > modules/telegram_sender.py
+          import re
+
           import aiohttp
-          from modules.config import BOT_TOKEN,CHAT_ID,HTTP_TIMEOUT
+
+          from modules.config import (
+              BOT_TOKEN,
+              CHAT_ID,
+              HTTP_TIMEOUT
+          )
+
+          TELEGRAM_LIMIT=3900
+
+          def split_plain_block(
+              text:str,
+              limit:int
+          )->list[str]:
+              chunks=[]
+              current=[]
+
+              for line in text.splitlines():
+                  candidate="\n".join(
+                      current+[line]
+                  )
+
+                  if (
+                      current
+                      and len(candidate)>limit
+                  ):
+                      chunks.append(
+                          "\n".join(
+                              current
+                          ).strip()
+                      )
+                      current=[line]
+                  else:
+                      current.append(line)
+
+              if current:
+                  chunks.append(
+                      "\n".join(
+                          current
+                      ).strip()
+                  )
+
+              return [
+                  chunk
+                  for chunk in chunks
+                  if chunk
+              ]
+
+          def wrap_blockquote(
+              opening_tag:str,
+              lines:list[str],
+              closing_tag:str
+          )->str:
+              content="\n".join(
+                  lines
+              ).strip()
+
+              return (
+                  f"{opening_tag}\n"
+                  f"{content}\n"
+                  f"{closing_tag}"
+              )
+
+          def split_blockquote(
+              opening_tag:str,
+              content:str,
+              closing_tag:str,
+              limit:int
+          )->list[str]:
+              chunks=[]
+              current=[]
+
+              for line in content.strip().splitlines():
+                  candidate=current+[line]
+
+                  wrapped=wrap_blockquote(
+                      opening_tag,
+                      candidate,
+                      closing_tag
+                  )
+
+                  if (
+                      current
+                      and len(wrapped)>limit
+                  ):
+                      chunks.append(
+                          wrap_blockquote(
+                              opening_tag,
+                              current,
+                              closing_tag
+                          )
+                      )
+
+                      current=[line]
+                  else:
+                      current=candidate
+
+              if current:
+                  chunks.append(
+                      wrap_blockquote(
+                          opening_tag,
+                          current,
+                          closing_tag
+                      )
+                  )
+
+              return chunks
+
+          def extract_html_blocks(
+              text:str,
+              limit:int
+          )->list[str]:
+              pattern=re.compile(
+                  r"(<blockquote(?:\s+expandable)?>)"
+                  r"(.*?)"
+                  r"(</blockquote>)",
+                  re.DOTALL
+                  | re.IGNORECASE
+              )
+
+              blocks=[]
+              position=0
+
+              for match in pattern.finditer(text):
+                  before=text[
+                      position:match.start()
+                  ].strip()
+
+                  if before:
+                      blocks.extend(
+                          split_plain_block(
+                              before,
+                              limit
+                          )
+                      )
+
+                  blocks.extend(
+                      split_blockquote(
+                          match.group(1),
+                          match.group(2),
+                          match.group(3),
+                          limit
+                      )
+                  )
+
+                  position=match.end()
+
+              after=text[
+                  position:
+              ].strip()
+
+              if after:
+                  blocks.extend(
+                      split_plain_block(
+                          after,
+                          limit
+                      )
+                  )
+
+              return blocks
+
+          def combine_blocks(
+              blocks:list[str],
+              limit:int
+          )->list[str]:
+              chunks=[]
+              current=""
+
+              for block in blocks:
+                  candidate=(
+                      block
+                      if not current
+                      else (
+                          f"{current}\n\n"
+                          f"{block}"
+                      )
+                  )
+
+                  if len(candidate)<=limit:
+                      current=candidate
+                  else:
+                      if current:
+                          chunks.append(
+                              current
+                          )
+
+                      if len(block)<=limit:
+                          current=block
+                      else:
+                          chunks.extend(
+                              split_plain_block(
+                                  block,
+                                  limit
+                              )
+                          )
+                          current=""
+
+              if current:
+                  chunks.append(current)
+
+              return chunks
+
           def split_message(
               text:str,
-              limit:int=3900
+              limit:int=TELEGRAM_LIMIT
           )->list[str]:
               if len(text)<=limit:
                   return [text]
-              chunks=[]
-              current=[]
-              length=0
-              for line in text.splitlines():
-                  line_length=len(line)+1
-                  if current and length+line_length>limit:
-                      chunks.append("\n".join(current))
-                      current=[]
-                      length=0
-                  current.append(line)
-                  length+=line_length
-              if current:
-                  chunks.append("\n".join(current))
-              return chunks
-          async def send_to_telegram(text:str)->None:
+
+              blocks=extract_html_blocks(
+                  text,
+                  limit
+              )
+
+              return combine_blocks(
+                  blocks,
+                  limit
+              )
+
+          async def send_to_telegram(
+              text:str
+          )->None:
               if not BOT_TOKEN or not CHAT_ID:
                   raise RuntimeError(
-                      "BOT_TOKEN или CHAT_ID не настроены"
+                      "BOT_TOKEN или CHAT_ID "
+                      "не настроены"
                   )
+
               url=(
-                  f"https://api.telegram.org/bot"
-                  f"{BOT_TOKEN}/sendMessage"
+                  "https://api.telegram.org/"
+                  f"bot{BOT_TOKEN}/sendMessage"
               )
+
+              chunks=split_message(text)
+
               async with aiohttp.ClientSession() as session:
                   for index,chunk in enumerate(
-                      split_message(text),
+                      chunks,
                       start=1
                   ):
                       payload={
@@ -733,22 +1567,45 @@ jobs:
                           "parse_mode":"HTML",
                           "disable_web_page_preview":True
                       }
+
                       async with session.post(
                           url,
                           json=payload,
                           timeout=HTTP_TIMEOUT
                       ) as response:
                           body=await response.text()
+
                           if response.status!=200:
-                              raise RuntimeError(
-                                  f"Telegram {response.status}: {body}"
+                              print(
+                                  "Ошибка в сообщении "
+                                  f"{index}/"
+                                  f"{len(chunks)}"
                               )
-                          print(f"Отправлено: {index}")
+                              print(chunk)
+
+                              raise RuntimeError(
+                                  "Telegram "
+                                  f"{response.status}: "
+                                  f"{body}"
+                              )
+
+                          print(
+                              "Отправлено: "
+                              f"{index}/"
+                              f"{len(chunks)}"
+                          )
           EOF
+
           cat << 'EOF' > main.py
           import asyncio
-          from datetime import datetime,timedelta,timezone
+          from datetime import (
+              datetime,
+              timedelta,
+              timezone
+          )
+
           import aiohttp
+
           from modules.config import SECTORS_CONFIG
           from modules.formatter import (
               build_ipo_message,
@@ -762,80 +1619,139 @@ jobs:
               fetch_ipo_full_analytics,
               fetch_sector_news
           )
-          from modules.telegram_sender import send_to_telegram
-          def calculate_sector_score(change:float)->int:
+          from modules.telegram_sender import (
+              send_to_telegram
+          )
+
+          def calculate_sector_score(
+              change:float
+          )->int:
               return max(
                   0,
-                  min(100,int(round(50+change*15)))
+                  min(
+                      100,
+                      int(
+                          round(
+                              50+change*15
+                          )
+                      )
+                  )
               )
-          async def run_market_analytics()->None:
+
+          async def run_market_analytics(
+          )->None:
               tickers=sorted({
                   ticker
-                  for config in SECTORS_CONFIG.values()
-                  for ticker in config["tickers"]
+                  for config
+                  in SECTORS_CONFIG.values()
+                  for ticker
+                  in config["tickers"]
               })
+
               market_task=asyncio.create_task(
-                  fetch_all_yahoo_data(tickers)
+                  fetch_all_yahoo_data(
+                      tickers
+                  )
               )
+
               funds_task=asyncio.create_task(
-                  fetch_all_israeli_funds(SECTORS_CONFIG)
+                  fetch_all_israeli_funds(
+                      SECTORS_CONFIG
+                  )
               )
-              market_data,fund_data=await asyncio.gather(
-                  market_task,
-                  funds_task
+
+              market_data,fund_data=(
+                  await asyncio.gather(
+                      market_task,
+                      funds_task
+                  )
               )
+
               results=[]
+
               async with aiohttp.ClientSession() as session:
                   news_tasks={
                       key:asyncio.create_task(
                           fetch_sector_news(
                               session,
-                              config["news_ticker"]
+                              config[
+                                  "news_ticker"
+                              ]
                           )
                       )
-                      for key,config in SECTORS_CONFIG.items()
+                      for key,config
+                      in SECTORS_CONFIG.items()
                   }
-                  for key,config in SECTORS_CONFIG.items():
+
+                  for key,config in (
+                      SECTORS_CONFIG.items()
+                  ):
                       ticker_rows=[
                           (
                               ticker,
                               market_data.get(
                                   ticker,
                                   {}
-                              ).get("change",0.0)
+                              ).get(
+                                  "change",
+                                  0.0
+                              )
                           )
-                          for ticker in config["tickers"]
+                          for ticker
+                          in config["tickers"]
                           if market_data.get(
                               ticker,
                               {}
-                          ).get("price",0)>0
+                          ).get(
+                              "price",
+                              0
+                          )>0
                       ]
+
                       changes=[
                           change
-                          for _,change in ticker_rows
+                          for _,change
+                          in ticker_rows
                       ]
+
                       average=(
-                          sum(changes)/len(changes)
+                          sum(changes)
+                          /len(changes)
                           if changes
                           else 0.0
                       )
+
                       top_3=sorted(
                           ticker_rows,
-                          key=lambda item:abs(item[1]),
+                          key=lambda item:abs(
+                              item[1]
+                          ),
                           reverse=True
                       )[:3]
+
                       results.append({
-                          "short_eng":config["short_eng"],
+                          "short_eng":config[
+                              "short_eng"
+                          ],
                           "name":config["name"],
                           "icon":config["icon"],
-                          "fund_id":config["fund_id"],
-                          "il_name_eng":config["il_name_eng"],
-                          "avg_change":round(average,2),
+                          "fund_id":config[
+                              "fund_id"
+                          ],
+                          "il_name_eng":config[
+                              "il_name_eng"
+                          ],
+                          "avg_change":round(
+                              average,
+                              2
+                          ),
                           "top_3_tickers":top_3,
                           "score":calculate_sector_score(
                               average
                           ),
-                          "news":await news_tasks[key],
+                          "news":await news_tasks[
+                              key
+                          ],
                           "il_fund_data":fund_data.get(
                               key,
                               {
@@ -847,36 +1763,57 @@ jobs:
                               }
                           )
                       })
+
               results.sort(
-                  key=lambda item:item["avg_change"],
+                  key=lambda item:item[
+                      "avg_change"
+                  ],
                   reverse=True
               )
+
               await send_to_telegram(
-                  build_telegram_message(results)
+                  build_telegram_message(
+                      results
+                  )
               )
-          async def run_ipo_digest()->None:
+
+          async def run_ipo_digest(
+          )->None:
               cards=await asyncio.to_thread(
                   fetch_ipo_full_analytics
               )
+
               await send_to_telegram(
-                  build_ipo_message(cards)
+                  build_ipo_message(
+                      cards
+                  )
               )
+
           async def main()->None:
               now=datetime.now(
-                  timezone(timedelta(hours=3))
+                  timezone(
+                      timedelta(hours=3)
+                  )
               )
-              if now.weekday()==5 and now.hour==22:
+
+              if (
+                  now.weekday()==5
+                  and now.hour==22
+              ):
                   await run_ipo_digest()
               else:
                   await run_market_analytics()
+
           if __name__=="__main__":
               asyncio.run(main())
           EOF
-      - name: Install
+
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Validate
+
+      - name: Validate Python
         run: |
           python -m py_compile \
             main.py \
@@ -885,7 +1822,8 @@ jobs:
             modules/news.py \
             modules/formatter.py \
             modules/telegram_sender.py
-      - name: Run
+
+      - name: Run analytics
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
