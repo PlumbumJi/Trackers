@@ -1,18 +1,16 @@
-name: Automated Market Analytics & IPO Digest
+name: Market Analytics & IPO Digest
 
 on:
   schedule:
-    # Ежедневный дайджест рынка в 23:15 по Израилю (20:15 UTC)
-    - cron: '15 20 * * *'
-    # Еженедельный IPO дайджест в Субботу в 22:00 по Израилю (19:00 UTC)
-    - cron: '0 19 * * 6'
+    - cron: '15 20 * * *'  # Ежедневно в 23:15 (Израиль)
+    - cron: '0 19 * * 6'   # Суббота в 22:00 (Израиль)
   workflow_dispatch:
 
 jobs:
   build-and-send:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Source Code
+      - name: Checkout Code
         uses: actions/checkout@v4.2.2
 
       - name: Set up Python
@@ -20,10 +18,9 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Deploy Architecture Files
+      - name: Build Project Structure
         run: |
           mkdir -p modules
-          touch modules/__init__.py
           
           cat << 'EOF' > requirements.txt
           aiohttp==3.11.11
@@ -42,90 +39,38 @@ jobs:
 
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
-              "Cache-Control": "no-cache",
-              "Pragma": "no-cache"
+              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7"
           }
 
           SECTORS_CONFIG = {
-              "Oil": {
-                  "name": "Нефть и Энергетика", "icon": "🛢️", "short_eng": "Oil", "news_ticker": "USO", 
-                  "fund_id": "5141841", "il_name_eng": "Barak Ultra WTI x3", 
-                  "tickers": ["BZ=F", "CL=F", "USO", "OVX", "XLE", "VLO"]
-              },
-              "AI": {
-                  "name": "Искусственный Интеллект", "icon": "🤖", "short_eng": "AI", "news_ticker": "NVDA", 
-                  "fund_id": "5140744", "il_name_eng": "Migdal AI", 
-                  "tickers": ["NVDA", "MSFT", "AMD", "AVGO", "PLTR", "GOOGL", "AMZN", "BOTZ"]
-              },
-              "Cybersecurity": {
-                  "name": "Кибербезопасность", "icon": "🛡️", "short_eng": "Cyber", "news_ticker": "CIBR", 
-                  "fund_id": "5135025", "il_name_eng": "IBI Global Cyber", 
-                  "tickers": ["CIBR", "HACK", "CRWD", "PANW", "FTNT", "ZS", "NET"]
-              },
-              "Gaming": {
-                  "name": "Игровая Индустрия", "icon": "🎮", "short_eng": "Game", "news_ticker": "SONY", 
-                  "fund_id": "5128624", "il_name_eng": "MTF Bluestar E-Games", 
-                  "tickers": ["NVDA", "MSFT", "TTWO", "EA", "RBLX", "SONY", "NTDOY", "HERO"]
-              },
-              "Gold": {
-                  "name": "Золото и Металлы", "icon": "🥇", "short_eng": "Gold", "news_ticker": "GLD", 
-                  "fund_id": "5100961", "il_name_eng": "Meitav Gold", 
-                  "tickers": ["GLD", "GDX", "SLV", "NEM", "GOLD"]
-              },
-              "Clean Energy": {
-                  "name": "Зеленая энергетика", "icon": "☀️", "short_eng": "Clean", "news_ticker": "FSLR", 
-                  "fund_id": "5136148", "il_name_eng": "Yelin Green Energy", 
-                  "tickers": ["ICLN", "TAN", "FAN", "FSLR", "ENPH", "SEDG"]
-              },
-              "Aerospace": {
-                  "name": "Авиация и Космос", "icon": "✈️", "short_eng": "Aero", "news_ticker": "ITA", 
-                  "fund_id": "5125752", "il_name_eng": "MTF Aerospace & Def", 
-                  "tickers": ["BA", "EADSY", "LMT", "RTX", "ITA", "NOC"]
-              },
-              "Biotech": {
-                  "name": "Биотех и Медицина", "icon": "🧬", "short_eng": "Bio", "news_ticker": "LLY", 
-                  "fund_id": "5131206", "il_name_eng": "KSM Nasdaq Biotech", 
-                  "tickers": ["LLY", "NVO", "PFE", "MRNA", "AMGN", "XBI", "IBB"]
-              },
-              "Banking": {
-                  "name": "Банковский сектор", "icon": "🏦", "short_eng": "Bank", "news_ticker": "JPM", 
-                  "fund_id": "5133236", "il_name_eng": "ATF Israel Banks", 
-                  "tickers": ["JPM", "BAC", "GS", "MS", "WFC", "XLF", "KBE"]
-              },
-              "Cloud": {
-                  "name": "Облачные технологии", "icon": "☁️", "short_eng": "Cloud", "news_ticker": "WCLD", 
-                  "fund_id": "5132220", "il_name_eng": "More Cloud Cyber", 
-                  "tickers": ["MSFT", "AMZN", "GOOGL", "ORCL", "SNOW", "WCLD", "CLOU"]
-              },
-              "EV": {
-                  "name": "Электромобили", "icon": "🚗", "short_eng": "EV", "news_ticker": "TSLA", 
-                  "fund_id": "5132709", "il_name_eng": "Migdal EV & Auto", 
-                  "tickers": ["TSLA", "BYDDY", "RIVN", "LI", "DRIV", "LCID"]
-              }
+              "Oil": {"name": "Нефть и Энергетика", "icon": "🛢️", "short_eng": "Oil", "news_ticker": "USO", "fund_id": "5141841", "il_name_eng": "Barak Ultra WTI x3", "tickers": ["BZ=F", "CL=F", "USO", "OVX", "XLE", "VLO"]},
+              "AI": {"name": "Искусственный Интеллект", "icon": "🤖", "short_eng": "AI", "news_ticker": "NVDA", "fund_id": "5140744", "il_name_eng": "Migdal AI", "tickers": ["NVDA", "MSFT", "AMD", "AVGO", "PLTR", "GOOGL", "AMZN", "BOTZ"]},
+              "Cybersecurity": {"name": "Кибербезопасность", "icon": "🛡️", "short_eng": "Cyber", "news_ticker": "CIBR", "fund_id": "5135025", "il_name_eng": "IBI Global Cyber", "tickers": ["CIBR", "HACK", "CRWD", "PANW", "FTNT", "ZS", "NET"]},
+              "Gaming": {"name": "Игровая Индустрия", "icon": "🎮", "short_eng": "Game", "news_ticker": "SONY", "fund_id": "5128624", "il_name_eng": "MTF Bluestar E-Games", "tickers": ["NVDA", "MSFT", "TTWO", "EA", "RBLX", "SONY", "NTDOY", "HERO"]},
+              "Gold": {"name": "Золото и Металлы", "icon": "🥇", "short_eng": "Gold", "news_ticker": "GLD", "fund_id": "5100961", "il_name_eng": "Meitav Gold", "tickers": ["GLD", "GDX", "SLV", "NEM", "GOLD"]},
+              "Clean Energy": {"name": "Зеленая энергетика", "icon": "☀️", "short_eng": "Clean", "news_ticker": "FSLR", "fund_id": "5136148", "il_name_eng": "Yelin Green Energy", "tickers": ["ICLN", "TAN", "FAN", "FSLR", "ENPH", "SEDG"]},
+              "Aerospace": {"name": "Авиация и Космос", "icon": "✈️", "short_eng": "Aero", "news_ticker": "ITA", "fund_id": "5125752", "il_name_eng": "MTF Aerospace & Def", "tickers": ["BA", "EADSY", "LMT", "RTX", "ITA", "NOC"]},
+              "Biotech": {"name": "Биотех и Медицина", "icon": "🧬", "short_eng": "Bio", "news_ticker": "LLY", "fund_id": "5131206", "il_name_eng": "KSM Nasdaq Biotech", "tickers": ["LLY", "NVO", "PFE", "MRNA", "AMGN", "XBI", "IBB"]},
+              "Banking": {"name": "Банковский сектор", "icon": "🏦", "short_eng": "Bank", "news_ticker": "JPM", "fund_id": "5133236", "il_name_eng": "ATF Israel Banks", "tickers": ["JPM", "BAC", "GS", "MS", "WFC", "XLF", "KBE"]},
+              "Cloud": {"name": "Облачные технологии", "icon": "☁️", "short_eng": "Cloud", "news_ticker": "WCLD", "fund_id": "5132220", "il_name_eng": "More Cloud Cyber", "tickers": ["MSFT", "AMZN", "GOOGL", "ORCL", "SNOW", "WCLD", "CLOU"]},
+              "EV": {"name": "Электромобили", "icon": "🚗", "short_eng": "EV", "news_ticker": "TSLA", "fund_id": "5132709", "il_name_eng": "Migdal EV & Auto", "tickers": ["TSLA", "BYDDY", "RIVN", "LI", "DRIV", "LCID"]}
           }
           EOF
           
           cat << 'EOF' > modules/market.py
-          import asyncio
-          import re
+          import asyncio, re
           from bs4 import BeautifulSoup
           from playwright.async_api import async_playwright
           import aiohttp
           from modules.config import HTTP_TIMEOUT, HEADERS
 
           def parse_float(val: str) -> float:
-              if not val:
-                  return 0.0
+              if not val: return 0.0
               try:
-                  cleaned = str(val).replace(',', '.').replace('%', '').replace('+', '').strip()
-                  match = re.search(r'([+-]?\d+(?:\.\d+)?)', cleaned)
-                  if match:
-                      return round(float(match.group(1)), 2)
+                  match = re.search(r'([+-]?\d+(?:\.\d+)?)', str(val).replace(',', '.').replace('%', '').replace('+', '').strip())
+                  return round(float(match.group(1)), 2) if match else 0.0
               except Exception:
-                  pass
-              return 0.0
+                  return 0.0
 
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
               api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
@@ -133,92 +78,67 @@ jobs:
               try:
                   async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
                       if response.status == 200:
-                          data = await response.json()
-                          result = data.get("chart", {}).get("result", [])
-                          if result:
-                              meta = result[0].get("meta", {})
-                              price = meta.get("regularMarketPrice")
-                              prev_close = meta.get("chartPreviousClose")
-                              if price is not None and prev_close:
-                                  change = ((price - prev_close) / prev_close) * 100
-                                  return ticker, {"price": round(price, 2), "change": round(change, 2)}
-              except Exception:
-                  pass
+                          meta = (await response.json())["chart"]["result"][0]["meta"]
+                          price, prev_close = meta.get("regularMarketPrice"), meta.get("chartPreviousClose")
+                          if price and prev_close:
+                              return ticker, {"price": round(price, 2), "change": round(((price - prev_close) / prev_close) * 100, 2)}
+              except Exception: pass
               return ticker, {"price": 0.0, "change": 0.0}
 
           async def fetch_all_yahoo_data(tickers: list) -> dict:
               async with aiohttp.ClientSession() as session:
-                  tasks = [fetch_single_ticker(session, t) for t in tickers]
-                  results = await asyncio.gather(*tasks)
-                  return dict(results)
+                  return dict(await asyncio.gather(*[fetch_single_ticker(session, t) for t in tickers]))
 
-          async def scrape_funder_fund_returns(page, fund_id: str) -> dict:
-              """Парсит таблицу תשואות с Funder: День (יומית), Месяц (מתחילת החודש), Год (מתחילת השנה)"""
+          async def scrape_funder_fund_returns(context, fund_id: str) -> dict:
               url = f"https://www.funder.co.il/fund/{fund_id}"
               data = {"daily": 0.0, "mtd": 0.0, "ytd": 0.0}
+              page = await context.new_page()
+              
               try:
-                  await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-                  
-                  # Ожидание элемента таблицы
-                  await page.wait_for_selector("table, div", timeout=5000)
-                  html_text = await page.content()
-                  soup = BeautifulSoup(html_text, 'html.parser')
+                  response = await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                  if not response or response.status != 200:
+                      await page.close()
+                      return data
 
-                  # Точечный поиск по заголовкам таблицы תשואות
-                  headers = soup.find_all(text=re.compile(r'תשואות|יומית|מתחילת החודש|מתחילת השנה'))
-                  
-                  for h in headers:
-                      parent = h.find_parent(['td', 'th', 'tr', 'table', 'div'])
-                      if parent:
-                          block_text = parent.get_text(separator=' ')
-                          # Извлекаем все числа с процентами
-                          percentages = re.findall(r'([+-]?\d+(?:\.\d+)?\s*%)', block_text)
-                          if len(percentages) >= 3:
-                              data["daily"] = parse_float(percentages[0])
-                              data["mtd"] = parse_float(percentages[1])
-                              data["ytd"] = parse_float(percentages[2])
-                              return data
+                  await asyncio.sleep(2)
+                  soup = BeautifulSoup(await page.content(), 'html.parser')
 
-                  # Резервный поиск всех процентов в блоке HTML
-                  all_pcts = re.findall(r'([+-]?\d+\.\d+\s*%)', html_text)
+                  for td in soup.find_all(['td', 'th', 'div']):
+                      text = td.get_text(strip=True)
+                      next_sibling = td.find_next_sibling(['td', 'div'])
+                      if next_sibling:
+                          if 'יומית' in text and not data["daily"]: data["daily"] = parse_float(next_sibling.get_text())
+                          elif 'מתחילת החודש' in text and not data["mtd"]: data["mtd"] = parse_float(next_sibling.get_text())
+                          elif 'מתחילת השנה' in text and not data["ytd"]: data["ytd"] = parse_float(next_sibling.get_text())
+
+                  if any(data.values()):
+                      await page.close()
+                      return data
+
+                  all_pcts = re.findall(r'([+-]?\d+\.\d+\s*%)', soup.get_text())
                   if len(all_pcts) >= 3:
-                      data["daily"] = parse_float(all_pcts[0])
-                      data["mtd"] = parse_float(all_pcts[1])
-                      data["ytd"] = parse_float(all_pcts[2])
+                      data["daily"], data["mtd"], data["ytd"] = parse_float(all_pcts[0]), parse_float(all_pcts[1]), parse_float(all_pcts[2])
 
               except Exception as e:
-                  print(f"⚠️ Ошибка сбора Funder ID {fund_id}: {e}")
+                  print(f"💥 Ошибка Funder ID {fund_id}: {e}")
+              finally:
+                  if not page.is_closed(): await page.close()
 
               return data
 
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
-              results = {}
               async with async_playwright() as p:
-                  browser = await p.chromium.launch(
-                      headless=True,
-                      args=["--no-sandbox", "--disable-setuid-sandbox"]
-                  )
-                  
-                  context = await browser.new_context(
-                      user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                      viewport={"width": 1280, "height": 800},
-                      locale="he-IL"
-                  )
-                  
-                  page = await context.new_page()
+                  browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+                  context = await browser.new_context(user_agent=HEADERS["User-Agent"], locale="he-IL")
+                  semaphore = asyncio.Semaphore(3)
 
-                  for key, cfg in sectors_config.items():
-                      fund_id = cfg.get("fund_id", "")
-                      if fund_id:
-                          print(f"🔍 Парсинг תשואות для {key} (ID: {fund_id})...")
-                          fund_returns = await scrape_funder_fund_returns(page, fund_id)
-                          results[key] = fund_returns
-                      else:
-                          results[key] = {"daily": 0.0, "mtd": 0.0, "ytd": 0.0}
+                  async def worker(key, cfg):
+                      async with semaphore:
+                          return key, await scrape_funder_fund_returns(context, cfg.get("fund_id", "")) if cfg.get("fund_id") else (key, {"daily": 0.0, "mtd": 0.0, "ytd": 0.0})
 
+                  results = dict(await asyncio.gather(*[worker(k, c) for k, c in sectors_config.items()]))
                   await browser.close()
-                  
-              return results
+                  return results
           EOF
           
           cat << 'EOF' > modules/news.py
@@ -227,70 +147,38 @@ jobs:
           from modules.config import HTTP_TIMEOUT, HEADERS
 
           async def translate_to_russian(session: aiohttp.ClientSession, text: str) -> str:
-              if not text:
-                  return text
               try:
                   url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ru&dt=t&q={urllib.parse.quote(text)}"
-                  async with session.get(url, timeout=6) as resp:
+                  async with session.get(url, timeout=5) as resp:
                       if resp.status == 200:
-                          data = await resp.json()
-                          translated = "".join([segment[0] for segment in data[0] if segment[0]])
-                          return html.unescape(translated)
-              except Exception:
-                  pass
+                          return html.unescape("".join([s[0] for s in (await resp.json())[0] if s[0]]))
+              except Exception: pass
               return text
 
           async def fetch_sector_news(session: aiohttp.ClientSession, query_ticker: str) -> list:
-              url = f"https://query1.finance.yahoo.com/v1/finance/search?q={query_ticker}"
               try:
+                  url = f"https://query1.finance.yahoo.com/v1/finance/search?q={query_ticker}"
                   async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
                       if response.status == 200:
-                          items = (await response.json()).get("news", [])
-                          for item in items:
+                          for item in (await response.json()).get("news", []):
                               title = item.get("title", "")
-                              if title and len(title) > 15:
-                                  translated_title = await translate_to_russian(session, title)
-                                  return [f"• {translated_title}"]
-              except Exception:
-                  pass
+                              if len(title) > 15:
+                                  return [f"• {await translate_to_russian(session, title)}"]
+              except Exception: pass
               return ["• Торгуется в рамках текущей рыночной динамики."]
 
           def get_single_ipo_card(symbol: str, name: str, ipo_date: str, fallback_price: str) -> str:
               try:
-                  t = yf.Ticker(symbol)
-                  info = t.info
-                  
-                  current_price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("open")
-                  price_str = f"${current_price:.2f}" if current_price else fallback_price
-                  
+                  info = yf.Ticker(symbol).info
+                  price = info.get("currentPrice") or info.get("regularMarketPrice") or fallback_price
+                  price_str = f"${price:.2f}" if isinstance(price, (int, float)) else price
                   rec = str(info.get("recommendationKey", "N/A")).replace("_", " ").upper()
-                  target = info.get("targetMeanPrice")
-                  target_str = f"${target:.2f}" if target else "Н/Д"
+                  target = f"${info['targetMeanPrice']:.2f}" if info.get("targetMeanPrice") else "Н/Д"
                   
-                  rec_map = {
-                      "STRONG BUY": "🔥 Strong Buy",
-                      "BUY": "🟢 Buy (Покупать)",
-                      "HOLD": "🟡 Hold (Удерживать)",
-                      "UNDERPERFORM": "🟠 Underperform",
-                      "SELL": "🔴 Sell (Продавать)",
-                      "N/A": "⚪️ Ожидает оценки"
-                  }
-                  rec_formatted = rec_map.get(rec, rec)
-
-                  return (
-                      f"📌 <b>{name}</b> (<code>{symbol}</code>)\n"
-                      f"🗓 <b>Дата IPO:</b> {ipo_date}\n"
-                      f"💵 <b>Курс / Диапазон:</b> {price_str}\n"
-                      f"🎯 <b>Цель Wall St:</b> {target_str}\n"
-                      f"🧠 <b>Консенсус:</b> {rec_formatted}\n"
-                  )
+                  rec_map = {"STRONG BUY": "🔥 Strong Buy", "BUY": "🟢 Buy", "HOLD": "🟡 Hold", "SELL": "🔴 Sell"}
+                  return f"📌 <b>{name}</b> (<code>{symbol}</code>)\n🗓 <b>IPO:</b> {ipo_date}\n💵 <b>Курс:</b> {price_str}\n🎯 <b>Цель:</b> {target}\n🧠 <b>Консенсус:</b> {rec_map.get(rec, rec)}\n"
               except Exception:
-                  return (
-                      f"📌 <b>{name}</b> (<code>{symbol}</code>)\n"
-                      f"🗓 <b>Дата IPO:</b> {ipo_date}\n"
-                      f"💵 <b>Курс:</b> {fallback_price}\n"
-                      f"🧠 <b>Консенсус:</b> ⚪️ В процессе оценки\n"
-                  )
+                  return f"📌 <b>{name}</b> (<code>{symbol}</code>)\n🗓 <b>IPO:</b> {ipo_date}\n💵 <b>Курс:</b> {fallback_price}\n🧠 <b>Консенсус:</b> ⚪️ Ожидает оценки\n"
 
           def fetch_ipo_full_analytics() -> list:
               ipo_targets = [
@@ -299,11 +187,7 @@ jobs:
                   {"symbol": "KVUE", "name": "Kenvue Inc.", "date": "04.05.2023", "price": "$22.00"},
                   {"symbol": "IPO", "name": "Renaissance IPO ETF", "date": "ETF Фонд", "price": "Рыночная"}
               ]
-              cards = []
-              for target in ipo_targets:
-                  card = get_single_ipo_card(target["symbol"], target["name"], target["date"], target["price"])
-                  cards.append(card)
-              return cards
+              return [get_single_ipo_card(t["symbol"], t["name"], t["date"], t["price"]) for t in ipo_targets]
           EOF
           
           cat << 'EOF' > modules/formatter.py
@@ -314,151 +198,51 @@ jobs:
               return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
           def build_telegram_message(sectors_data: list) -> str:
-              tz_il = timezone(timedelta(hours=3))
-              now_str = datetime.now(tz_il).strftime("%d.%m.%Y | %H:%M")
-              
-              lines = [
-                  "📈 <b>Рыночный Дайджест</b>",
-                  f"📅 {now_str} (IDT) 🇮🇱\n",
-                  "<b>📊 ОБЗОР СЕКТОРОВ (US) И ФОНДОВ (IL)</b>",
-                  "<code>Сектор       US      IL   Рейтинг</code>",
-                  "<code>"
-              ]
+              now_str = datetime.now(timezone(timedelta(hours=3))).strftime("%d.%m.%Y | %H:%M")
+              lines = ["📈 <b>Рыночный Дайджест</b>", f"📅 {now_str} (IDT) 🇮🇱\n", "<b>📊 ОБЗОР СЕКТОРОВ (US) И ФОНДОВ (IL)</b>", "<code>Сектор       US      IL   Рейтинг</code>", "<code>"]
               
               for s in sectors_data:
-                  icon = s['icon']
-                  name = s['short_eng'][:6]
-                  us_ch = s['avg_change']
-                  il_ch = s['il_fund_data']['daily']
-                  
-                  us_str = f"+{us_ch:.1f}%" if us_ch > 0 else f"{us_ch:.1f}%"
-                  il_str = f"+{il_ch:.1f}%" if il_ch > 0 else f"{il_ch:.1f}%"
-                  
+                  us_str = f"{s['avg_change']:+.1f}%"
+                  il_str = f"{s['il_fund_data']['daily']:+.1f}%"
                   score_emoji = "🟢" if s['score'] >= 65 else ("🟡" if s['score'] >= 40 else "🔴")
-                  lines.append(f"{icon}{name:<6} {us_str:>6} {il_str:>6}  {score_emoji}{s['score']:>3}/100")
-              lines.append("</code>\n")
+                  lines.append(f"{s['icon']}{s['short_eng'][:6]:<6} {us_str:>6} {il_str:>6}  {score_emoji}{s['score']:>3}/100")
+              lines.append("</code>\n<blockquote expandable>🔍 <b>ДРАЙВЕРЫ ДВИЖЕНИЯ И ПОКАЗАТЕЛИ СЕКТОРОВ</b>\n")
 
-              lines.append("<blockquote expandable>")
-              lines.append("🔍 <b>ДРАЙВЕРЫ ДВИЖЕНИЯ И ПОКАЗАТЕЛИ СЕКТОРОВ</b>\n")
               for s in sectors_data:
-                  ch_sign = f"+{s['avg_change']:.2f}%" if s['avg_change'] > 0 else f"{s['avg_change']:.2f}%"
-                  lines.append(f"<b>{s['icon']} {escape_html(s['name'])}</b> ({ch_sign})")
-                  
+                  lines.append(f"<b>{s['icon']} {escape_html(s['name'])}</b> ({s['avg_change']:+.2f}%)")
                   if s.get("top_3_tickers"):
-                      details_str = ", ".join([f"{t}: {c:+.2f}%" for t, c in s["top_3_tickers"]])
-                      lines.append(f"  📊 <i>Топ-3 драйвера: [{escape_html(details_str)}]</i>")
-                      
-                  for n in s['news']:
-                      lines.append(f"  {escape_html(n)}")
+                      lines.append(f"  📊 <i>Топ-3: [{escape_html(', '.join([f'{t}: {c:+.2f}%' for t, c in s['top_3_tickers']]))}]</i>")
+                  for n in s['news']: lines.append(f"  {escape_html(n)}")
                   lines.append("")
-              lines.append("</blockquote>\n")
+              lines.append("</blockquote>\n<blockquote expandable>🇮🇱 <b>ДОХОДНОСТЬ ИЗРАИЛЬСКИХ ФОНДОВ (תשואות)</b>\n")
 
-              ta_stocks_sorted = sorted(sectors_data, key=lambda x: x['il_fund_data']['daily'], reverse=True)
-
-              lines.append("<blockquote expandable>")
-              lines.append("🇮🇱 <b>ДОХОДНОСТЬ ИЗРАИЛЬСКИХ ФОНДОВ (תשואות)</b>\n")
-              for s in ta_stocks_sorted:
-                  f_data = s['il_fund_data']
-                  d_ch = f_data['daily']
-                  mtd_ch = f_data['mtd']
-                  ytd_ch = f_data['ytd']
-                  
-                  ch_emoji = "🟢" if d_ch > 0 else ("🔴" if d_ch < 0 else "⚪")
-                  
-                  d_str = f"+{d_ch:.2f}%" if d_ch > 0 else f"{d_ch:.2f}%"
-                  mtd_str = f"+{mtd_ch:.2f}%" if mtd_ch > 0 else f"{mtd_ch:.2f}%"
-                  ytd_str = f"+{ytd_ch:.2f}%" if ytd_ch > 0 else f"{ytd_ch:.2f}%"
-                  
+              for s in sorted(sectors_data, key=lambda x: x['il_fund_data']['daily'], reverse=True):
+                  f = s['il_fund_data']
                   lines.append(
-                      f"{ch_emoji} <b>{escape_html(s['il_name_eng'])}</b> ({s['icon']})\n"
-                      f"└ <code>{s['fund_id']}</code> · <b>День: {d_str}</b> | <b>Месяц: {mtd_str}</b> | <b>Год: {ytd_str}</b>"
+                      f"{'🟢' if f['daily'] > 0 else '🔴'} <b>{escape_html(s['il_name_eng'])}</b> ({s['icon']})\n"
+                      f"└ <code>{s['fund_id']}</code> · <b>День: {f['daily']:+.2f}%</b> | <b>Месяц: {f['mtd']:+.2f}%</b> | <b>Год: {f['ytd']:+.2f}%</b>"
                   )
-              lines.append("</blockquote>")
-
-              lines.append(f"\n{BOT_NAME}")
+              lines.append(f"</blockquote>\n\n{BOT_NAME}")
               return "\n".join(lines)
 
           def build_ipo_message(ipo_cards: list) -> str:
-              tz_il = timezone(timedelta(hours=3))
-              now_str = datetime.now(tz_il).strftime("%d.%m.%Y")
-              
-              lines = [
-                  "🔔 <b>ЕЖЕНЕДЕЛЬНЫЙ IPO ДАЙДЖЕСТ</b>",
-                  f"📅 {now_str} | Субботний обзор 🇮🇱\n",
-                  "<blockquote expandable>"
-              ]
-              for card in ipo_cards:
-                  lines.append(f"{card}")
-              lines.append("</blockquote>")
-              lines.append(f"\n{BOT_NAME}")
-              return "\n".join(lines)
+              now_str = datetime.now(timezone(timedelta(hours=3))).strftime("%d.%m.%Y")
+              return f"🔔 <b>ЕЖЕНЕДЕЛЬНЫЙ IPO ДАЙДЖЕСТ</b>\n📅 {now_str} | Обзор 🇮🇱\n\n<blockquote expandable>\n" + "\n".join(ipo_cards) + f"</blockquote>\n\n{BOT_NAME}"
           EOF
           
           cat << 'EOF' > modules/telegram_sender.py
           import aiohttp
           from modules.config import BOT_TOKEN, CHAT_ID, HTTP_TIMEOUT
 
-          def split_message(text: str, max_length: int = 4000) -> list[str]:
-              if len(text) <= max_length:
-                  return [text]
-              
-              chunks = []
-              raw_blocks = text.split("</blockquote>")
-              current_chunk = ""
-
-              for raw_block in raw_blocks:
-                  if not raw_block:
-                      continue
-                  
-                  block = raw_block + "</blockquote>" if "blockquote" in raw_block else raw_block
-
-                  if len(current_chunk) + len(block) > max_length:
-                      if current_chunk:
-                          chunks.append(current_chunk.strip())
-                          current_chunk = ""
-                      
-                      if len(block) > max_length:
-                          lines = block.split("\n")
-                          for line in lines:
-                              if len(current_chunk) + len(line) + 1 > max_length:
-                                  chunks.append(current_chunk.strip())
-                                  current_chunk = line + "\n"
-                              else:
-                                  current_chunk += line + "\n"
-                      else:
-                          current_chunk = block
-                  else:
-                      current_chunk += block
-
-              if current_chunk.strip():
-                  chunks.append(current_chunk.strip())
-
-              return chunks
-
           async def send_to_telegram(text: str):
-              if not BOT_TOKEN or not CHAT_ID:
-                  print("❌ BOT_TOKEN или CHAT_ID не найдены")
-                  return
-
+              if not BOT_TOKEN or not CHAT_ID: return
               url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-              chunks = split_message(text, max_length=3900)
               
-              print(f"ℹ️ Сообщение длинной {len(text)} символов. Отправка {len(chunks)} частей...")
-              
+              chunks = [text[i:i+3900] for i in range(0, len(text), 3900)]
               async with aiohttp.ClientSession() as session:
-                  for idx, chunk in enumerate(chunks, start=1):
-                      payload = {
-                          "chat_id": CHAT_ID, 
-                          "text": chunk, 
-                          "parse_mode": "HTML", 
-                          "disable_web_page_preview": True
-                      }
+                  for chunk in chunks:
                       try:
-                          async with session.post(url, json=payload, timeout=HTTP_TIMEOUT) as resp:
-                              if resp.status == 200:
-                                  print(f"🚀 Часть [{idx}/{len(chunks)}] успешно отправлена!")
-                              else:
-                                  print(f"❌ Ошибка Telegram ({resp.status}): {await resp.text()}")
+                          await session.post(url, json={"chat_id": CHAT_ID, "text": chunk, "parse_mode": "HTML", "disable_web_page_preview": True}, timeout=HTTP_TIMEOUT)
                       except Exception as e:
                           print(f"💥 Ошибка отправки: {e}")
           EOF
@@ -472,65 +256,34 @@ jobs:
           from modules.formatter import build_telegram_message, build_ipo_message
           from modules.telegram_sender import send_to_telegram
 
-          def calculate_sector_score(avg_change: float) -> int:
-              return max(0, min(100, int(50 + (avg_change * 15.0))))
-
           async def run_market_analytics():
-              all_tickers = set()
-              for cfg in SECTORS_CONFIG.values():
-                  all_tickers.update(cfg["tickers"])
-              
-              print(f"📦 Сбор данных Yahoo Finance...")
+              all_tickers = {t for cfg in SECTORS_CONFIG.values() for t in cfg["tickers"]}
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
-
-              print(f"🌐 Опрос таблицы תשואות Funder via Playwright...")
               il_results = await fetch_all_israeli_funds(SECTORS_CONFIG)
 
               async with aiohttp.ClientSession() as session:
                   sectors_results = []
-                  
                   for key, cfg in SECTORS_CONFIG.items():
                       ticker_details = [(t, global_market_data[t]["change"]) for t in cfg["tickers"] if t in global_market_data and global_market_data[t]["price"] > 0]
-                      
-                      sorted_tickers = sorted(ticker_details, key=lambda x: abs(x[1]), reverse=True)
-                      top_3_tickers = sorted_tickers[:3]
-                      
-                      valid_changes = [c for _, c in ticker_details]
-                      avg_change = sum(valid_changes) / len(valid_changes) if valid_changes else 0.0
-                      
-                      score = calculate_sector_score(avg_change)
-                      news = await fetch_sector_news(session, cfg["news_ticker"])
+                      avg_change = sum(c for _, c in ticker_details) / len(ticker_details) if ticker_details else 0.0
                       
                       sectors_results.append({
-                          "short_eng": cfg["short_eng"],
-                          "name": cfg["name"],
-                          "icon": cfg["icon"],
-                          "fund_id": cfg.get("fund_id", ""),
-                          "avg_change": round(avg_change, 2),
-                          "top_3_tickers": top_3_tickers,
-                          "score": score,
-                          "news": news,
+                          "short_eng": cfg["short_eng"], "name": cfg["name"], "icon": cfg["icon"],
+                          "fund_id": cfg.get("fund_id", ""), "avg_change": round(avg_change, 2),
+                          "top_3_tickers": sorted(ticker_details, key=lambda x: abs(x[1]), reverse=True)[:3],
+                          "score": max(0, min(100, int(50 + (avg_change * 15.0)))),
+                          "news": await fetch_sector_news(session, cfg["news_ticker"]),
                           "il_name_eng": cfg["il_name_eng"],
                           "il_fund_data": il_results.get(key, {"daily": 0.0, "mtd": 0.0, "ytd": 0.0})
                       })
                   
                   sectors_results.sort(key=lambda x: x["avg_change"], reverse=True)
-                      
-                  message = build_telegram_message(sectors_results)
-                  await send_to_telegram(message)
-
-          async def run_ipo_digest():
-              print("📊 Формирование IPO отчета...")
-              ipo_cards = fetch_ipo_full_analytics()
-              message = build_ipo_message(ipo_cards)
-              await send_to_telegram(message)
+                  await send_to_telegram(build_telegram_message(sectors_results))
 
           async def main():
-              tz_il = timezone(timedelta(hours=3))
-              now = datetime.now(tz_il)
-              
+              now = datetime.now(timezone(timedelta(hours=3)))
               if now.weekday() == 5 and now.hour == 22:
-                  await run_ipo_digest()
+                  await send_to_telegram(build_ipo_message(fetch_ipo_full_analytics()))
               else:
                   await run_market_analytics()
 
@@ -538,13 +291,12 @@ jobs:
               asyncio.run(main())
           EOF
 
-      - name: Install Dependencies & Playwright Browsers
+      - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
           pip install -r requirements.txt
           playwright install --with-deps chromium
 
-      - name: Run Analytics Engine
+      - name: Run Engine
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
