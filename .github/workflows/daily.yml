@@ -152,73 +152,46 @@ jobs:
                   results = await asyncio.gather(*tasks)
                   return dict(results)
 
-          async def scrape_funder_fund_returns(context, fund_id: str) -> dict:
-              """Извлекает доходность (יומית, מתחילת החודש, מתחילת השנה) с универсальной обработкой верстки Funder."""
+          async def scrape_funder_fund_returns(page, fund_id: str) -> dict:
+              """Полный сканирующий парсинг всей страницы Funder по всему тексту DOM"""
               url = f"https://www.funder.co.il/fund/{fund_id}"
               data = {"daily": 0.0, "mtd": 0.0, "ytd": 0.0}
-              page = await context.new_page()
               
               try:
-                  response = await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-                  if not response or response.status != 200:
-                      print(f"⚠️ Ошибка загрузки Funder ID {fund_id} (Status: {response.status if response else 'No response'})")
-                      await page.close()
-                      return data
+                  await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                  await asyncio.sleep(2.5)
+                  
+                  full_text = await page.evaluate("() => document.body.innerText")
+                  full_html = await page.content()
 
-                  await asyncio.sleep(2)
+                  # Contextual regex search
+                  daily_match = re.search(r'(?:יומית|תשואה יומית)[^\d%+-]{0,35}([+-]?\d+(?:\.\d+)?\s*%)', full_text)
+                  if daily_match:
+                      data["daily"] = parse_float(daily_match.group(1))
 
-                  html_text = await page.content()
-                  soup = BeautifulSoup(html_text, 'html.parser')
+                  mtd_match = re.search(r'(?:מתחילת החודש|תשואה חודשית)[^\d%+-]{0,35}([+-]?\d+(?:\.\d+)?\s*%)', full_text)
+                  if mtd_match:
+                      data["mtd"] = parse_float(mtd_match.group(1))
 
-                  daily_val, mtd_val, ytd_val = None, None, None
+                  ytd_match = re.search(r'(?:מתחילת השנה|תשואה שנתית)[^\d%+-]{0,35}([+-]?\d+(?:\.\d+)?\s*%)', full_text)
+                  if ytd_match:
+                      data["ytd"] = parse_float(ytd_match.group(1))
 
-                  for td in soup.find_all(['td', 'th', 'div']):
-                      text = td.get_text(strip=True)
-                      if 'יומית' in text and not daily_val:
-                          next_sibling = td.find_next_sibling(['td', 'div'])
-                          if next_sibling:
-                              daily_val = parse_float(next_sibling.get_text())
-                      elif 'מתחילת החודש' in text and not mtd_val:
-                          next_sibling = td.find_next_sibling(['td', 'div'])
-                          if next_sibling:
-                              mtd_val = parse_float(next_sibling.get_text())
-                      elif 'מתחילת השנה' in text and not ytd_val:
-                          next_sibling = td.find_next_sibling(['td', 'div'])
-                          if next_sibling:
-                              ytd_val = parse_float(next_sibling.get_text())
+                  # Fallback HTML scan
+                  if data["daily"] == 0.0 and data["mtd"] == 0.0 and data["ytd"] == 0.0:
+                      soup = BeautifulSoup(full_html, 'html.parser')
+                      all_pct_nodes = soup.find_all(string=re.compile(r'[+-]?\d+\.\d+\s*%'))
+                      extracted_vals = [parse_float(n) for n in all_pct_nodes if parse_float(n) != 0.0]
+                      
+                      if len(extracted_vals) >= 3:
+                          data["daily"] = extracted_vals[0]
+                          data["mtd"] = extracted_vals[1]
+                          data["ytd"] = extracted_vals[2]
 
-                  if daily_val is not None or mtd_val is not None or ytd_val is not None:
-                      data["daily"] = daily_val or 0.0
-                      data["mtd"] = mtd_val or 0.0
-                      data["ytd"] = ytd_val or 0.0
-                      print(f"✅ Успешно распарсен Funder ID {fund_id}: {data}")
-                      await page.close()
-                      return data
-
-                  for table in soup.find_all('table'):
-                      table_text = table.get_text(separator=' ')
-                      if 'תשואות' in table_text or 'יומית' in table_text:
-                          pcts = re.findall(r'([+-]?\d+(?:\.\d+)?\s*%)', table_text)
-                          if len(pcts) >= 3:
-                              data["daily"] = parse_float(pcts[0])
-                              data["mtd"] = parse_float(pcts[1])
-                              data["ytd"] = parse_float(pcts[2])
-                              print(f"✅ Успешно (Стратегия 2) Funder ID {fund_id}: {data}")
-                              await page.close()
-                              return data
-
-                  all_pcts = re.findall(r'([+-]?\d+\.\d+\s*%)', html_text)
-                  if len(all_pcts) >= 3:
-                      data["daily"] = parse_float(all_pcts[0])
-                      data["mtd"] = parse_float(all_pcts[1])
-                      data["ytd"] = parse_float(all_pcts[2])
-                      print(f"⚠️ Использован резервный поиск для Funder ID {fund_id}: {data}")
+                  print(f"✅ ID {fund_id} -> День: {data['daily']}%, Месяц: {data['mtd']}%, Год: {data['ytd']}%")
 
               except Exception as e:
-                  print(f"💥 Ошибка сбора Funder ID {fund_id}: {e}")
-              finally:
-                  if not page.is_closed():
-                      await page.close()
+                  print(f"⚠️ Ошибка сканирования Funder ID {fund_id}: {e}")
 
               return data
 
@@ -227,38 +200,27 @@ jobs:
               async with async_playwright() as p:
                   browser = await p.chromium.launch(
                       headless=True,
-                      args=[
-                          "--no-sandbox",
-                          "--disable-setuid-sandbox",
-                          "--disable-blink-features=AutomationControlled",
-                          "--disable-dev-shm-usage"
-                      ]
+                      args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
                   )
                   
                   context = await browser.new_context(
                       user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                      viewport={"width": 1440, "height": 900},
+                      viewport={"width": 1280, "height": 800},
                       locale="he-IL"
                   )
 
-                  await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
-                  semaphore = asyncio.Semaphore(3)
-
-                  async def worker(key, cfg):
-                      async with semaphore:
-                          fund_id = cfg.get("fund_id", "")
-                          if fund_id:
-                              print(f"🔍 Начинаем парсинг Funder ID {fund_id} ({key})...")
-                              res = await scrape_funder_fund_returns(context, fund_id)
-                              return key, res
-                          return key, {"daily": 0.0, "mtd": 0.0, "ytd": 0.0}
-
-                  tasks = [worker(key, cfg) for key, cfg in sectors_config.items()]
-                  completed = await asyncio.gather(*tasks)
-
-                  for key, res in completed:
-                      results[key] = res
+                  for key, cfg in sectors_config.items():
+                      fund_id = cfg.get("fund_id", "")
+                      if fund_id:
+                          print(f"🔍 Сканирование DOM/текста для {key} (ID: {fund_id})...")
+                          page = await context.new_page()
+                          try:
+                              fund_returns = await scrape_funder_fund_returns(page, fund_id)
+                              results[key] = fund_returns
+                          finally:
+                              await page.close()
+                      else:
+                          results[key] = {"daily": 0.0, "mtd": 0.0, "ytd": 0.0}
 
                   await browser.close()
                   
