@@ -34,11 +34,12 @@ jobs:
           
           cat << 'EOF' > modules/config.py
           import os
+
           BOT_TOKEN = os.getenv("BOT_TOKEN")
           CHAT_ID = os.getenv("CHAT_ID")
           HTTP_TIMEOUT = 15
           BOT_NAME = "@oil_tracker_pavel_bot"
-          
+
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -50,73 +51,58 @@ jobs:
           SECTORS_CONFIG = {
               "Oil": {
                   "name": "Нефть и Энергетика", "icon": "🛢️", "short_eng": "Oil", "news_ticker": "USO", 
-                  "fund_id": "5141841", "il_name_eng": "WTI Ultra x3", 
+                  "fund_id": "5141841", "il_name_eng": "Barak Ultra WTI x3", 
                   "tickers": ["BZ=F", "CL=F", "USO", "OVX", "XLE", "VLO"]
+              },
+              "AI": {
+                  "name": "Искусственный Интеллект", "icon": "🤖", "short_eng": "AI", "news_ticker": "NVDA", 
+                  "fund_id": "5140744", "il_name_eng": "Migdal AI", 
+                  "tickers": ["NVDA", "MSFT", "AMD", "AVGO", "PLTR", "GOOGL", "AMZN", "BOTZ"]
               },
               "Cybersecurity": {
                   "name": "Кибербезопасность", "icon": "🛡️", "short_eng": "Cyber", "news_ticker": "CIBR", 
-                  "fund_id": "5140744", "il_name_eng": "IBI Cybersecurity", 
+                  "fund_id": "5135025", "il_name_eng": "IBI Global Cyber", 
                   "tickers": ["CIBR", "HACK", "CRWD", "PANW", "FTNT", "ZS", "NET"]
+              },
+              "Gaming": {
+                  "name": "Игровая Индустрия", "icon": "🎮", "short_eng": "Game", "news_ticker": "SONY", 
+                  "fund_id": "5128624", "il_name_eng": "MTF Bluestar E-Games", 
+                  "tickers": ["NVDA", "MSFT", "TTWO", "EA", "RBLX", "SONY", "NTDOY", "HERO"]
               },
               "Gold": {
                   "name": "Золото и Металлы", "icon": "🥇", "short_eng": "Gold", "news_ticker": "GLD", 
-                  "fund_id": "5128624", "il_name_eng": "Tachlit Gold Spot", 
+                  "fund_id": "5100961", "il_name_eng": "Meitav Gold", 
                   "tickers": ["GLD", "GDX", "SLV", "NEM", "GOLD"]
               },
               "Clean Energy": {
                   "name": "Зеленая энергетика", "icon": "☀️", "short_eng": "Clean", "news_ticker": "FSLR", 
-                  "fund_id": "5138136", "il_name_eng": "Meitav Clean Energy", 
+                  "fund_id": "5136148", "il_name_eng": "Yelin Green Energy", 
                   "tickers": ["ICLN", "TAN", "FAN", "FSLR", "ENPH", "SEDG"]
               },
               "Aerospace": {
                   "name": "Авиация и Космос", "icon": "✈️", "short_eng": "Aero", "news_ticker": "ITA", 
-                  "fund_id": "5135116", "il_name_eng": "Tachlit US Aerospace", 
+                  "fund_id": "5125752", "il_name_eng": "MTF Aerospace & Def", 
                   "tickers": ["BA", "EADSY", "LMT", "RTX", "ITA", "NOC"]
               },
               "Biotech": {
-                  "name": "Биотех и Медицина", "icon": "🏥", "short_eng": "Bio", "news_ticker": "LLY", 
-                  "fund_id": "5122965", "il_name_eng": "Harel Nasdaq Biotech", 
+                  "name": "Биотех и Медицина", "icon": "🧬", "short_eng": "Bio", "news_ticker": "LLY", 
+                  "fund_id": "5131206", "il_name_eng": "KSM Nasdaq Biotech", 
                   "tickers": ["LLY", "NVO", "PFE", "MRNA", "AMGN", "XBI", "IBB"]
-              },
-              "Cloud": {
-                  "name": "Облачные технологии", "icon": "☁️", "short_eng": "Cloud", "news_ticker": "WCLD", 
-                  "fund_id": "5131014", "il_name_eng": "Harel Cloud Comp.", 
-                  "tickers": ["MSFT", "AMZN", "GOOGL", "ORCL", "SNOW", "WCLD", "CLOU"]
               },
               "Banking": {
                   "name": "Банковский сектор", "icon": "🏦", "short_eng": "Bank", "news_ticker": "JPM", 
-                  "fund_id": "5138144", "il_name_eng": "Meitav Banks US", 
+                  "fund_id": "5133236", "il_name_eng": "ATF Israel Banks", 
                   "tickers": ["JPM", "BAC", "GS", "MS", "WFC", "XLF", "KBE"]
               },
-              "Uranium": {
-                  "name": "Уран и Атомная энергетика", "icon": "☢️", "short_eng": "Uran", "news_ticker": "CCJ", 
-                  "fund_id": "5138763", "il_name_eng": "More Uranium Giants", 
-                  "tickers": ["URA", "URNM", "CCJ", "NXE", "DNN"]
-              },
-              "Gaming": {
-                  "name": "Игровая Индустрия", "icon": "🎮", "short_eng": "Game", "news_ticker": "SONY", 
-                  "fund_id": "5130198", "il_name_eng": "MTF Bluestar E-Games", 
-                  "tickers": ["NVDA", "MSFT", "TTWO", "EA", "RBLX", "SONY", "NTDOY", "HERO"]
+              "Cloud": {
+                  "name": "Облачные технологии", "icon": "☁️", "short_eng": "Cloud", "news_ticker": "WCLD", 
+                  "fund_id": "5132220", "il_name_eng": "More Cloud Cyber", 
+                  "tickers": ["MSFT", "AMZN", "GOOGL", "ORCL", "SNOW", "WCLD", "CLOU"]
               },
               "EV": {
                   "name": "Электромобили", "icon": "🚗", "short_eng": "EV", "news_ticker": "TSLA", 
-                  "fund_id": "5132228", "il_name_eng": "Migdal EV & Auto", 
+                  "fund_id": "5132709", "il_name_eng": "Migdal EV & Auto", 
                   "tickers": ["TSLA", "BYDDY", "RIVN", "LI", "DRIV", "LCID"]
-              },
-              "E-Commerce": {
-                  "name": "Электронная коммерция", "icon": "🛒", "short_eng": "Ecom", "news_ticker": "IBUY", 
-                  "fund_id": "5138128", "il_name_eng": "Meitav E-Commerce", 
-                  "tickers": ["AMZN", "SHOP", "MELI", "IBUY", "EBAY", "PDD"]
-              },
-              "Semiconductors": {
-                  "name": "Полупроводники", "icon": "💻", "short_eng": "Semi", "news_ticker": "SOXX", 
-                  "fund_id": "5118716", "il_name_eng": "Kasam Semiconductors", 
-                  "tickers": ["NVDA", "AMD", "AVGO", "QCOM", "TSM", "ASML", "INTC", "SOXX"]
-              },
-              "AI": {
-                  "name": "Искусственный Интеллект", "icon": "🤖", "short_eng": "AI", "news_ticker": "NVDA", 
-                  "fund_id": "5134101", "il_name_eng": "Migdal AI", 
-                  "tickers": ["NVDA", "MSFT", "AMD", "AVGO", "PLTR", "GOOGL", "AMZN", "BOTZ"]
               }
           }
           EOF
