@@ -29,6 +29,7 @@ jobs:
           aiohttp==3.11.11
           beautifulsoup4==4.12.3
           yfinance==0.2.40
+          playwright==1.49.1
           EOF
           
           cat << 'EOF' > modules/config.py
@@ -40,8 +41,10 @@ jobs:
           
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-              "Accept": "application/json, text/plain, */*",
-              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7"
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+              "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+              "Cache-Control": "no-cache",
+              "Pragma": "no-cache"
           }
 
           SECTORS_CONFIG = {
@@ -120,16 +123,23 @@ jobs:
           
           cat << 'EOF' > modules/market.py
           import asyncio
+          import re
+          from bs4 import BeautifulSoup
+          from playwright.async_api import async_playwright
           import aiohttp
           from modules.config import HTTP_TIMEOUT, HEADERS
 
-          def parse_val(val) -> float:
-              if val is None or val == "":
+          def parse_float(val: str) -> float:
+              if not val:
                   return 0.0
               try:
-                  return round(float(str(val).replace(',', '.').replace('%', '').strip()), 2)
-              except (ValueError, TypeError):
-                  return 0.0
+                  cleaned = str(val).replace(',', '.').replace('%', '').replace('+', '').strip()
+                  match = re.search(r'([+-]?\d+(?:\.\d+)?)', cleaned)
+                  if match:
+                      return round(float(match.group(1)), 2)
+              except Exception:
+                  pass
+              return 0.0
 
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
               api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
@@ -156,64 +166,72 @@ jobs:
                   results = await asyncio.gather(*tasks)
                   return dict(results)
 
-          async def fetch_israeli_fund_api(session: aiohttp.ClientSession, fund_id: str) -> dict:
-              """Запрос доходности фонда напрямую через JSON API (без Playwright/Selenium)"""
-              if not fund_id:
-                  return {"daily": 0.0, "mtd": 0.0, "ytd": 0.0, "days_7": 0.0, "days_30": 0.0, "days_90": 0.0}
-
-              # Резервные эндпоинты API Bizportal и Funder
-              biz_url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
-              funder_url = f"https://www.funder.co.il/api/fund/{fund_id}"
-              
-              custom_headers = {**HEADERS, "Referer": "https://www.bizportal.co.il/"}
-
+          async def scrape_funder_fund_returns(page, fund_id: str) -> dict:
+              """Парсит таблицу תשואות с Funder: День (יומית), Месяц (מתחילת החודש), Год (מתחילת השנה)"""
+              url = f"https://www.funder.co.il/fund/{fund_id}"
+              data = {"daily": 0.0, "mtd": 0.0, "ytd": 0.0}
               try:
-                  async with session.get(biz_url, headers=custom_headers, timeout=HTTP_TIMEOUT) as resp:
-                      if resp.status == 200:
-                          data = await resp.json()
-                          if data and isinstance(data, dict):
-                              return {
-                                  "daily": parse_val(data.get("DailyChange") or data.get("PorexChange")),
-                                  "days_7": parse_val(data.get("YieldWeek") or data.get("7Days")),
-                                  "days_30": parse_val(data.get("YieldMonth") or data.get("30Days")),
-                                  "days_90": parse_val(data.get("Yield3Months") or data.get("90Days")),
-                                  "mtd": parse_val(data.get("YieldStartMonth")),
-                                  "ytd": parse_val(data.get("YieldStartYear") or data.get("YieldYear")),
-                              }
-              except Exception:
-                  pass
+                  await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                  
+                  # Ожидание элемента таблицы
+                  await page.wait_for_selector("table, div", timeout=5000)
+                  html_text = await page.content()
+                  soup = BeautifulSoup(html_text, 'html.parser')
 
-              try:
-                  async with session.get(funder_url, headers=HEADERS, timeout=HTTP_TIMEOUT) as resp:
-                      if resp.status == 200:
-                          data = await resp.json()
-                          surot = data.get("surot", {}) if isinstance(data, dict) else {}
-                          return {
-                              "daily": parse_val(data.get("dayChange") or surot.get("day")),
-                              "days_7": parse_val(surot.get("week")),
-                              "days_30": parse_val(surot.get("month")),
-                              "days_90": parse_val(surot.get("month3")),
-                              "mtd": parse_val(surot.get("startMonth")),
-                              "ytd": parse_val(surot.get("year")),
-                          }
-              except Exception:
-                  pass
+                  # Точечный поиск по заголовкам таблицы תשואות
+                  headers = soup.find_all(text=re.compile(r'תשואות|יומית|מתחילת החודש|מתחילת השנה'))
+                  
+                  for h in headers:
+                      parent = h.find_parent(['td', 'th', 'tr', 'table', 'div'])
+                      if parent:
+                          block_text = parent.get_text(separator=' ')
+                          # Извлекаем все числа с процентами
+                          percentages = re.findall(r'([+-]?\d+(?:\.\d+)?\s*%)', block_text)
+                          if len(percentages) >= 3:
+                              data["daily"] = parse_float(percentages[0])
+                              data["mtd"] = parse_float(percentages[1])
+                              data["ytd"] = parse_float(percentages[2])
+                              return data
 
-              return {"daily": 0.0, "mtd": 0.0, "ytd": 0.0, "days_7": 0.0, "days_30": 0.0, "days_90": 0.0}
+                  # Резервный поиск всех процентов в блоке HTML
+                  all_pcts = re.findall(r'([+-]?\d+\.\d+\s*%)', html_text)
+                  if len(all_pcts) >= 3:
+                      data["daily"] = parse_float(all_pcts[0])
+                      data["mtd"] = parse_float(all_pcts[1])
+                      data["ytd"] = parse_float(all_pcts[2])
+
+              except Exception as e:
+                  print(f"⚠️ Ошибка сбора Funder ID {fund_id}: {e}")
+
+              return data
 
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
               results = {}
-              async with aiohttp.ClientSession() as session:
-                  tasks = {}
+              async with async_playwright() as p:
+                  browser = await p.chromium.launch(
+                      headless=True,
+                      args=["--no-sandbox", "--disable-setuid-sandbox"]
+                  )
+                  
+                  context = await browser.new_context(
+                      user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                      viewport={"width": 1280, "height": 800},
+                      locale="he-IL"
+                  )
+                  
+                  page = await context.new_page()
+
                   for key, cfg in sectors_config.items():
                       fund_id = cfg.get("fund_id", "")
                       if fund_id:
-                          tasks[key] = fetch_israeli_fund_api(session, fund_id)
-                  
-                  task_results = await asyncio.gather(*tasks.values())
-                  for key, res in zip(tasks.keys(), task_results):
-                      results[key] = res
+                          print(f"🔍 Парсинг תשואות для {key} (ID: {fund_id})...")
+                          fund_returns = await scrape_funder_fund_returns(page, fund_id)
+                          results[key] = fund_returns
+                      else:
+                          results[key] = {"daily": 0.0, "mtd": 0.0, "ytd": 0.0}
 
+                  await browser.close()
+                  
               return results
           EOF
           
@@ -309,9 +327,6 @@ jobs:
           def escape_html(text: str) -> str:
               return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-          def fmt_p(val: float) -> str:
-              return f"+{val:.2f}%" if val > 0 else f"{val:.2f}%"
-
           def build_telegram_message(sectors_data: list) -> str:
               tz_il = timezone(timedelta(hours=3))
               now_str = datetime.now(tz_il).strftime("%d.%m.%Y | %H:%M")
@@ -330,8 +345,8 @@ jobs:
                   us_ch = s['avg_change']
                   il_ch = s['il_fund_data']['daily']
                   
-                  us_str = fmt_p(us_ch)
-                  il_str = fmt_p(il_ch)
+                  us_str = f"+{us_ch:.1f}%" if us_ch > 0 else f"{us_ch:.1f}%"
+                  il_str = f"+{il_ch:.1f}%" if il_ch > 0 else f"{il_ch:.1f}%"
                   
                   score_emoji = "🟢" if s['score'] >= 65 else ("🟡" if s['score'] >= 40 else "🔴")
                   lines.append(f"{icon}{name:<6} {us_str:>6} {il_str:>6}  {score_emoji}{s['score']:>3}/100")
@@ -340,7 +355,8 @@ jobs:
               lines.append("<blockquote expandable>")
               lines.append("🔍 <b>ДРАЙВЕРЫ ДВИЖЕНИЯ И ПОКАЗАТЕЛИ СЕКТОРОВ</b>\n")
               for s in sectors_data:
-                  lines.append(f"<b>{s['icon']} {escape_html(s['name'])}</b> ({fmt_p(s['avg_change'])})")
+                  ch_sign = f"+{s['avg_change']:.2f}%" if s['avg_change'] > 0 else f"{s['avg_change']:.2f}%"
+                  lines.append(f"<b>{s['icon']} {escape_html(s['name'])}</b> ({ch_sign})")
                   
                   if s.get("top_3_tickers"):
                       details_str = ", ".join([f"{t}: {c:+.2f}%" for t, c in s["top_3_tickers"]])
@@ -354,17 +370,22 @@ jobs:
               ta_stocks_sorted = sorted(sectors_data, key=lambda x: x['il_fund_data']['daily'], reverse=True)
 
               lines.append("<blockquote expandable>")
-              lines.append("🇮🇱 <b>ПОЛНАЯ ДОХОДНОСТЬ ФОНДОВ (תשואות)</b>\n")
+              lines.append("🇮🇱 <b>ДОХОДНОСТЬ ИЗРАИЛЬСКИХ ФОНДОВ (תשואות)</b>\n")
               for s in ta_stocks_sorted:
-                  f = s['il_fund_data']
-                  d_ch = f['daily']
+                  f_data = s['il_fund_data']
+                  d_ch = f_data['daily']
+                  mtd_ch = f_data['mtd']
+                  ytd_ch = f_data['ytd']
+                  
                   ch_emoji = "🟢" if d_ch > 0 else ("🔴" if d_ch < 0 else "⚪")
+                  
+                  d_str = f"+{d_ch:.2f}%" if d_ch > 0 else f"{d_ch:.2f}%"
+                  mtd_str = f"+{mtd_ch:.2f}%" if mtd_ch > 0 else f"{mtd_ch:.2f}%"
+                  ytd_str = f"+{ytd_ch:.2f}%" if ytd_ch > 0 else f"{ytd_ch:.2f}%"
                   
                   lines.append(
                       f"{ch_emoji} <b>{escape_html(s['il_name_eng'])}</b> ({s['icon']})\n"
-                      f"└ <code>{s['fund_id']}</code> | <b>День:</b> {fmt_p(d_ch)} | <b>7д:</b> {fmt_p(f['days_7'])}\n"
-                      f"  <b>30д:</b> {fmt_p(f['days_30'])} | <b>90д:</b> {fmt_p(f['days_90'])}\n"
-                      f"  <b>Месяц:</b> {fmt_p(f['mtd'])} | <b>Год:</b> {fmt_p(f['ytd'])}\n"
+                      f"└ <code>{s['fund_id']}</code> · <b>День: {d_str}</b> | <b>Месяц: {mtd_str}</b> | <b>Год: {ytd_str}</b>"
                   )
               lines.append("</blockquote>")
 
@@ -396,13 +417,29 @@ jobs:
                   return [text]
               
               chunks = []
-              raw_blocks = text.split("-------------------")
+              raw_blocks = text.split("</blockquote>")
               current_chunk = ""
 
-              for block in raw_blocks:
+              for raw_block in raw_blocks:
+                  if not raw_block:
+                      continue
+                  
+                  block = raw_block + "</blockquote>" if "blockquote" in raw_block else raw_block
+
                   if len(current_chunk) + len(block) > max_length:
                       if current_chunk:
                           chunks.append(current_chunk.strip())
+                          current_chunk = ""
+                      
+                      if len(block) > max_length:
+                          lines = block.split("\n")
+                          for line in lines:
+                              if len(current_chunk) + len(line) + 1 > max_length:
+                                  chunks.append(current_chunk.strip())
+                                  current_chunk = line + "\n"
+                              else:
+                                  current_chunk += line + "\n"
+                      else:
                           current_chunk = block
                   else:
                       current_chunk += block
@@ -420,7 +457,7 @@ jobs:
               url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
               chunks = split_message(text, max_length=3900)
               
-              print(f"ℹ️ Сообщение длиной {len(text)} символов. Отправка {len(chunks)} частей...")
+              print(f"ℹ️ Сообщение длинной {len(text)} символов. Отправка {len(chunks)} частей...")
               
               async with aiohttp.ClientSession() as session:
                   for idx, chunk in enumerate(chunks, start=1):
@@ -457,10 +494,10 @@ jobs:
               for cfg in SECTORS_CONFIG.values():
                   all_tickers.update(cfg["tickers"])
               
-              print("📦 Сбор данных Yahoo Finance...")
+              print(f"📦 Сбор данных Yahoo Finance...")
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
 
-              print("🌐 Опрос API израильских фондов...")
+              print(f"🌐 Опрос таблицы תשואות Funder via Playwright...")
               il_results = await fetch_all_israeli_funds(SECTORS_CONFIG)
 
               async with aiohttp.ClientSession() as session:
@@ -488,7 +525,7 @@ jobs:
                           "score": score,
                           "news": news,
                           "il_name_eng": cfg["il_name_eng"],
-                          "il_fund_data": il_results.get(key, {"daily": 0.0, "mtd": 0.0, "ytd": 0.0, "days_7": 0.0, "days_30": 0.0, "days_90": 0.0})
+                          "il_fund_data": il_results.get(key, {"daily": 0.0, "mtd": 0.0, "ytd": 0.0})
                       })
                   
                   sectors_results.sort(key=lambda x: x["avg_change"], reverse=True)
@@ -515,10 +552,11 @@ jobs:
               asyncio.run(main())
           EOF
 
-      - name: Install Dependencies
+      - name: Install Dependencies & Playwright Browsers
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          playwright install --with-deps chromium
 
       - name: Run Analytics Engine
         env:
