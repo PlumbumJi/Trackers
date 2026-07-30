@@ -227,61 +227,63 @@ jobs:
 
 
 
+
           def parse_all_in_one_html(html: str, fund_ids: set[str]) -> dict:
-              soup = BeautifulSoup(html, "html.parser")
               results = {}
 
+              print(
+                  f"🔎 allInOne HTML: {len(html)} символов, "
+                  f"таблиц={html.lower().count('<table')}, "
+                  f"строк={html.lower().count('<tr')}"
+              )
+
               for fund_id in fund_ids:
-                  link = soup.find(
-                      "a",
-                      href=re.compile(rf"/fund/{re.escape(fund_id)}(?:$|[?#])"),
+                  # Ищем ссылку фонда прямо в исходном HTML.
+                  link_match = re.search(
+                      rf"""href\s*=\s*["'][^"']*/fund/{re.escape(fund_id)}
+                      (?:[/?#][^"']*)?["']""",
+                      html,
+                      flags=re.IGNORECASE | re.VERBOSE,
                   )
 
-                  if not link:
-                      link = soup.find(
-                          "a",
-                          href=re.compile(rf"/fund/{re.escape(fund_id)}"),
-                      )
-
-                  if not link:
-                      print(f"⚠️ allInOne: ссылка фонда {fund_id} не найдена")
+                  if not link_match:
+                      print(f"⚠️ allInOne: ID {fund_id} отсутствует в HTML")
                       continue
 
-                  row = link.find_parent("tr")
-                  if not row:
-                      print(f"⚠️ allInOne: строка фонда {fund_id} не найдена")
+                  link_position = link_match.start()
+
+                  # Берём полную строку <tr>, в которой находится фонд.
+                  row_start = html.lower().rfind("<tr", 0, link_position)
+                  row_end = html.lower().find("</tr>", link_position)
+
+                  if row_start == -1 or row_end == -1:
+                      print(f"⚠️ allInOne: строка <tr> для {fund_id} не найдена")
                       continue
 
-                  cells = row.find_all(["td", "th"])
-                  link_cell = link.find_parent(["td", "th"])
+                  row_html = html[row_start:row_end + 5]
+                  row_text = BeautifulSoup(
+                      row_html,
+                      "html.parser",
+                  ).get_text(" ", strip=True)
 
-                  if not link_cell or link_cell not in cells:
-                      print(f"⚠️ allInOne: колонка фонда {fund_id} не найдена")
-                      continue
+                  # В строке allInOne первые три процента после названия фонда:
+                  # дневная, с начала месяца, с начала года.
+                  percentages = re.findall(
+                      r"([+\-]?\d+(?:[.,]\d+)?)\s*%",
+                      row_text,
+                  )
 
-                  fund_index = cells.index(link_cell)
-
-                  # Структура Funder allInOne:
-                  # фонд -> отрасль -> daily -> MTD -> YTD
-                  daily_index = fund_index + 2
-                  mtd_index = fund_index + 3
-                  ytd_index = fund_index + 4
-
-                  if len(cells) <= ytd_index:
+                  if len(percentages) < 3:
                       print(
-                          f"⚠️ allInOne: мало колонок для {fund_id}: "
-                          f"{len(cells)}"
+                          f"⚠️ allInOne {fund_id}: найдено процентов "
+                          f"{len(percentages)}; строка={row_text[:350]!r}"
                       )
                       continue
-
-                  raw_daily = cells[daily_index].get_text(" ", strip=True)
-                  raw_mtd = cells[mtd_index].get_text(" ", strip=True)
-                  raw_ytd = cells[ytd_index].get_text(" ", strip=True)
 
                   data = {
-                      "daily": parse_optional_float(raw_daily),
-                      "mtd": parse_optional_float(raw_mtd),
-                      "ytd": parse_optional_float(raw_ytd),
+                      "daily": parse_optional_float(percentages[0]),
+                      "mtd": parse_optional_float(percentages[1]),
+                      "ytd": parse_optional_float(percentages[2]),
                   }
 
                   if valid_returns(data):
@@ -295,8 +297,7 @@ jobs:
                   else:
                       print(
                           f"⚠️ allInOne {fund_id}: "
-                          f"невалидные значения "
-                          f"{raw_daily!r}, {raw_mtd!r}, {raw_ytd!r}"
+                          f"невалидные значения {percentages[:3]}"
                       )
 
               return results
