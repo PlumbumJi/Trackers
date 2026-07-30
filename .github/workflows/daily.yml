@@ -429,39 +429,206 @@ jobs:
               return result
 
 
-          async def fetch_bizportal_fallback(
-              session: aiohttp.ClientSession,
-              fund_id: str,
-          ) -> Optional[dict]:
-              url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
+          def parse_bizportal_page(html: str, fund_id: str) -> Optional[dict]:
+              soup = BeautifulSoup(html, "html.parser")
 
-              headers = dict(HEADERS)
-              headers.update({
-                  "Accept": "application/json, text/plain, */*",
-                  "Referer": f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}",
-                  "Origin": "https://www.bizportal.co.il",
-              })
+              for tag in soup(["script", "style", "noscript"]):
+                  tag.decompose()
 
-              try:
-                  async with session.get(url, headers=headers) as response:
-                      if response.status != 200:
-                          return None
+              page_text = soup.get_text(" ", strip=True)
+              page_text = re.sub(r"\s+", " ", page_text)
 
-                      payload = await response.json(content_type=None)
-                      data = recursive_find_values(payload)
+              month_match = re.search(
+                  r"%\s*החודש\s*:\s*([+\-]?\d+(?:[.,]\d+)?)\s*%",
+                  page_text,
+              )
+              year_match = re.search(
+                  r"%\s*השנה\s*:\s*([+\-]?\d+(?:[.,]\d+)?)\s*%",
+                  page_text,
+              )
 
-                      if valid_returns(data):
-                          return normalize_returns(data)
+              if not month_match:
+                  month_match = re.search(
+                      r"החודש\s*[:：]?\s*([+\-]?\d+(?:[.,]\d+)?)\s*%",
+                      page_text,
+                  )
 
-              except Exception:
-                  pass
+              if not year_match:
+                  year_match = re.search(
+                      r"השנה\s*[:：]?\s*([+\-]?\d+(?:[.,]\d+)?)\s*%",
+                      page_text,
+                  )
+
+              daily = None
+
+              # Основное дневное изменение находится перед блоком "% החודש".
+              month_position = month_match.start() if month_match else len(page_text)
+              prefix = page_text[:month_position]
+
+              prefix_percentages = re.findall(
+                  r"([+\-]?\d+(?:[.,]\d+)?)\s*%",
+                  prefix,
+              )
+
+              if prefix_percentages:
+                  daily = parse_optional_float(prefix_percentages[-1])
+
+              # Дополнительный поиск в JSON/атрибутах страницы.
+              if daily is None:
+                  daily_patterns = [
+                      r'"DailyChangePercent"\s*:\s*"?([+\-]?\d+(?:[.,]\d+)?)',
+                      r'"dailyChangePercent"\s*:\s*"?([+\-]?\d+(?:[.,]\d+)?)',
+                      r'"ChangePercent"\s*:\s*"?([+\-]?\d+(?:[.,]\d+)?)',
+                      r'"PrcChg"\s*:\s*"?([+\-]?\d+(?:[.,]\d+)?)',
+                  ]
+
+                  for pattern in daily_patterns:
+                      match = re.search(pattern, html, flags=re.IGNORECASE)
+                      if match:
+                          daily = parse_optional_float(match.group(1))
+                          if daily is not None:
+                              break
+
+              data = {
+                  "daily": daily,
+                  "mtd": parse_optional_float(
+                      month_match.group(1) if month_match else None
+                  ),
+                  "ytd": parse_optional_float(
+                      year_match.group(1) if year_match else None
+                  ),
+              }
+
+              print(
+                  f"🔍 Bizportal parse {fund_id}: "
+                  f"daily={data['daily']}, "
+                  f"mtd={data['mtd']}, "
+                  f"ytd={data['ytd']}, "
+                  f"html={len(html)}"
+              )
+
+              if valid_returns(data):
+                  return normalize_returns(data)
 
               return None
 
 
+          async def fetch_bizportal_page(
+              session: aiohttp.ClientSession,
+              fund_id: str,
+          ) -> tuple[str, Optional[dict]]:
+              url = (
+                  "https://www.bizportal.co.il/mutualfunds/"
+                  f"quote/generalview/{fund_id}"
+              )
+
+              headers = {
+                  "User-Agent": (
+                      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/126.0.0.0 Safari/537.36"
+                  ),
+                  "Accept": (
+                      "text/html,application/xhtml+xml,application/xml;"
+                      "q=0.9,image/avif,image/webp,*/*;q=0.8"
+                  ),
+                  "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+                  "Cache-Control": "no-cache",
+                  "Pragma": "no-cache",
+                  "Referer": "https://www.bizportal.co.il/mutualfunds",
+              }
+
+              try:
+                  async with session.get(
+                      url,
+                      headers=headers,
+                      allow_redirects=True,
+                  ) as response:
+                      html = await response.text(errors="ignore")
+
+                      print(
+                          f"🌐 Bizportal {fund_id}: "
+                          f"HTTP {response.status}, "
+                          f"url={response.url}, "
+                          f"bytes={len(html)}"
+                      )
+
+                      if response.status != 200:
+                          return fund_id, None
+
+                      return fund_id, parse_bizportal_page(html, fund_id)
+
+              except Exception as error:
+                  print(f"❌ Bizportal HTTP {fund_id}: {error}")
+                  return fund_id, None
+
+
+          async def fetch_bizportal_playwright(
+              fund_ids: set[str],
+          ) -> dict:
+              results = {}
+
+              async with async_playwright() as playwright:
+                  browser = await playwright.chromium.launch(
+                      headless=True,
+                      args=[
+                          "--no-sandbox",
+                          "--disable-setuid-sandbox",
+                          "--disable-dev-shm-usage",
+                      ],
+                  )
+
+                  context = await browser.new_context(
+                      user_agent=(
+                          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/126.0.0.0 Safari/537.36"
+                      ),
+                      locale="he-IL",
+                      viewport={"width": 1440, "height": 1000},
+                  )
+
+                  page = await context.new_page()
+
+                  for fund_id in fund_ids:
+                      url = (
+                          "https://www.bizportal.co.il/mutualfunds/"
+                          f"quote/generalview/{fund_id}"
+                      )
+
+                      try:
+                          response = await page.goto(
+                              url,
+                              wait_until="domcontentloaded",
+                              timeout=30000,
+                          )
+
+                          await page.wait_for_timeout(2500)
+                          html = await page.content()
+
+                          status = response.status if response else "NO_RESPONSE"
+                          print(
+                              f"🎭 Bizportal Playwright {fund_id}: "
+                              f"HTTP {status}, bytes={len(html)}"
+                          )
+
+                          data = parse_bizportal_page(html, fund_id)
+                          if data:
+                              results[fund_id] = data
+
+                      except Exception as error:
+                          print(
+                              f"❌ Bizportal Playwright {fund_id}: {error}"
+                          )
+
+                  await browser.close()
+
+              return results
+
+
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
               fund_to_sector = {
-                  config["fund_id"]: sector
+                  str(config["fund_id"]): sector
                   for sector, config in sectors_config.items()
                   if config.get("fund_id")
               }
@@ -469,10 +636,10 @@ jobs:
               fund_ids = set(fund_to_sector)
               by_fund_id = {}
 
-              timeout = aiohttp.ClientTimeout(total=25)
+              timeout = aiohttp.ClientTimeout(total=35)
               connector = aiohttp.TCPConnector(
-                  limit=10,
-                  limit_per_host=2,
+                  limit=6,
+                  limit_per_host=3,
                   ttl_dns_cache=300,
               )
 
@@ -480,28 +647,32 @@ jobs:
                   timeout=timeout,
                   connector=connector,
               ) as session:
-                  http_results = await fetch_all_in_one_http(session, fund_ids)
-                  by_fund_id.update(http_results)
+                  tasks = [
+                      fetch_bizportal_page(session, fund_id)
+                      for fund_id in sorted(fund_ids)
+                  ]
 
-                  missing_ids = fund_ids - set(by_fund_id)
-                  if missing_ids:
-                      playwright_results = await fetch_all_in_one_playwright(missing_ids)
-                      by_fund_id.update(playwright_results)
+                  responses = await asyncio.gather(*tasks)
 
-                  missing_ids = fund_ids - set(by_fund_id)
-                  if missing_ids:
-                      print(f"ℹ️ Bizportal fallback: {len(missing_ids)} фондов")
+                  for fund_id, data in responses:
+                      if data:
+                          by_fund_id[fund_id] = data
+                          print(
+                              f"✅ Bizportal HTML {fund_id}: "
+                              f"{data}"
+                          )
 
-                      tasks = [
-                          fetch_bizportal_fallback(session, fund_id)
-                          for fund_id in missing_ids
-                      ]
-                      responses = await asyncio.gather(*tasks)
+              missing_ids = fund_ids - set(by_fund_id)
 
-                      for fund_id, data in zip(missing_ids, responses):
-                          if data:
-                              by_fund_id[fund_id] = data
-                              print(f"✅ Bizportal: {fund_id}")
+              if missing_ids:
+                  print(
+                      f"ℹ️ Playwright fallback для "
+                      f"{len(missing_ids)} фондов"
+                  )
+                  playwright_results = await fetch_bizportal_playwright(
+                      missing_ids
+                  )
+                  by_fund_id.update(playwright_results)
 
               results = {}
 
@@ -511,10 +682,16 @@ jobs:
                   if data and valid_returns(data):
                       results[sector] = normalize_returns(data)
                   else:
-                      print(f"❌ Нет данных: {sector} ({fund_id})")
+                      print(
+                          f"❌ Нет данных: {sector} ({fund_id})"
+                      )
                       results[sector] = dict(EMPTY_RETURNS)
 
-              print(f"📊 Израильские фонды: {len(by_fund_id)}/{len(fund_ids)}")
+              print(
+                  f"📊 Израильские фонды Bizportal: "
+                  f"{len(by_fund_id)}/{len(fund_ids)}"
+              )
+
               return results
           EOF
 
