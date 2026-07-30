@@ -109,7 +109,6 @@ jobs:
 
           cat << 'EOF' > modules/market.py
           import asyncio
-          import json
           import math
           import re
           from typing import Any, Optional
@@ -123,28 +122,8 @@ jobs:
 
           EMPTY_RETURNS = {"daily": 0.0, "mtd": 0.0, "ytd": 0.0}
 
-          DAILY_KEYS = {
-              "daily", "dailychange", "dailychangepercent", "daychange",
-              "dayyield", "dailyyield", "prcchg", "changepercent",
-              "שינוייומי", "תשואהיומית", "יומית"
-          }
-          MTD_KEYS = {
-              "mtd", "monthchange", "monthlychange", "monthyield",
-              "returnfrommonthstart", "frommonthstart",
-              "מתחילתהחודש", "תשואהחודשית"
-          }
-          YTD_KEYS = {
-              "ytd", "yearchange", "yearlychange", "yearyield",
-              "returnfromyearstart", "fromyearstart",
-              "מתחילתהשנה", "תשואהשנתית"
-          }
 
-
-          def _normalize_key(value: Any) -> str:
-              return re.sub(r"[^a-z0-9א-ת]", "", str(value).lower())
-
-
-          def _parse_optional_float(value: Any) -> Optional[float]:
+          def parse_optional_float(value: Any) -> Optional[float]:
               if value is None or isinstance(value, bool):
                   return None
 
@@ -173,25 +152,12 @@ jobs:
                   return None
 
 
-          def parse_float(val: Any) -> float:
-              parsed = _parse_optional_float(val)
+          def parse_float(value: Any) -> float:
+              parsed = parse_optional_float(value)
               return parsed if parsed is not None else 0.0
 
 
-          def _valid_returns(data: Any) -> bool:
-              if not isinstance(data, dict):
-                  return False
-
-              values = [data.get("daily"), data.get("mtd"), data.get("ytd")]
-              parsed = [_parse_optional_float(value) for value in values]
-
-              if all(value is None for value in parsed):
-                  return False
-
-              return all(value is None or -100.0 <= value <= 100.0 for value in parsed)
-
-
-          def _normalize_returns(data: dict) -> dict:
+          def normalize_returns(data: dict) -> dict:
               return {
                   "daily": parse_float(data.get("daily")),
                   "mtd": parse_float(data.get("mtd")),
@@ -199,128 +165,20 @@ jobs:
               }
 
 
-          def _extract_returns_from_mapping(payload: Any) -> Optional[dict]:
-              found = {"daily": None, "mtd": None, "ytd": None}
+          def valid_returns(data: Any) -> bool:
+              if not isinstance(data, dict):
+                  return False
 
-              def walk(node: Any):
-                  if isinstance(node, dict):
-                      for key, value in node.items():
-                          normalized_key = _normalize_key(key)
+              values = [
+                  parse_optional_float(data.get("daily")),
+                  parse_optional_float(data.get("mtd")),
+                  parse_optional_float(data.get("ytd")),
+              ]
 
-                          if not isinstance(value, (dict, list)):
-                              parsed = _parse_optional_float(value)
-                              if parsed is not None:
-                                  if normalized_key in DAILY_KEYS and found["daily"] is None:
-                                      found["daily"] = parsed
-                                  elif normalized_key in MTD_KEYS and found["mtd"] is None:
-                                      found["mtd"] = parsed
-                                  elif normalized_key in YTD_KEYS and found["ytd"] is None:
-                                      found["ytd"] = parsed
+              if all(value is None for value in values):
+                  return False
 
-                          walk(value)
-
-                  elif isinstance(node, list):
-                      for item in node:
-                          walk(item)
-
-              walk(payload)
-              return found if _valid_returns(found) else None
-
-
-          def _extract_labeled_percent(text: str, labels: list[str]) -> Optional[float]:
-              for label in labels:
-                  patterns = [
-                      rf"{re.escape(label)}[^+\-\d]{{0,50}}([+\-]?\d+(?:[.,]\d+)?)\s*%",
-                      rf"([+\-]?\d+(?:[.,]\d+)?)\s*%[^א-תa-zA-Z]{{0,30}}{re.escape(label)}",
-                  ]
-                  for pattern in patterns:
-                      match = re.search(pattern, text, flags=re.IGNORECASE)
-                      if match:
-                          return _parse_optional_float(match.group(1))
-              return None
-
-
-          def _extract_returns_from_text(text: str) -> Optional[dict]:
-              compact = re.sub(r"\s+", " ", text or " ")
-
-              result = {
-                  "daily": _extract_labeled_percent(
-                      compact, ["יומית", "תשואה יומית", "Daily"]
-                  ),
-                  "mtd": _extract_labeled_percent(
-                      compact, ["מתחילת החודש", "חודש", "MTD"]
-                  ),
-                  "ytd": _extract_labeled_percent(
-                      compact, ["מתחילת השנה", "שנה", "YTD"]
-                  ),
-              }
-
-              if _valid_returns(result):
-                  return result
-
-              percentages = re.findall(r"([+\-]?\d+(?:[.,]\d+)?)\s*%", compact)
-              if len(percentages) >= 3:
-                  fallback = {
-                      "daily": _parse_optional_float(percentages[0]),
-                      "mtd": _parse_optional_float(percentages[1]),
-                      "ytd": _parse_optional_float(percentages[2]),
-                  }
-                  if _valid_returns(fallback):
-                      return fallback
-
-              return None
-
-
-          def _parse_funder_common_html(html: str, fund_ids: set[str]) -> dict:
-              soup = BeautifulSoup(html, "html.parser")
-              results = {}
-
-              for fund_id in fund_ids:
-                  candidates = []
-
-                  for text_node in soup.find_all(string=re.compile(rf"(?<!\d){re.escape(fund_id)}(?!\d)")):
-                      for tag_name in ("tr", "article", "li", "div"):
-                          parent = text_node.find_parent(tag_name)
-                          if parent:
-                              candidates.append(parent.get_text(" ", strip=True))
-                              break
-
-                  for candidate_text in candidates:
-                      parsed = _extract_returns_from_text(candidate_text)
-                      if parsed:
-                          results[fund_id] = _normalize_returns(parsed)
-                          break
-
-              return results
-
-
-          def _find_payload_for_fund(payload: Any, fund_id: str) -> Optional[Any]:
-              if isinstance(payload, dict):
-                  text_values = " ".join(
-                      str(value) for value in payload.values()
-                      if not isinstance(value, (dict, list))
-                  )
-                  if fund_id in text_values:
-                      return payload
-
-                  for value in payload.values():
-                      match = _find_payload_for_fund(value, fund_id)
-                      if match is not None:
-                          return match
-
-              elif isinstance(payload, list):
-                  for item in payload:
-                      match = _find_payload_for_fund(item, fund_id)
-                      if match is not None:
-                          return match
-
-              return None
-
-
-          def _extract_fund_returns_from_json(payload: Any, fund_id: str) -> Optional[dict]:
-              fund_payload = _find_payload_for_fund(payload, fund_id)
-              parsed = _extract_returns_from_mapping(fund_payload if fund_payload is not None else payload)
-              return _normalize_returns(parsed) if parsed else None
+              return all(value is None or -150.0 <= value <= 250.0 for value in values)
 
 
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple:
@@ -335,9 +193,9 @@ jobs:
                           if result:
                               meta = result[0].get("meta", {})
                               price = meta.get("regularMarketPrice")
-                              prev_close = meta.get("chartPreviousClose")
-                              if price is not None and prev_close:
-                                  change = ((price - prev_close) / prev_close) * 100
+                              previous_close = meta.get("chartPreviousClose")
+                              if price is not None and previous_close:
+                                  change = ((price - previous_close) / previous_close) * 100
                                   return ticker, {
                                       "price": round(price, 2),
                                       "change": round(change, 2),
@@ -356,151 +214,114 @@ jobs:
                   return dict(results)
 
 
-          async def _fetch_funder_common_table(
-              session: aiohttp.ClientSession,
-              fund_ids: set[str],
-          ) -> dict:
-              url = "https://www.funder.co.il/fundList"
+          def find_column(headers: list[str], labels: list[str]) -> Optional[int]:
+              normalized_headers = [re.sub(r"\s+", "", header).lower() for header in headers]
 
-              try:
-                  async with session.get(url, headers=HEADERS) as response:
-                      if response.status != 200:
-                          print(f"⚠️ Funder fundList HTTP {response.status}")
-                          return {}
-
-                      html = await response.text(errors="ignore")
-                      results = _parse_funder_common_html(html, fund_ids)
-                      print(f"✅ Funder fundList: найдено {len(results)}/{len(fund_ids)} фондов")
-                      return results
-
-              except Exception as error:
-                  print(f"⚠️ Ошибка общей таблицы Funder: {error}")
-                  return {}
-
-
-          async def _fetch_funder_api(
-              session: aiohttp.ClientSession,
-              fund_id: str,
-          ) -> Optional[dict]:
-              urls = [
-                  f"https://www.funder.co.il/api/fund/{fund_id}",
-                  f"https://www.funder.co.il/api/funds/{fund_id}",
-              ]
-
-              api_headers = dict(HEADERS)
-              api_headers["Accept"] = "application/json, text/plain, */*"
-              api_headers["Referer"] = f"https://www.funder.co.il/fund/{fund_id}"
-
-              for url in urls:
-                  try:
-                      async with session.get(url, headers=api_headers) as response:
-                          if response.status != 200:
-                              continue
-
-                          content_type = response.headers.get("Content-Type", "").lower()
-                          if "json" not in content_type:
-                              continue
-
-                          payload = await response.json(content_type=None)
-                          parsed = _extract_fund_returns_from_json(payload, fund_id)
-                          if parsed:
-                              return parsed
-
-                  except Exception:
-                      continue
+              for index, header in enumerate(normalized_headers):
+                  for label in labels:
+                      normalized_label = re.sub(r"\s+", "", label).lower()
+                      if normalized_label in header:
+                          return index
 
               return None
 
 
-          async def _fetch_bizportal(
-              session: aiohttp.ClientSession,
-              fund_id: str,
-          ) -> Optional[dict]:
-              url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
-              headers = dict(HEADERS)
-              headers.update({
-                  "Accept": "application/json, text/plain, */*",
-                  "Referer": f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}",
-                  "Origin": "https://www.bizportal.co.il",
-              })
 
-              try:
-                  async with session.get(url, headers=headers) as response:
-                      if response.status != 200:
-                          return None
-
-                      payload = await response.json(content_type=None)
-                      parsed = _extract_fund_returns_from_json(payload, fund_id)
-                      return parsed
-
-              except Exception:
-                  return None
-
-
-          async def _fetch_missing_via_apis(
-              session: aiohttp.ClientSession,
-              missing_ids: set[str],
-          ) -> dict:
-              async def fetch_one(fund_id: str) -> tuple[str, Optional[dict], str]:
-                  funder_result = await _fetch_funder_api(session, fund_id)
-                  if funder_result:
-                      return fund_id, funder_result, "Funder API"
-
-                  bizportal_result = await _fetch_bizportal(session, fund_id)
-                  if bizportal_result:
-                      return fund_id, bizportal_result, "Bizportal"
-
-                  return fund_id, None, ""
-
-              tasks = [fetch_one(fund_id) for fund_id in missing_ids]
-              responses = await asyncio.gather(*tasks)
+          def parse_all_in_one_html(html: str, fund_ids: set[str]) -> dict:
+              soup = BeautifulSoup(html, "html.parser")
               results = {}
 
-              for fund_id, data, source in responses:
-                  if data:
-                      results[fund_id] = data
-                      print(f"✅ {fund_id}: источник {source}")
+              for fund_id in fund_ids:
+                  link = soup.find(
+                      "a",
+                      href=re.compile(rf"/fund/{re.escape(fund_id)}(?:$|[?#])"),
+                  )
+
+                  if not link:
+                      link = soup.find(
+                          "a",
+                          href=re.compile(rf"/fund/{re.escape(fund_id)}"),
+                      )
+
+                  if not link:
+                      print(f"⚠️ allInOne: ссылка фонда {fund_id} не найдена")
+                      continue
+
+                  row = link.find_parent("tr")
+                  if not row:
+                      print(f"⚠️ allInOne: строка фонда {fund_id} не найдена")
+                      continue
+
+                  cells = row.find_all(["td", "th"])
+                  link_cell = link.find_parent(["td", "th"])
+
+                  if not link_cell or link_cell not in cells:
+                      print(f"⚠️ allInOne: колонка фонда {fund_id} не найдена")
+                      continue
+
+                  fund_index = cells.index(link_cell)
+
+                  # Структура Funder allInOne:
+                  # фонд -> отрасль -> daily -> MTD -> YTD
+                  daily_index = fund_index + 2
+                  mtd_index = fund_index + 3
+                  ytd_index = fund_index + 4
+
+                  if len(cells) <= ytd_index:
+                      print(
+                          f"⚠️ allInOne: мало колонок для {fund_id}: "
+                          f"{len(cells)}"
+                      )
+                      continue
+
+                  raw_daily = cells[daily_index].get_text(" ", strip=True)
+                  raw_mtd = cells[mtd_index].get_text(" ", strip=True)
+                  raw_ytd = cells[ytd_index].get_text(" ", strip=True)
+
+                  data = {
+                      "daily": parse_optional_float(raw_daily),
+                      "mtd": parse_optional_float(raw_mtd),
+                      "ytd": parse_optional_float(raw_ytd),
+                  }
+
+                  if valid_returns(data):
+                      results[fund_id] = normalize_returns(data)
+                      print(
+                          f"✅ allInOne {fund_id}: "
+                          f"day={results[fund_id]['daily']}%, "
+                          f"mtd={results[fund_id]['mtd']}%, "
+                          f"ytd={results[fund_id]['ytd']}%"
+                      )
+                  else:
+                      print(
+                          f"⚠️ allInOne {fund_id}: "
+                          f"невалидные значения "
+                          f"{raw_daily!r}, {raw_mtd!r}, {raw_ytd!r}"
+                      )
 
               return results
 
 
-          async def _scrape_single_funder_page(page, fund_id: str) -> Optional[dict]:
-              url = f"https://www.funder.co.il/fund/{fund_id}"
+          async def fetch_all_in_one_http(session: aiohttp.ClientSession, fund_ids: set[str]) -> dict:
+              url = "https://www.funder.co.il/allInOne"
 
               try:
-                  await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-                  await page.wait_for_timeout(1500)
-                  html = await page.content()
-                  soup = BeautifulSoup(html, "html.parser")
+                  async with session.get(url, headers=HEADERS) as response:
+                      if response.status != 200:
+                          print(f"⚠️ Funder allInOne HTTP {response.status}")
+                          return {}
 
-                  for script in soup.find_all("script"):
-                      script_text = script.string or script.get_text(" ", strip=True)
-                      if not script_text or fund_id not in script_text:
-                          continue
-
-                      json_candidates = re.findall(r"(\{.*\}|\[.*\])", script_text, flags=re.DOTALL)
-                      for candidate in json_candidates[:3]:
-                          try:
-                              payload = json.loads(candidate)
-                              parsed = _extract_fund_returns_from_json(payload, fund_id)
-                              if parsed:
-                                  return parsed
-                          except Exception:
-                              continue
-
-                  full_text = soup.get_text(" ", strip=True)
-                  parsed = _extract_returns_from_text(full_text)
-                  return _normalize_returns(parsed) if parsed else None
+                      html = await response.text(errors="ignore")
+                      results = parse_all_in_one_html(html, fund_ids)
+                      print(f"📋 Funder allInOne HTTP: {len(results)}/{len(fund_ids)}")
+                      return results
 
               except Exception as error:
-                  print(f"⚠️ Playwright Funder {fund_id}: {error}")
-                  return None
-
-
-          async def _fetch_playwright_fallback(missing_ids: set[str]) -> dict:
-              if not missing_ids:
+                  print(f"⚠️ Ошибка HTTP Funder allInOne: {error}")
                   return {}
 
+
+          async def fetch_all_in_one_playwright(fund_ids: set[str]) -> dict:
               results = {}
               blocked_domains = (
                   "doubleclick.net",
@@ -515,19 +336,20 @@ jobs:
                       headless=True,
                       args=["--no-sandbox", "--disable-setuid-sandbox"],
                   )
+
                   context = await browser.new_context(
                       user_agent=HEADERS["User-Agent"],
-                      viewport={"width": 1280, "height": 800},
+                      viewport={"width": 1440, "height": 1000},
                       locale="he-IL",
                   )
 
                   async def route_handler(route):
                       request = route.request
-                      url = request.url.lower()
+                      request_url = request.url.lower()
 
                       if (
                           request.resource_type in {"image", "media", "font"}
-                          or any(domain in url for domain in blocked_domains)
+                          or any(domain in request_url for domain in blocked_domains)
                       ):
                           await route.abort()
                       else:
@@ -536,61 +358,117 @@ jobs:
                   await context.route("**/*", route_handler)
                   page = await context.new_page()
 
-                  captured_payloads = []
-
-                  async def capture_response(response):
-                      try:
-                          content_type = response.headers.get("content-type", "").lower()
-                          if "json" in content_type:
-                              captured_payloads.append(await response.json())
-                      except Exception:
-                          pass
-
-                  page.on("response", capture_response)
-
                   try:
                       await page.goto(
-                          "https://www.funder.co.il/fundList",
+                          "https://www.funder.co.il/allInOne",
                           wait_until="domcontentloaded",
-                          timeout=25000,
+                          timeout=30000,
                       )
-                      await page.wait_for_timeout(3000)
+                      await page.wait_for_selector("table", timeout=15000)
+                      await page.wait_for_timeout(4000)
 
-                      common_html = await page.content()
-                      results.update(_parse_funder_common_html(common_html, missing_ids))
-
-                      still_missing = missing_ids - set(results)
-
-                      for payload in captured_payloads:
-                          for fund_id in list(still_missing):
-                              parsed = _extract_fund_returns_from_json(payload, fund_id)
-                              if parsed:
-                                  results[fund_id] = parsed
-                                  still_missing.remove(fund_id)
-
-                      for fund_id in still_missing:
-                          parsed = await _scrape_single_funder_page(page, fund_id)
-                          if parsed:
-                              results[fund_id] = parsed
+                      html = await page.content()
+                      results = parse_all_in_one_html(html, fund_ids)
+                      print(f"🎭 Funder allInOne Playwright: {len(results)}/{len(fund_ids)}")
 
                   except Exception as error:
-                      print(f"⚠️ Playwright fundList: {error}")
+                      print(f"⚠️ Playwright allInOne: {error}")
 
                   await browser.close()
 
               return results
 
 
+          def recursive_find_values(payload: Any) -> dict:
+              result = {"daily": None, "mtd": None, "ytd": None}
+
+              daily_keys = {
+                  "dailychangepercent",
+                  "changepercent",
+                  "prcchg",
+                  "dailychange",
+                  "daychange",
+              }
+              mtd_keys = {
+                  "monthchangepercent",
+                  "monthlychangepercent",
+                  "mtd",
+                  "monthchange",
+              }
+              ytd_keys = {
+                  "yearchangepercent",
+                  "yearlychangepercent",
+                  "ytd",
+                  "yearchange",
+              }
+
+              def walk(node: Any):
+                  if isinstance(node, dict):
+                      for key, value in node.items():
+                          normalized_key = re.sub(r"[^a-z0-9]", "", str(key).lower())
+
+                          if not isinstance(value, (dict, list)):
+                              parsed = parse_optional_float(value)
+
+                              if parsed is not None:
+                                  if normalized_key in daily_keys and result["daily"] is None:
+                                      result["daily"] = parsed
+                                  elif normalized_key in mtd_keys and result["mtd"] is None:
+                                      result["mtd"] = parsed
+                                  elif normalized_key in ytd_keys and result["ytd"] is None:
+                                      result["ytd"] = parsed
+
+                          walk(value)
+
+                  elif isinstance(node, list):
+                      for item in node:
+                          walk(item)
+
+              walk(payload)
+              return result
+
+
+          async def fetch_bizportal_fallback(
+              session: aiohttp.ClientSession,
+              fund_id: str,
+          ) -> Optional[dict]:
+              url = f"https://www.bizportal.co.il/api/mutualfunds/getgeneralview/{fund_id}"
+
+              headers = dict(HEADERS)
+              headers.update({
+                  "Accept": "application/json, text/plain, */*",
+                  "Referer": f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}",
+                  "Origin": "https://www.bizportal.co.il",
+              })
+
+              try:
+                  async with session.get(url, headers=headers) as response:
+                      if response.status != 200:
+                          return None
+
+                      payload = await response.json(content_type=None)
+                      data = recursive_find_values(payload)
+
+                      if valid_returns(data):
+                          return normalize_returns(data)
+
+              except Exception:
+                  pass
+
+              return None
+
+
           async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
               fund_to_sector = {
-                  cfg.get("fund_id", ""): sector
-                  for sector, cfg in sectors_config.items()
-                  if cfg.get("fund_id")
+                  config["fund_id"]: sector
+                  for sector, config in sectors_config.items()
+                  if config.get("fund_id")
               }
+
               fund_ids = set(fund_to_sector)
               by_fund_id = {}
 
-              timeout = aiohttp.ClientTimeout(total=20)
+              timeout = aiohttp.ClientTimeout(total=25)
               connector = aiohttp.TCPConnector(
                   limit=10,
                   limit_per_host=2,
@@ -601,32 +479,41 @@ jobs:
                   timeout=timeout,
                   connector=connector,
               ) as session:
-                  common_results = await _fetch_funder_common_table(session, fund_ids)
-                  by_fund_id.update(common_results)
+                  http_results = await fetch_all_in_one_http(session, fund_ids)
+                  by_fund_id.update(http_results)
 
                   missing_ids = fund_ids - set(by_fund_id)
                   if missing_ids:
-                      print(f"ℹ️ API fallback: {len(missing_ids)} фондов")
-                      api_results = await _fetch_missing_via_apis(session, missing_ids)
-                      by_fund_id.update(api_results)
+                      playwright_results = await fetch_all_in_one_playwright(missing_ids)
+                      by_fund_id.update(playwright_results)
 
-              missing_ids = fund_ids - set(by_fund_id)
-              if missing_ids:
-                  print(f"ℹ️ Playwright fallback: {len(missing_ids)} фондов")
-                  playwright_results = await _fetch_playwright_fallback(missing_ids)
-                  by_fund_id.update(playwright_results)
+                  missing_ids = fund_ids - set(by_fund_id)
+                  if missing_ids:
+                      print(f"ℹ️ Bizportal fallback: {len(missing_ids)} фондов")
+
+                      tasks = [
+                          fetch_bizportal_fallback(session, fund_id)
+                          for fund_id in missing_ids
+                      ]
+                      responses = await asyncio.gather(*tasks)
+
+                      for fund_id, data in zip(missing_ids, responses):
+                          if data:
+                              by_fund_id[fund_id] = data
+                              print(f"✅ Bizportal: {fund_id}")
 
               results = {}
+
               for fund_id, sector in fund_to_sector.items():
                   data = by_fund_id.get(fund_id)
 
-                  if data and _valid_returns(data):
-                      results[sector] = _normalize_returns(data)
+                  if data and valid_returns(data):
+                      results[sector] = normalize_returns(data)
                   else:
-                      print(f"❌ Нет корректных данных для {sector} ({fund_id})")
+                      print(f"❌ Нет данных: {sector} ({fund_id})")
                       results[sector] = dict(EMPTY_RETURNS)
 
-              print(f"📊 Израильские фонды: получено {len(by_fund_id)}/{len(fund_ids)}")
+              print(f"📊 Израильские фонды: {len(by_fund_id)}/{len(fund_ids)}")
               return results
           EOF
 
