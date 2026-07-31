@@ -3,7 +3,7 @@ name: Automated Market Analytics & IPO Digest
 on:
   schedule:
     # Ежедневный дайджест рынка в 23:15 по Израилю (20:15 UTC)
-    - cron: '11 17 * * *'
+    - cron: '11 20 * * *'
     # Еженедельный IPO дайджест в Субботу в 22:00 по Израилю (19:00 UTC)
     - cron: '0 19 * * 6'
   workflow_dispatch:
