@@ -20,6 +20,14 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Restore IPO Radar Snapshot
+        uses: actions/cache/restore@v4
+        with:
+          path: ipo_radar_snapshot.json
+          key: ipo-radar-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ipo-radar-
+
       - name: Deploy Architecture Files
         run: |
           mkdir -p modules
@@ -40,6 +48,16 @@ jobs:
           HTTP_TIMEOUT = 15
           BOT_NAME = "@oil_tracker_pavel_bot"
 
+          def get_env_int(name: str, default: int) -> int:
+              try:
+                  return int(os.getenv(name, str(default)))
+              except (TypeError, ValueError):
+                  return default
+          
+          FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+          IPO_STATE_FILE = os.getenv("IPO_STATE_FILE", "ipo_radar_snapshot.json")
+          IPO_LOOKBACK_DAYS = get_env_int("IPO_LOOKBACK_DAYS", 7)
+          IPO_LOOKAHEAD_DAYS = get_env_int("IPO_LOOKAHEAD_DAYS", 120)
           HEADERS = {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -780,6 +798,495 @@ jobs:
               return cards
           EOF
 
+          cat << 'EOF' > modules/ipo.py
+          import json
+          import os
+          import re
+          from datetime import date, datetime, timedelta, timezone
+          from typing import Any, Optional
+          
+          import aiohttp
+          
+          from modules.config import (
+              FINNHUB_API_KEY,
+              HTTP_TIMEOUT,
+              IPO_LOOKAHEAD_DAYS,
+              IPO_LOOKBACK_DAYS,
+              IPO_STATE_FILE,
+          )
+          
+          FINNHUB_IPO_CALENDAR_URL = "https://finnhub.io/api/v1/calendar/ipo"
+          IPO_SOURCE_NAME = "Finnhub IPO Calendar"
+          
+          TEXT_TRASH_PATTERNS = (
+              r"\bspac\b",
+              r"\bblank[- ]check\b",
+              r"\bacquisition\s+corp(?:oration)?\b",
+              r"\bwarrants?\b",
+              r"\bunits?\b",
+              r"\brights?\b",
+              r"\betf\b",
+              r"\bfunds?\b",
+              r"\bclosed[- ]end\b",
+              r"\btrust\b",
+              r"\bnotes?\b",
+              r"\bbonds?\b",
+              r"\bpreferred\b",
+              r"\bdepositary\s+shares\b",
+          )
+          
+          SYMBOL_TRASH_PATTERNS = (
+              r"[\.\-/]U$",
+              r"[\.\-/]W$",
+              r"[\.\-/]WS$",
+              r"[\.\-/]WT$",
+              r"[\.\-/]R$",
+              r"[\.\-/]RT$",
+          )
+          
+          
+          def _as_text(value: Any) -> str:
+              if value is None:
+                  return ""
+              return re.sub(r"\s+", " ", str(value)).strip()
+          
+          
+          def _parse_int(value: Any) -> Optional[int]:
+              if value is None or value == "":
+                  return None
+          
+              if isinstance(value, bool):
+                  return None
+          
+              if isinstance(value, (int, float)):
+                  return int(value) if value >= 0 else None
+          
+              cleaned = re.sub(r"[^\d]", "", str(value))
+              if not cleaned:
+                  return None
+          
+              try:
+                  return int(cleaned)
+              except ValueError:
+                  return None
+          
+          
+          def _parse_iso_date(value: Any) -> Optional[date]:
+              text = _as_text(value)
+              if not text:
+                  return None
+          
+              # Finnhub usually returns YYYY-MM-DD, but some wrappers expose ISO datetime.
+              match = re.search(r"\d{4}-\d{2}-\d{2}", text)
+              if not match:
+                  return None
+          
+              try:
+                  return datetime.strptime(match.group(0), "%Y-%m-%d").date()
+              except ValueError:
+                  return None
+          
+          
+          def _date_to_str(value: Optional[date]) -> str:
+              return value.isoformat() if value else ""
+          
+          
+          def _normalize_symbol(symbol: Any) -> str:
+              text = _as_text(symbol).upper()
+              return re.sub(r"\s+", "", text)
+          
+          
+          def _parse_price_fields(raw_price: Any, status: str, event_date: Optional[date], today: date) -> tuple[str, str]:
+              price = _as_text(raw_price)
+              if not price:
+                  return "", ""
+          
+              normalized = price.replace("–", "-").replace("—", "-")
+              lower_status = status.lower()
+          
+              if re.search(r"\d\s*-\s*\$?\d", normalized) or "range" in lower_status:
+                  return normalized, ""
+          
+              if "priced" in lower_status or "listed" in lower_status or (event_date and event_date <= today):
+                  return "", normalized
+          
+              return normalized, ""
+          
+          
+          def normalize_ipo_event(raw: dict[str, Any], today: Optional[date] = None) -> Optional[dict[str, Any]]:
+              if today is None:
+                  today = datetime.now(timezone.utc).date()
+          
+              event_date = _parse_iso_date(
+                  raw.get("date")
+                  or raw.get("ipoDate")
+                  or raw.get("pricedDate")
+                  or raw.get("expectedDate")
+              )
+          
+              company_name = _as_text(
+                  raw.get("name")
+                  or raw.get("companyName")
+                  or raw.get("company")
+              )
+          
+              ticker = _normalize_symbol(
+                  raw.get("symbol")
+                  or raw.get("ticker")
+              )
+          
+              exchange = _as_text(
+                  raw.get("exchange")
+                  or raw.get("exchangeName")
+              )
+          
+              status = _as_text(raw.get("status"))
+              raw_price = raw.get("price") or raw.get("priceRange") or raw.get("offerPrice")
+              price_range, offer_price = _parse_price_fields(raw_price, status, event_date, today)
+          
+              shares_offered = _parse_int(
+                  raw.get("numberOfShares")
+                  or raw.get("sharesOffered")
+                  or raw.get("shares")
+              )
+          
+              total_shares_value = _parse_int(
+                  raw.get("totalSharesValue")
+                  or raw.get("dealSize")
+                  or raw.get("totalValue")
+              )
+          
+              if not company_name or not event_date:
+                  return None
+          
+              return {
+                  "company_name": company_name,
+                  "ticker": ticker,
+                  "exchange": exchange,
+                  "planned_ipo_date": _date_to_str(event_date),
+                  "first_trading_date": _date_to_str(event_date),
+                  "price_range": price_range,
+                  "offer_price": offer_price,
+                  "shares_offered": shares_offered,
+                  "total_shares_value": total_shares_value,
+                  "status": status,
+                  "source": IPO_SOURCE_NAME,
+              }
+          
+          
+          def is_common_stock_candidate(event: dict[str, Any]) -> bool:
+              name = event.get("company_name", "").lower()
+              ticker = event.get("ticker", "").upper()
+          
+              if not event.get("planned_ipo_date"):
+                  return False
+          
+              if not event.get("ticker") and not event.get("company_name"):
+                  return False
+          
+              for pattern in TEXT_TRASH_PATTERNS:
+                  if re.search(pattern, name):
+                      return False
+          
+              for pattern in SYMBOL_TRASH_PATTERNS:
+                  if re.search(pattern, ticker):
+                      return False
+          
+              return True
+          
+          
+          def event_key(event: dict[str, Any]) -> str:
+              ticker = event.get("ticker", "")
+              if ticker:
+                  return f"ticker:{ticker}"
+          
+              company = re.sub(r"[^a-z0-9]+", "", event.get("company_name", "").lower())
+              exchange = re.sub(r"[^a-z0-9]+", "", event.get("exchange", "").lower())
+              return f"company:{company}:{exchange}"
+          
+          
+          def _completeness_score(event: dict[str, Any]) -> int:
+              score = 0
+              for field in (
+                  "company_name",
+                  "ticker",
+                  "exchange",
+                  "planned_ipo_date",
+                  "price_range",
+                  "offer_price",
+                  "shares_offered",
+                  "status",
+              ):
+                  if event.get(field):
+                      score += 1
+              if event.get("total_shares_value"):
+                  score += 2
+              return score
+          
+          
+          def dedupe_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+              by_key: dict[str, dict[str, Any]] = {}
+          
+              for event in events:
+                  key = event_key(event)
+                  if not key:
+                      continue
+          
+                  current = by_key.get(key)
+                  if current is None or _completeness_score(event) > _completeness_score(current):
+                      by_key[key] = event
+          
+              return list(by_key.values())
+          
+          
+          def load_snapshot(path: str = IPO_STATE_FILE) -> dict[str, Any]:
+              if not path or not os.path.exists(path):
+                  return {"items": {}, "generated_at": None}
+          
+              try:
+                  with open(path, "r", encoding="utf-8") as file:
+                      payload = json.load(file)
+          
+                  if isinstance(payload, dict) and isinstance(payload.get("items"), dict):
+                      return payload
+          
+              except Exception as error:
+                  print(f"⚠️ IPO snapshot load failed: {error}")
+          
+              return {"items": {}, "generated_at": None}
+          
+          
+          def save_snapshot(events: list[dict[str, Any]], path: str = IPO_STATE_FILE) -> None:
+              items = {event_key(event): event for event in events if event_key(event)}
+              payload = {
+                  "generated_at": datetime.now(timezone.utc).isoformat(),
+                  "source": IPO_SOURCE_NAME,
+                  "items": items,
+              }
+          
+              directory = os.path.dirname(path)
+              if directory:
+                  os.makedirs(directory, exist_ok=True)
+          
+              tmp_path = f"{path}.tmp"
+              with open(tmp_path, "w", encoding="utf-8") as file:
+                  json.dump(payload, file, ensure_ascii=False, indent=2, sort_keys=True)
+          
+              os.replace(tmp_path, path)
+          
+          
+          async def fetch_finnhub_ipo_calendar(
+              session: aiohttp.ClientSession,
+              date_from: date,
+              date_to: date,
+          ) -> Optional[list[dict[str, Any]]]:
+              if not FINNHUB_API_KEY:
+                  print("⚠️ FINNHUB_API_KEY is not set; IPO calendar is unavailable.")
+                  return None
+          
+              params = {
+                  "from": date_from.isoformat(),
+                  "to": date_to.isoformat(),
+              }
+              headers = {
+                  "X-Finnhub-Token": FINNHUB_API_KEY,
+              }
+          
+              try:
+                  async with session.get(
+                      FINNHUB_IPO_CALENDAR_URL,
+                      params=params,
+                      headers=headers,
+                      timeout=HTTP_TIMEOUT,
+                  ) as response:
+                      if response.status != 200:
+                          body = await response.text()
+                          print(f"⚠️ Finnhub IPO Calendar HTTP {response.status}: {body[:300]}")
+                          return None
+          
+                      payload = await response.json()
+                      events = payload.get("ipoCalendar", [])
+          
+                      if not isinstance(events, list):
+                          print("⚠️ Finnhub IPO Calendar: unexpected JSON shape")
+                          return None
+          
+                      return events
+          
+              except Exception as error:
+                  print(f"⚠️ Finnhub IPO Calendar error: {error}")
+                  return None
+          
+          
+          def _changed_fields(previous: dict[str, Any], current: dict[str, Any]) -> list[str]:
+              fields = (
+                  "planned_ipo_date",
+                  "price_range",
+                  "offer_price",
+                  "shares_offered",
+                  "status",
+                  "exchange",
+              )
+              changed = []
+          
+              for field in fields:
+                  old_value = previous.get(field)
+                  new_value = current.get(field)
+                  if (old_value or "") != (new_value or ""):
+                      changed.append(field)
+          
+              return changed
+          
+          
+          def build_updates_from_snapshot(
+              current_events: list[dict[str, Any]],
+              previous_snapshot: dict[str, Any],
+          ) -> list[dict[str, Any]]:
+              previous_items = previous_snapshot.get("items", {})
+              if not previous_items:
+                  return []
+          
+              updates = []
+          
+              for event in current_events:
+                  key = event_key(event)
+                  previous = previous_items.get(key)
+          
+                  if previous is None:
+                      item = dict(event)
+                      item["change_type"] = "New IPO date in calendar"
+                      item["changed_fields"] = ["planned_ipo_date"]
+                      updates.append(item)
+                      continue
+          
+                  changed = _changed_fields(previous, event)
+                  if changed:
+                      item = dict(event)
+                      item["changed_fields"] = changed
+                      if "planned_ipo_date" in changed:
+                          item["change_type"] = "IPO date updated"
+                          item["previous_ipo_date"] = previous.get("planned_ipo_date", "")
+                      else:
+                          item["change_type"] = "IPO terms/status updated"
+                      updates.append(item)
+          
+              return updates
+          
+          
+          def filter_new_listings_this_week(
+              events: list[dict[str, Any]],
+              window_start: date,
+              window_end: date,
+          ) -> list[dict[str, Any]]:
+              result = []
+          
+              for event in events:
+                  listing_date = _parse_iso_date(event.get("first_trading_date"))
+                  if listing_date and window_start <= listing_date <= window_end:
+                      result.append(event)
+          
+              return result
+          
+          
+          def _ranking_value(event: dict[str, Any]) -> int:
+              return int(event.get("total_shares_value") or 0) + int(event.get("shares_offered") or 0)
+          
+          
+          def _sort_updates(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+              def priority(event: dict[str, Any]) -> tuple[int, str, int]:
+                  change_type = event.get("change_type", "")
+                  change_score = 2 if change_type == "IPO date updated" else 1
+                  event_date = event.get("planned_ipo_date", "9999-12-31")
+                  return (-change_score, event_date, -_ranking_value(event))
+          
+              return sorted(events, key=priority)
+          
+          
+          def _sort_listings(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+              return sorted(
+                  events,
+                  key=lambda event: (
+                      event.get("first_trading_date", ""),
+                      _ranking_value(event),
+                  ),
+                  reverse=True,
+              )
+          
+          
+          async def fetch_weekly_ipo_radar(
+              today: Optional[date] = None,
+              state_file: str = IPO_STATE_FILE,
+              save_state: bool = True,
+          ) -> dict[str, Any]:
+              if today is None:
+                  # The bot runs for an Israel-based audience. For date windows, UTC is safer
+                  # than a fixed +03 offset for API queries and avoids DST edge cases.
+                  today = datetime.now(timezone.utc).date()
+          
+              lookback_days = max(1, IPO_LOOKBACK_DAYS)
+              lookahead_days = max(14, IPO_LOOKAHEAD_DAYS)
+          
+              window_start = today - timedelta(days=lookback_days - 1)
+              upcoming_start = today + timedelta(days=1)
+              upcoming_end = today + timedelta(days=lookahead_days)
+          
+              timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT + 10)
+              async with aiohttp.ClientSession(timeout=timeout) as session:
+                  raw_recent_payload = await fetch_finnhub_ipo_calendar(session, window_start, today)
+                  raw_upcoming_payload = await fetch_finnhub_ipo_calendar(session, upcoming_start, upcoming_end)
+          
+              source_ok = raw_recent_payload is not None and raw_upcoming_payload is not None
+              raw_recent = raw_recent_payload or []
+              raw_upcoming = raw_upcoming_payload or []
+          
+              normalized_recent = [
+                  event
+                  for raw in raw_recent
+                  if (event := normalize_ipo_event(raw, today=today)) and is_common_stock_candidate(event)
+              ]
+          
+              normalized_upcoming = [
+                  event
+                  for raw in raw_upcoming
+                  if (event := normalize_ipo_event(raw, today=today)) and is_common_stock_candidate(event)
+              ]
+          
+              recent_events = dedupe_events(normalized_recent)
+              upcoming_events = dedupe_events(normalized_upcoming)
+              all_events = dedupe_events(recent_events + upcoming_events)
+          
+              previous_snapshot = load_snapshot(state_file)
+              updates = build_updates_from_snapshot(upcoming_events, previous_snapshot)
+              listings = filter_new_listings_this_week(recent_events, window_start, today)
+          
+              updates = _sort_updates(dedupe_events(updates))[:5]
+              listings = _sort_listings(dedupe_events(listings))[:5]
+          
+              if save_state and source_ok:
+                  save_snapshot(all_events, state_file)
+              elif save_state:
+                  print("⚠️ IPO snapshot was not updated because the data source was unavailable.")
+          
+              return {
+                  "title": "Weekly IPO Radar",
+                  "source": IPO_SOURCE_NAME,
+                  "window_start": window_start.isoformat(),
+                  "window_end": today.isoformat(),
+                  "upcoming_start": upcoming_start.isoformat(),
+                  "upcoming_end": upcoming_end.isoformat(),
+                  "previous_snapshot_found": bool(previous_snapshot.get("items")),
+                  "source_ok": source_ok,
+                  "date_updates": updates,
+                  "new_listings": listings,
+                  "raw_counts": {
+                      "recent": len(raw_recent),
+                      "upcoming": len(raw_upcoming),
+                      "recent_after_filter": len(recent_events),
+                      "upcoming_after_filter": len(upcoming_events),
+                  },
+              }
+          EOF
+
           cat << 'EOF' > modules/formatter.py
           from datetime import datetime, timezone, timedelta
           from modules.config import BOT_NAME
@@ -866,6 +1373,96 @@ jobs:
               lines.append("</blockquote>")
               lines.append(f"\n{BOT_NAME}")
               return "\n".join(lines)
+
+          def _format_int(value):
+              if value is None or value == "":
+                  return ""
+              try:
+                  return f"{int(value):,}".replace(",", " ")
+              except (TypeError, ValueError):
+                  return escape_html(str(value))
+          
+          def _format_ipo_item(event: dict, date_label: str) -> list[str]:
+              company = escape_html(event.get("company_name", "Unknown company"))
+              ticker = escape_html(event.get("ticker") or "N/A")
+              exchange = escape_html(event.get("exchange") or "N/A")
+              status = escape_html(event.get("status") or "N/A")
+              source = escape_html(event.get("source") or "N/A")
+          
+              lines = [
+                  f"• <b>{company}</b> (<code>{ticker}</code>)",
+                  f"  🏛 {exchange} · {date_label}: <b>{escape_html(event.get('planned_ipo_date') or event.get('first_trading_date') or 'N/A')}</b>",
+              ]
+          
+              if event.get("previous_ipo_date"):
+                  lines.append(f"  ↳ previous date: {escape_html(event['previous_ipo_date'])}")
+          
+              price_bits = []
+              if event.get("price_range"):
+                  price_bits.append(f"range {escape_html(event['price_range'])}")
+              if event.get("offer_price"):
+                  price_bits.append(f"offer {escape_html(event['offer_price'])}")
+              if price_bits:
+                  lines.append(f"  💵 Price: {', '.join(price_bits)}")
+          
+              shares = _format_int(event.get("shares_offered"))
+              if shares:
+                  lines.append(f"  📦 Shares offered: {shares}")
+          
+              if event.get("change_type"):
+                  changed_fields = ", ".join(event.get("changed_fields", []))
+                  changed_suffix = f" ({escape_html(changed_fields)})" if changed_fields else ""
+                  lines.append(f"  🔄 {escape_html(event['change_type'])}{changed_suffix}")
+          
+              lines.append(f"  📌 Status: {status}")
+              lines.append(f"  🔗 Source: {source}")
+              return lines
+          
+          def build_ipo_radar_message(radar: dict) -> str:
+              tz_il = timezone(timedelta(hours=3))
+              now_str = datetime.now(tz_il).strftime("%d.%m.%Y")
+          
+              date_updates = radar.get("date_updates", [])
+              new_listings = radar.get("new_listings", [])
+          
+              lines = [
+                  "🔔 <b>Weekly IPO Radar</b>",
+                  f"📅 {now_str} 🇮🇱",
+                  f"🗓 Window: {escape_html(radar.get('window_start', 'N/A'))} → {escape_html(radar.get('window_end', 'N/A'))}\n",
+              ]
+          
+              if not date_updates and not new_listings:
+                  lines.append("No notable IPO updates this week")
+                  if not radar.get("previous_snapshot_found"):
+                      lines.append("Baseline snapshot created; date-change detection starts from the next weekly run.")
+                  lines.append("\n<i>Dates may change. Not financial advice.</i>")
+                  lines.append(f"\n{BOT_NAME}")
+                  return "\n".join(lines)
+          
+              lines.append("<b>1. IPO dates announced/updated this week</b>")
+              if date_updates:
+                  lines.append("<blockquote expandable>")
+                  for event in date_updates:
+                      lines.extend(_format_ipo_item(event, "planned IPO date"))
+                      lines.append("")
+                  lines.append("</blockquote>")
+              else:
+                  lines.append("No notable IPO date updates found.\n")
+          
+              lines.append("<b>2. New public listings this week</b>")
+              if new_listings:
+                  lines.append("<blockquote expandable>")
+                  for event in new_listings:
+                      lines.extend(_format_ipo_item(event, "first trading date"))
+                      lines.append("")
+                  lines.append("</blockquote>")
+              else:
+                  lines.append("No notable new listings found.")
+          
+              lines.append("\n<i>Dates may change. Not financial advice.</i>")
+              lines.append(f"\n{BOT_NAME}")
+              return "\n".join(lines)
+
           EOF
 
           cat << 'EOF' > modules/telegram_sender.py
@@ -942,39 +1539,40 @@ jobs:
           from datetime import datetime, timezone, timedelta
           from modules.config import SECTORS_CONFIG
           from modules.market import fetch_all_yahoo_data, fetch_all_israeli_funds
-          from modules.news import fetch_sector_news, fetch_ipo_full_analytics
-          from modules.formatter import build_telegram_message, build_ipo_message
+          from modules.news import fetch_sector_news
+          from modules.ipo import fetch_weekly_ipo_radar
+          from modules.formatter import build_telegram_message, build_ipo_radar_message
           from modules.telegram_sender import send_to_telegram
-
+          
           def calculate_sector_score(avg_change: float) -> int:
               return max(0, min(100, int(50 + (avg_change * 15.0))))
-
+          
           async def run_market_analytics():
               all_tickers = set()
               for cfg in SECTORS_CONFIG.values():
                   all_tickers.update(cfg["tickers"])
-
+          
               print(f"📦 Сбор данных Yahoo Finance...")
               global_market_data = await fetch_all_yahoo_data(list(all_tickers))
-
+          
               print(f"🌐 Сбор доходности израильских фондов...")
               il_results = await fetch_all_israeli_funds(SECTORS_CONFIG)
-
+          
               async with aiohttp.ClientSession() as session:
                   sectors_results = []
-
+          
                   for key, cfg in SECTORS_CONFIG.items():
                       ticker_details = [(t, global_market_data[t]["change"]) for t in cfg["tickers"] if t in global_market_data and global_market_data[t]["price"] > 0]
-
+          
                       sorted_tickers = sorted(ticker_details, key=lambda x: abs(x[1]), reverse=True)
                       top_3_tickers = sorted_tickers[:3]
-
+          
                       valid_changes = [c for _, c in ticker_details]
                       avg_change = sum(valid_changes) / len(valid_changes) if valid_changes else 0.0
-
+          
                       score = calculate_sector_score(avg_change)
                       news = await fetch_sector_news(session, cfg["news_ticker"])
-
+          
                       sectors_results.append({
                           "short_eng": cfg["short_eng"],
                           "name": cfg["name"],
@@ -987,27 +1585,27 @@ jobs:
                           "il_name_eng": cfg["il_name_eng"],
                           "il_fund_data": il_results.get(key, {"daily": 0.0, "mtd": 0.0, "ytd": 0.0})
                       })
-
+          
                   sectors_results.sort(key=lambda x: x["avg_change"], reverse=True)
-
+          
                   message = build_telegram_message(sectors_results)
                   await send_to_telegram(message)
-
+          
           async def run_ipo_digest():
-              print("📊 Формирование IPO отчета...")
-              ipo_cards = fetch_ipo_full_analytics()
-              message = build_ipo_message(ipo_cards)
+              print("📊 Формирование Weekly IPO Radar...")
+              radar = await fetch_weekly_ipo_radar()
+              message = build_ipo_radar_message(radar)
               await send_to_telegram(message)
-
+          
           async def main():
               tz_il = timezone(timedelta(hours=3))
               now = datetime.now(tz_il)
-
+          
               if now.weekday() == 5 and now.hour == 22:
                   await run_ipo_digest()
               else:
                   await run_market_analytics()
-
+          
           if __name__ == "__main__":
               asyncio.run(main())
           EOF
@@ -1022,4 +1620,13 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          IPO_STATE_FILE: ipo_radar_snapshot.json
         run: python main.py
+
+      - name: Save IPO Radar Snapshot
+        if: always() && hashFiles('ipo_radar_snapshot.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: ipo_radar_snapshot.json
+          key: ipo-radar-${{ github.run_id }}-${{ github.run_attempt }}
