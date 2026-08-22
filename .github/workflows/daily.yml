@@ -714,38 +714,246 @@ jobs:
           EOF
 
           cat << 'EOF' > modules/news.py
-          import aiohttp, urllib.parse, html
+          import aiohttp, urllib.parse, html, re, time
           import yfinance as yf
           from modules.config import HTTP_TIMEOUT, HEADERS
+
+          def has_cyrillic(text: str) -> bool:
+              return bool(re.search(r"[а-яА-ЯёЁ]", str(text or "")))
+
+          def normalize_news_title(title: str) -> str:
+              title = html.unescape(str(title or "")).strip()
+              return re.sub(r"\s+", " ", title)
 
           async def translate_to_russian(session: aiohttp.ClientSession, text: str) -> str:
               if not text:
                   return text
+
+              clean_text = normalize_news_title(text)
+
+              # Если Yahoo уже вернул русский заголовок, не трогаем его.
+              if has_cyrillic(clean_text):
+                  return clean_text
+
               try:
-                  url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ru&dt=t&q={urllib.parse.quote(text)}"
+                  url = (
+                      "https://translate.googleapis.com/translate_a/single"
+                      f"?client=gtx&sl=auto&tl=ru&dt=t&q={urllib.parse.quote(clean_text)}"
+                  )
                   async with session.get(url, timeout=6) as resp:
                       if resp.status == 200:
                           data = await resp.json()
-                          translated = "".join([segment[0] for segment in data[0] if segment[0]])
-                          return html.unescape(translated)
+                          translated = "".join(
+                              [segment[0] for segment in data[0] if segment and segment[0]]
+                          )
+                          translated = html.unescape(normalize_news_title(translated))
+
+                          # Важно: если переводчик вернул английский текст без кириллицы,
+                          # не показываем англоязычный заголовок в Telegram.
+                          if translated and has_cyrillic(translated):
+                              return translated
               except Exception:
                   pass
-              return text
 
-          async def fetch_sector_news(session: aiohttp.ClientSession, query_ticker: str) -> list:
-              url = f"https://query1.finance.yahoo.com/v1/finance/search?q={query_ticker}"
+              return ""
+
+          def is_generic_market_news(title: str) -> bool:
+              text = title.lower()
+              generic_patterns = [
+                  "stock market today",
+                  "stocks today",
+                  "market today",
+                  "dow jones",
+                  "s&p 500",
+                  "nasdaq composite",
+                  "what to watch",
+                  "before the bell",
+                  "after the bell",
+                  "premarket",
+                  "postmarket",
+                  "top analyst",
+                  "motley fool",
+                  "zacks",
+                  "investor's business daily",
+                  "jim cramer",
+                  "these stocks",
+                  "stocks to buy",
+                  "stocks to watch",
+              ]
+              return any(pattern in text for pattern in generic_patterns)
+
+          def is_low_quality_news(title: str) -> bool:
+              text = title.lower()
+              bad_patterns = [
+                  "sponsored",
+                  "advertisement",
+                  "class action",
+                  "lawsuit alert",
+                  "shareholder alert",
+                  "deadline alert",
+                  "investigation alert",
+                  "rosen law",
+                  "pomerantz law",
+                  "levi & korsinsky",
+                  "bragar eagel",
+                  "earnings call transcript",
+                  "transcript",
+              ]
+              return any(pattern in text for pattern in bad_patterns)
+
+          def news_age_hours(item: dict) -> float | None:
+              published = item.get("providerPublishTime")
+              if not published:
+                  return None
+              try:
+                  return max(0.0, (time.time() - float(published)) / 3600)
+              except (TypeError, ValueError):
+                  return None
+
+          def score_news_item(item: dict, ticker: str, sector_name: str) -> int:
+              title = normalize_news_title(item.get("title", ""))
+              if not title or len(title) < 20:
+                  return -100
+
+              if is_low_quality_news(title):
+                  return -100
+
+              score = 0
+              title_lower = title.lower()
+              ticker_lower = str(ticker).lower()
+
+              if ticker_lower in title_lower:
+                  score += 35
+
+              sector_keywords = {
+                  "Oil": ["oil", "crude", "wti", "brent", "energy", "gasoline", "opec"],
+                  "AI": ["ai", "artificial intelligence", "chip", "gpu", "semiconductor"],
+                  "Cyber": ["cyber", "security", "breach", "cloud security", "ransomware"],
+                  "Game": ["gaming", "game", "console", "playstation", "xbox"],
+                  "Gold": ["gold", "silver", "metals", "miners", "treasury yields"],
+                  "Clean": ["solar", "wind", "renewable", "clean energy", "green energy"],
+                  "Aero": ["aerospace", "defense", "aircraft", "boeing", "airbus"],
+                  "Bio": ["biotech", "drug", "fda", "trial", "pharma", "medicine"],
+                  "Bank": ["bank", "banks", "fed", "rates", "loan", "credit"],
+                  "Cloud": ["cloud", "software", "saas", "data center", "enterprise"],
+                  "EV": ["ev", "electric vehicle", "battery", "tesla", "deliveries"],
+              }
+
+              for keyword in sector_keywords.get(sector_name, []):
+                  if keyword in title_lower:
+                      score += 12
+
+              age = news_age_hours(item)
+              if age is not None:
+                  if age <= 18:
+                      score += 25
+                  elif age <= 36:
+                      score += 15
+                  elif age <= 72:
+                      score += 5
+                  else:
+                      score -= 20
+
+              if item.get("publisher"):
+                  score += 5
+
+              if is_generic_market_news(title):
+                  score -= 25
+
+              return score
+
+          async def fetch_yahoo_news_for_ticker(
+              session: aiohttp.ClientSession,
+              ticker: str,
+              sector_name: str,
+          ) -> list[dict]:
+              url = f"https://query1.finance.yahoo.com/v1/finance/search?q={urllib.parse.quote(ticker)}"
+
               try:
                   async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
-                      if response.status == 200:
-                          items = (await response.json()).get("news", [])
-                          for item in items:
-                              title = item.get("title", "")
-                              if title and len(title) > 15:
-                                  translated_title = await translate_to_russian(session, title)
-                                  return [f"• {translated_title}"]
+                      if response.status != 200:
+                          return []
+
+                      payload = await response.json()
+                      items = payload.get("news", [])
+                      scored_items = []
+
+                      for item in items:
+                          title = normalize_news_title(item.get("title", ""))
+                          score = score_news_item(item, ticker, sector_name)
+
+                          if score >= 15:
+                              scored_items.append({
+                                  "ticker": ticker,
+                                  "title": title,
+                                  "publisher": item.get("publisher", ""),
+                                  "score": score,
+                              })
+
+                      return scored_items
+
               except Exception:
-                  pass
-              return ["• Торгуется в рамках текущей рыночной динамики."]
+                  return []
+
+          async def fetch_sector_news(
+              session: aiohttp.ClientSession,
+              query_ticker: str,
+              top_tickers: list | None = None,
+              sector_name: str = "",
+          ) -> list:
+              candidate_tickers = []
+
+              if top_tickers:
+                  for item in top_tickers:
+                      if isinstance(item, (tuple, list)) and item:
+                          ticker = str(item[0]).strip()
+                          if ticker and ticker not in candidate_tickers:
+                              candidate_tickers.append(ticker)
+
+              if query_ticker and query_ticker not in candidate_tickers:
+                  candidate_tickers.append(query_ticker)
+
+              candidate_tickers = candidate_tickers[:4]
+
+              all_news = []
+              seen_titles = set()
+
+              for ticker in candidate_tickers:
+                  ticker_news = await fetch_yahoo_news_for_ticker(
+                      session=session,
+                      ticker=ticker,
+                      sector_name=sector_name,
+                  )
+
+                  for item in ticker_news:
+                      normalized_title = re.sub(
+                          r"[^a-z0-9а-яё]+",
+                          "",
+                          item["title"].lower(),
+                          flags=re.IGNORECASE,
+                      )
+
+                      if normalized_title in seen_titles:
+                          continue
+
+                      seen_titles.add(normalized_title)
+                      all_news.append(item)
+
+              if not all_news:
+                  return ["• 📰 Явного новостного драйвера по главным тикерам не найдено."]
+
+              all_news.sort(key=lambda item: item["score"], reverse=True)
+              best = all_news[0]
+              translated_title = await translate_to_russian(session, best["title"])
+
+              if translated_title:
+                  publisher = f" · {best['publisher']}" if best.get("publisher") else ""
+                  return [f"• 📰 {best['ticker']}: {translated_title}{publisher}"]
+
+              # Если перевод недоступен, не показываем английский заголовок.
+              return [
+                  f"• 📰 {best['ticker']}: найден новостной драйвер, но перевод заголовка недоступен."
+              ]
 
           def get_single_ipo_card(symbol: str, name: str, ipo_date: str, fallback_price: str) -> str:
               try:
@@ -798,7 +1006,7 @@ jobs:
               return cards
           EOF
 
-          cat << 'EOF' > modules/ipo.py
+                    cat << 'EOF' > modules/ipo.py
           import json
           import os
           import re
@@ -1702,7 +1910,7 @@ jobs:
                   us_str = format_signed_percent(us_ch)
 
                   lines.append(f"{ch_emoji} <b>{escape_html(s['il_name_eng'])}</b> ({s['icon']} {escape_html(s['short_eng'])})")
-                  lines.append(f"└ <code>{s['fund_id']}</code> · <b>День: {d_str}</b> | <b>Месяц: {mtd_str}</b> | <b>Год: {ytd_str}</b>")
+                  lines.append(f"└ <code>{s['fund_id']}</code> · <b>D: {d_str}</b> | <b>M: {mtd_str}</b> | <b>Y: {ytd_str}</b>")
                   lines.append(f"   📡 US-сектор: <b>{us_str}</b> | Связь: <i>{escape_html(relation)}</i>")
                   lines.append(f"   🧭 Signal: <b>{signal_emoji} {signal_text}</b>")
                   lines.append(f"   └ {escape_html(outlook)}")
@@ -1992,7 +2200,12 @@ jobs:
                       avg_change = sum(valid_changes) / len(valid_changes) if valid_changes else 0.0
           
                       score = calculate_sector_score(avg_change)
-                      news = await fetch_sector_news(session, cfg["news_ticker"])
+                      news = await fetch_sector_news(
+                          session=session,
+                          query_ticker=cfg["news_ticker"],
+                          top_tickers=top_3_tickers,
+                          sector_name=cfg["short_eng"],
+                      )
           
                       sectors_results.append({
                           "short_eng": cfg["short_eng"],
