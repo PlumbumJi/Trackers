@@ -804,20 +804,24 @@ jobs:
           import re
           from datetime import date, datetime, timedelta, timezone
           from typing import Any, Optional
-          
+
           import aiohttp
-          
+          from bs4 import BeautifulSoup
+
           from modules.config import (
               FINNHUB_API_KEY,
               HTTP_TIMEOUT,
               IPO_LOOKAHEAD_DAYS,
               IPO_LOOKBACK_DAYS,
               IPO_STATE_FILE,
+              HEADERS,
           )
-          
+
           FINNHUB_IPO_CALENDAR_URL = "https://finnhub.io/api/v1/calendar/ipo"
-          IPO_SOURCE_NAME = "Finnhub IPO Calendar"
-          
+          YAHOO_IPO_CALENDAR_URL = "https://finance.yahoo.com/calendar/ipo"
+          FINNHUB_SOURCE_NAME = "Finnhub IPO Calendar"
+          YAHOO_SOURCE_NAME = "Yahoo Finance IPO Calendar"
+
           TEXT_TRASH_PATTERNS = (
               r"\bspac\b",
               r"\bblank[- ]check\b",
@@ -834,7 +838,7 @@ jobs:
               r"\bpreferred\b",
               r"\bdepositary\s+shares\b",
           )
-          
+
           SYMBOL_TRASH_PATTERNS = (
               r"[\.\-/]U$",
               r"[\.\-/]W$",
@@ -843,168 +847,212 @@ jobs:
               r"[\.\-/]R$",
               r"[\.\-/]RT$",
           )
-          
-          
+
+
           def _as_text(value: Any) -> str:
               if value is None:
                   return ""
               return re.sub(r"\s+", " ", str(value)).strip()
-          
-          
+
+
           def _parse_int(value: Any) -> Optional[int]:
               if value is None or value == "":
                   return None
-          
+
               if isinstance(value, bool):
                   return None
-          
+
               if isinstance(value, (int, float)):
                   return int(value) if value >= 0 else None
-          
+
               cleaned = re.sub(r"[^\d]", "", str(value))
               if not cleaned:
                   return None
-          
+
               try:
                   return int(cleaned)
               except ValueError:
                   return None
-          
-          
+
+
           def _parse_iso_date(value: Any) -> Optional[date]:
               text = _as_text(value)
               if not text:
                   return None
-          
-              # Finnhub usually returns YYYY-MM-DD, but some wrappers expose ISO datetime.
+
               match = re.search(r"\d{4}-\d{2}-\d{2}", text)
-              if not match:
-                  return None
-          
-              try:
-                  return datetime.strptime(match.group(0), "%Y-%m-%d").date()
-              except ValueError:
-                  return None
-          
-          
+              if match:
+                  try:
+                      return datetime.strptime(match.group(0), "%Y-%m-%d").date()
+                  except ValueError:
+                      return None
+
+              for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%b %d, %Y", "%B %d, %Y"):
+                  try:
+                      return datetime.strptime(text, fmt).date()
+                  except ValueError:
+                      continue
+
+              return None
+
+
           def _date_to_str(value: Optional[date]) -> str:
               return value.isoformat() if value else ""
-          
-          
+
+
           def _normalize_symbol(symbol: Any) -> str:
               text = _as_text(symbol).upper()
               return re.sub(r"\s+", "", text)
-          
-          
-          def _parse_price_fields(raw_price: Any, status: str, event_date: Optional[date], today: date) -> tuple[str, str]:
+
+
+          def _parse_price_fields(
+              raw_price: Any,
+              status: str,
+              event_date: Optional[date],
+              today: date,
+          ) -> tuple[str, str]:
               price = _as_text(raw_price)
               if not price:
                   return "", ""
-          
+
               normalized = price.replace("–", "-").replace("—", "-")
               lower_status = status.lower()
-          
+
               if re.search(r"\d\s*-\s*\$?\d", normalized) or "range" in lower_status:
                   return normalized, ""
-          
-              if "priced" in lower_status or "listed" in lower_status or (event_date and event_date <= today):
+
+              if (
+                  "priced" in lower_status
+                  or "listed" in lower_status
+                  or "pricing" in lower_status
+                  or (event_date and event_date <= today)
+              ):
                   return "", normalized
-          
+
               return normalized, ""
-          
-          
-          def normalize_ipo_event(raw: dict[str, Any], today: Optional[date] = None) -> Optional[dict[str, Any]]:
+
+
+          def normalize_ipo_event(
+              raw: dict[str, Any],
+              today: Optional[date] = None,
+              default_source: str = FINNHUB_SOURCE_NAME,
+          ) -> Optional[dict[str, Any]]:
               if today is None:
                   today = datetime.now(timezone.utc).date()
-          
+
               event_date = _parse_iso_date(
                   raw.get("date")
                   or raw.get("ipoDate")
                   or raw.get("pricedDate")
                   or raw.get("expectedDate")
+                  or raw.get("expectedToTrade")
               )
-          
+
               company_name = _as_text(
                   raw.get("name")
                   or raw.get("companyName")
                   or raw.get("company")
+                  or raw.get("Company")
               )
-          
+
               ticker = _normalize_symbol(
                   raw.get("symbol")
                   or raw.get("ticker")
+                  or raw.get("Symbol")
               )
-          
+
               exchange = _as_text(
                   raw.get("exchange")
                   or raw.get("exchangeName")
+                  or raw.get("market")
+                  or raw.get("Market")
               )
-          
-              status = _as_text(raw.get("status"))
-              raw_price = raw.get("price") or raw.get("priceRange") or raw.get("offerPrice")
-              price_range, offer_price = _parse_price_fields(raw_price, status, event_date, today)
-          
+
+              status = _as_text(
+                  raw.get("status")
+                  or raw.get("type")
+                  or raw.get("eventType")
+              )
+
+              source = _as_text(raw.get("_source")) or default_source
+              raw_price = (
+                  raw.get("price")
+                  or raw.get("priceRange")
+                  or raw.get("offerPrice")
+                  or raw.get("Price Range")
+              )
+              price_range, offer_price = _parse_price_fields(
+                  raw_price,
+                  status,
+                  event_date,
+                  today,
+              )
+
               shares_offered = _parse_int(
                   raw.get("numberOfShares")
                   or raw.get("sharesOffered")
                   or raw.get("shares")
+                  or raw.get("Shares")
               )
-          
+
               total_shares_value = _parse_int(
                   raw.get("totalSharesValue")
                   or raw.get("dealSize")
                   or raw.get("totalValue")
+                  or raw.get("Deal Size")
               )
-          
+
               if not company_name or not event_date:
                   return None
-          
+
+              event_date_str = _date_to_str(event_date)
+
               return {
                   "company_name": company_name,
                   "ticker": ticker,
                   "exchange": exchange,
-                  "planned_ipo_date": _date_to_str(event_date),
-                  "first_trading_date": _date_to_str(event_date),
+                  "planned_ipo_date": event_date_str,
+                  "first_trading_date": event_date_str,
                   "price_range": price_range,
                   "offer_price": offer_price,
                   "shares_offered": shares_offered,
                   "total_shares_value": total_shares_value,
                   "status": status,
-                  "source": IPO_SOURCE_NAME,
+                  "source": source,
               }
-          
-          
+
+
           def is_common_stock_candidate(event: dict[str, Any]) -> bool:
               name = event.get("company_name", "").lower()
               ticker = event.get("ticker", "").upper()
-          
+
               if not event.get("planned_ipo_date"):
                   return False
-          
+
               if not event.get("ticker") and not event.get("company_name"):
                   return False
-          
+
               for pattern in TEXT_TRASH_PATTERNS:
                   if re.search(pattern, name):
                       return False
-          
+
               for pattern in SYMBOL_TRASH_PATTERNS:
                   if re.search(pattern, ticker):
                       return False
-          
+
               return True
-          
-          
+
+
           def event_key(event: dict[str, Any]) -> str:
               ticker = event.get("ticker", "")
               if ticker:
                   return f"ticker:{ticker}"
-          
+
               company = re.sub(r"[^a-z0-9]+", "", event.get("company_name", "").lower())
               exchange = re.sub(r"[^a-z0-9]+", "", event.get("exchange", "").lower())
               return f"company:{company}:{exchange}"
-          
-          
+
+
           def _completeness_score(event: dict[str, Any]) -> int:
               score = 0
               for field in (
@@ -1019,71 +1067,76 @@ jobs:
               ):
                   if event.get(field):
                       score += 1
+
               if event.get("total_shares_value"):
                   score += 2
+
+              if event.get("source") == FINNHUB_SOURCE_NAME:
+                  score += 1
+
               return score
-          
-          
+
+
           def dedupe_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
               by_key: dict[str, dict[str, Any]] = {}
-          
+
               for event in events:
                   key = event_key(event)
                   if not key:
                       continue
-          
+
                   current = by_key.get(key)
                   if current is None or _completeness_score(event) > _completeness_score(current):
                       by_key[key] = event
-          
+
               return list(by_key.values())
-          
-          
+
+
           def load_snapshot(path: str = IPO_STATE_FILE) -> dict[str, Any]:
               if not path or not os.path.exists(path):
                   return {"items": {}, "generated_at": None}
-          
+
               try:
                   with open(path, "r", encoding="utf-8") as file:
                       payload = json.load(file)
-          
+
                   if isinstance(payload, dict) and isinstance(payload.get("items"), dict):
                       return payload
-          
+
               except Exception as error:
                   print(f"⚠️ IPO snapshot load failed: {error}")
-          
+
               return {"items": {}, "generated_at": None}
-          
-          
+
+
           def save_snapshot(events: list[dict[str, Any]], path: str = IPO_STATE_FILE) -> None:
               items = {event_key(event): event for event in events if event_key(event)}
               payload = {
                   "generated_at": datetime.now(timezone.utc).isoformat(),
-                  "source": IPO_SOURCE_NAME,
+                  "source": f"{FINNHUB_SOURCE_NAME} + {YAHOO_SOURCE_NAME}",
                   "items": items,
               }
-          
+
               directory = os.path.dirname(path)
               if directory:
                   os.makedirs(directory, exist_ok=True)
-          
+
               tmp_path = f"{path}.tmp"
               with open(tmp_path, "w", encoding="utf-8") as file:
                   json.dump(payload, file, ensure_ascii=False, indent=2, sort_keys=True)
-          
+
               os.replace(tmp_path, path)
-          
-          
+
+
           async def fetch_finnhub_ipo_calendar(
               session: aiohttp.ClientSession,
               date_from: date,
               date_to: date,
           ) -> Optional[list[dict[str, Any]]]:
               if not FINNHUB_API_KEY:
-                  print("⚠️ FINNHUB_API_KEY is not set; IPO calendar is unavailable.")
+                  print("⚠️ FINNHUB_API_KEY is not set; Finnhub IPO calendar is unavailable.")
                   return None
-          
+
               params = {
                   "from": date_from.isoformat(),
                   "to": date_to.isoformat(),
@@ -1091,7 +1144,7 @@ jobs:
               headers = {
                   "X-Finnhub-Token": FINNHUB_API_KEY,
               }
-          
+
               try:
                   async with session.get(
                       FINNHUB_IPO_CALENDAR_URL,
@@ -1103,21 +1156,120 @@ jobs:
                           body = await response.text()
                           print(f"⚠️ Finnhub IPO Calendar HTTP {response.status}: {body[:300]}")
                           return None
-          
+
                       payload = await response.json()
                       events = payload.get("ipoCalendar", [])
-          
+
                       if not isinstance(events, list):
                           print("⚠️ Finnhub IPO Calendar: unexpected JSON shape")
                           return None
-          
+
+                      for event in events:
+                          if isinstance(event, dict):
+                              event["_source"] = FINNHUB_SOURCE_NAME
+
                       return events
-          
+
               except Exception as error:
                   print(f"⚠️ Finnhub IPO Calendar error: {error}")
                   return None
-          
-          
+
+
+          def _normalize_header(text: str) -> str:
+              return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+          def _map_yahoo_table_row(headers: list[str], cells: list[str]) -> dict[str, Any]:
+              mapped: dict[str, Any] = {"_source": YAHOO_SOURCE_NAME}
+
+              for header, value in zip(headers, cells):
+                  key = _normalize_header(header)
+
+                  if key in {"company", "companyname", "name"}:
+                      mapped["companyName"] = value
+                  elif key in {"symbol", "ticker"}:
+                      mapped["symbol"] = value
+                  elif key in {"market", "exchange"}:
+                      mapped["exchange"] = value
+                  elif key in {"pricerange", "price"}:
+                      mapped["priceRange"] = value
+                  elif key in {"shares", "sharesoffered", "numberofshares"}:
+                      mapped["numberOfShares"] = value
+                  elif key in {"date", "ipodate", "priceddate", "expectedtotrade"}:
+                      mapped["date"] = value
+                  elif key in {"dealsize", "estimateddealsize"}:
+                      mapped["dealSize"] = value
+                  elif key in {"status", "type"}:
+                      mapped["status"] = value
+
+              if not mapped.get("status"):
+                  mapped["status"] = "IPO calendar"
+
+              return mapped
+
+
+          def parse_yahoo_ipo_calendar_html(html_text: str) -> list[dict[str, Any]]:
+              soup = BeautifulSoup(html_text, "html.parser")
+              events: list[dict[str, Any]] = []
+
+              for table in soup.find_all("table"):
+                  header_cells = table.find_all("th")
+                  headers = [cell.get_text(" ", strip=True) for cell in header_cells]
+
+                  if not headers:
+                      continue
+
+                  normalized_headers = {_normalize_header(header) for header in headers}
+                  if not ({"symbol", "ticker"} & normalized_headers) and "company" not in normalized_headers:
+                      continue
+
+                  for row in table.find_all("tr"):
+                      cells = [cell.get_text(" ", strip=True) for cell in row.find_all("td")]
+                      if len(cells) < 2:
+                          continue
+
+                      item = _map_yahoo_table_row(headers, cells)
+                      if item.get("companyName") or item.get("symbol"):
+                          events.append(item)
+
+              return events
+
+
+          async def fetch_yahoo_ipo_calendar(
+              session: aiohttp.ClientSession,
+              date_from: date,
+              date_to: date,
+          ) -> Optional[list[dict[str, Any]]]:
+              params = {
+                  "from": date_from.isoformat(),
+                  "to": date_to.isoformat(),
+              }
+
+              try:
+                  async with session.get(
+                      YAHOO_IPO_CALENDAR_URL,
+                      params=params,
+                      headers=HEADERS,
+                      timeout=HTTP_TIMEOUT,
+                  ) as response:
+                      if response.status != 200:
+                          body = await response.text()
+                          print(f"⚠️ Yahoo IPO Calendar HTTP {response.status}: {body[:300]}")
+                          return None
+
+                      html_text = await response.text(errors="ignore")
+                      events = parse_yahoo_ipo_calendar_html(html_text)
+
+                      for event in events:
+                          event["_source"] = YAHOO_SOURCE_NAME
+
+                      return events
+
+              except Exception as error:
+                  print(f"⚠️ Yahoo IPO Calendar error: {error}")
+                  return None
+
+
           def _changed_fields(previous: dict[str, Any], current: dict[str, Any]) -> list[str]:
               fields = (
                   "planned_ipo_date",
@@ -1128,37 +1280,34 @@ jobs:
                   "exchange",
               )
               changed = []
-          
+
               for field in fields:
                   old_value = previous.get(field)
                   new_value = current.get(field)
                   if (old_value or "") != (new_value or ""):
                       changed.append(field)
-          
+
               return changed
-          
-          
+
+
           def build_updates_from_snapshot(
               current_events: list[dict[str, Any]],
               previous_snapshot: dict[str, Any],
           ) -> list[dict[str, Any]]:
               previous_items = previous_snapshot.get("items", {})
-              if not previous_items:
-                  return []
-          
               updates = []
-          
+
               for event in current_events:
                   key = event_key(event)
                   previous = previous_items.get(key)
-          
+
                   if previous is None:
                       item = dict(event)
                       item["change_type"] = "New IPO date in calendar"
                       item["changed_fields"] = ["planned_ipo_date"]
                       updates.append(item)
                       continue
-          
+
                   changed = _changed_fields(previous, event)
                   if changed:
                       item = dict(event)
@@ -1169,39 +1318,60 @@ jobs:
                       else:
                           item["change_type"] = "IPO terms/status updated"
                       updates.append(item)
-          
+
               return updates
-          
-          
+
+
+          def build_baseline_calendar_items(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+              baseline_items = []
+
+              for event in events:
+                  item = dict(event)
+                  item["change_type"] = "Current IPO date on calendar"
+                  item["changed_fields"] = ["planned_ipo_date"]
+                  baseline_items.append(item)
+
+              return baseline_items
+
+
           def filter_new_listings_this_week(
               events: list[dict[str, Any]],
               window_start: date,
               window_end: date,
           ) -> list[dict[str, Any]]:
               result = []
-          
+
               for event in events:
                   listing_date = _parse_iso_date(event.get("first_trading_date"))
                   if listing_date and window_start <= listing_date <= window_end:
-                      result.append(event)
-          
+                      item = dict(event)
+                      if not item.get("status"):
+                          item["status"] = "recent IPO"
+                      result.append(item)
+
               return result
-          
-          
+
+
           def _ranking_value(event: dict[str, Any]) -> int:
               return int(event.get("total_shares_value") or 0) + int(event.get("shares_offered") or 0)
-          
-          
+
+
           def _sort_updates(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
               def priority(event: dict[str, Any]) -> tuple[int, str, int]:
                   change_type = event.get("change_type", "")
-                  change_score = 2 if change_type == "IPO date updated" else 1
+                  if change_type == "IPO date updated":
+                      change_score = 3
+                  elif change_type == "New IPO date in calendar":
+                      change_score = 2
+                  else:
+                      change_score = 1
+
                   event_date = event.get("planned_ipo_date", "9999-12-31")
                   return (-change_score, event_date, -_ranking_value(event))
-          
+
               return sorted(events, key=priority)
-          
-          
+
+
           def _sort_listings(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
               return sorted(
                   events,
@@ -1211,70 +1381,102 @@ jobs:
                   ),
                   reverse=True,
               )
-          
-          
+
+
           async def fetch_weekly_ipo_radar(
               today: Optional[date] = None,
               state_file: str = IPO_STATE_FILE,
               save_state: bool = True,
           ) -> dict[str, Any]:
               if today is None:
-                  # The bot runs for an Israel-based audience. For date windows, UTC is safer
-                  # than a fixed +03 offset for API queries and avoids DST edge cases.
                   today = datetime.now(timezone.utc).date()
-          
+
               lookback_days = max(1, IPO_LOOKBACK_DAYS)
               lookahead_days = max(14, IPO_LOOKAHEAD_DAYS)
-          
+
               window_start = today - timedelta(days=lookback_days - 1)
               upcoming_start = today + timedelta(days=1)
               upcoming_end = today + timedelta(days=lookahead_days)
-          
+
               timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT + 10)
               async with aiohttp.ClientSession(timeout=timeout) as session:
-                  raw_recent_payload = await fetch_finnhub_ipo_calendar(session, window_start, today)
-                  raw_upcoming_payload = await fetch_finnhub_ipo_calendar(session, upcoming_start, upcoming_end)
-          
-              source_ok = raw_recent_payload is not None and raw_upcoming_payload is not None
-              raw_recent = raw_recent_payload or []
-              raw_upcoming = raw_upcoming_payload or []
-          
+                  raw_finnhub_recent = await fetch_finnhub_ipo_calendar(session, window_start, today)
+                  raw_finnhub_upcoming = await fetch_finnhub_ipo_calendar(session, upcoming_start, upcoming_end)
+
+                  raw_yahoo_recent = await fetch_yahoo_ipo_calendar(session, window_start, today)
+                  raw_yahoo_upcoming = await fetch_yahoo_ipo_calendar(session, upcoming_start, upcoming_end)
+
+              source_ok = any(
+                  payload is not None
+                  for payload in (
+                      raw_finnhub_recent,
+                      raw_finnhub_upcoming,
+                      raw_yahoo_recent,
+                      raw_yahoo_upcoming,
+                  )
+              )
+
+              raw_recent = (raw_finnhub_recent or []) + (raw_yahoo_recent or [])
+              raw_upcoming = (raw_finnhub_upcoming or []) + (raw_yahoo_upcoming or [])
+
               normalized_recent = [
                   event
                   for raw in raw_recent
-                  if (event := normalize_ipo_event(raw, today=today)) and is_common_stock_candidate(event)
+                  if (
+                      event := normalize_ipo_event(
+                          raw,
+                          today=today,
+                          default_source=_as_text(raw.get("_source")) or FINNHUB_SOURCE_NAME,
+                      )
+                  )
+                  and is_common_stock_candidate(event)
               ]
-          
+
               normalized_upcoming = [
                   event
                   for raw in raw_upcoming
-                  if (event := normalize_ipo_event(raw, today=today)) and is_common_stock_candidate(event)
+                  if (
+                      event := normalize_ipo_event(
+                          raw,
+                          today=today,
+                          default_source=_as_text(raw.get("_source")) or FINNHUB_SOURCE_NAME,
+                      )
+                  )
+                  and is_common_stock_candidate(event)
               ]
-          
+
               recent_events = dedupe_events(normalized_recent)
               upcoming_events = dedupe_events(normalized_upcoming)
               all_events = dedupe_events(recent_events + upcoming_events)
-          
+
               previous_snapshot = load_snapshot(state_file)
-              updates = build_updates_from_snapshot(upcoming_events, previous_snapshot)
+              previous_snapshot_found = bool(previous_snapshot.get("items"))
+
+              if previous_snapshot_found:
+                  updates = build_updates_from_snapshot(upcoming_events, previous_snapshot)
+              else:
+                  # Первый запуск не должен присылать пустой отчёт.
+                  # Мы честно маркируем это как текущий календарь, а не как подтверждённое изменение.
+                  updates = build_baseline_calendar_items(upcoming_events)
+
               listings = filter_new_listings_this_week(recent_events, window_start, today)
-          
+
               updates = _sort_updates(dedupe_events(updates))[:5]
               listings = _sort_listings(dedupe_events(listings))[:5]
-          
+
               if save_state and source_ok:
                   save_snapshot(all_events, state_file)
               elif save_state:
-                  print("⚠️ IPO snapshot was not updated because the data source was unavailable.")
-          
+                  print("⚠️ IPO snapshot was not updated because all IPO data sources were unavailable.")
+
               return {
                   "title": "Weekly IPO Radar",
-                  "source": IPO_SOURCE_NAME,
+                  "source": f"{FINNHUB_SOURCE_NAME} + {YAHOO_SOURCE_NAME}",
                   "window_start": window_start.isoformat(),
                   "window_end": today.isoformat(),
                   "upcoming_start": upcoming_start.isoformat(),
                   "upcoming_end": upcoming_end.isoformat(),
-                  "previous_snapshot_found": bool(previous_snapshot.get("items")),
+                  "previous_snapshot_found": previous_snapshot_found,
                   "source_ok": source_ok,
                   "date_updates": updates,
                   "new_listings": listings,
@@ -1283,6 +1485,10 @@ jobs:
                       "upcoming": len(raw_upcoming),
                       "recent_after_filter": len(recent_events),
                       "upcoming_after_filter": len(upcoming_events),
+                      "finnhub_recent": len(raw_finnhub_recent or []),
+                      "finnhub_upcoming": len(raw_finnhub_upcoming or []),
+                      "yahoo_recent": len(raw_yahoo_recent or []),
+                      "yahoo_upcoming": len(raw_yahoo_upcoming or []),
                   },
               }
           EOF
@@ -1433,13 +1639,16 @@ jobs:
           
               if not date_updates and not new_listings:
                   lines.append("No notable IPO updates this week")
-                  if not radar.get("previous_snapshot_found"):
-                      lines.append("Baseline snapshot created; date-change detection starts from the next weekly run.")
+                  if not radar.get("source_ok", True):
+                      lines.append("IPO data source unavailable; report was not updated.")
                   lines.append("\n<i>Dates may change. Not financial advice.</i>")
                   lines.append(f"\n{BOT_NAME}")
                   return "\n".join(lines)
-          
-              lines.append("<b>1. IPO dates announced/updated this week</b>")
+
+              if radar.get("previous_snapshot_found"):
+                  lines.append("<b>1. IPO dates announced/updated this week</b>")
+              else:
+                  lines.append("<b>1. Current notable IPO dates on calendar</b>")
               if date_updates:
                   lines.append("<blockquote expandable>")
                   for event in date_updates:
