@@ -1830,8 +1830,77 @@ jobs:
           EOF
 
           cat << 'EOF' > modules/telegram_sender.py
+          import re
           import aiohttp
           from modules.config import BOT_TOKEN, CHAT_ID, HTTP_TIMEOUT
+
+          def _split_plain_text(text: str, max_length: int) -> list[str]:
+              chunks = []
+              current = ""
+
+              for line in text.splitlines(keepends=True):
+                  if len(current) + len(line) > max_length:
+                      if current.strip():
+                          chunks.append(current.strip())
+                      current = line
+                  else:
+                      current += line
+
+              if current.strip():
+                  chunks.append(current.strip())
+
+              return chunks
+
+          def _split_blockquote_block(block: str, max_length: int) -> list[str]:
+              """
+              Делит большой блок <blockquote ...>...</blockquote> на несколько
+              самостоятельных Telegram-сообщений.
+
+              Важно: Telegram HTML не принимает кусок с открытым <blockquote>
+              без закрывающего </blockquote>. Старая версия split_message могла
+              разорвать длинный blockquote на 2 части и Telegram отклонял сообщение.
+              """
+              open_match = re.search(r"<blockquote(?:\s+expandable)?>", block)
+              close_tag = "</blockquote>"
+
+              if not open_match or close_tag not in block:
+                  return _split_plain_text(block, max_length)
+
+              open_tag = open_match.group(0)
+              prefix = block[:open_match.start()]
+              body_start = open_match.end()
+              body_end = block.rfind(close_tag)
+              body = block[body_start:body_end]
+              suffix = block[body_end + len(close_tag):]
+
+              chunks = []
+              current_body = ""
+              current_prefix = prefix
+
+              reserved = len(open_tag) + len(close_tag) + 4
+
+              for line in body.splitlines(keepends=True):
+                  candidate = f"{current_prefix}{open_tag}{current_body}{line}{close_tag}{suffix}"
+
+                  if len(candidate) > max_length and current_body.strip():
+                      chunks.append(f"{current_prefix}{open_tag}{current_body}{close_tag}".strip())
+                      current_prefix = ""
+                      current_body = line
+                      suffix = ""
+                  else:
+                      current_body += line
+
+              if current_body.strip() or current_prefix.strip():
+                  final_chunk = f"{current_prefix}{open_tag}{current_body}{close_tag}{suffix}".strip()
+                  if len(final_chunk) <= max_length:
+                      chunks.append(final_chunk)
+                  else:
+                      # Последняя страховка на случай одной аномально длинной строки.
+                      safe_limit = max(500, max_length - reserved)
+                      for part in _split_plain_text(current_body, safe_limit):
+                          chunks.append(f"{open_tag}\n{part}\n{close_tag}".strip())
+
+              return [chunk for chunk in chunks if chunk.strip()]
 
           def split_message(text: str, max_length: int = 4000) -> list[str]:
               if len(text) <= max_length:
@@ -1839,36 +1908,23 @@ jobs:
 
               chunks = []
               raw_blocks = text.split("</blockquote>")
-              current_chunk = ""
 
               for raw_block in raw_blocks:
-                  if not raw_block:
+                  if not raw_block.strip():
                       continue
 
-                  block = raw_block + "</blockquote>" if "blockquote" in raw_block else raw_block
+                  block = raw_block + "</blockquote>" if "<blockquote" in raw_block else raw_block
 
-                  if len(current_chunk) + len(block) > max_length:
-                      if current_chunk:
-                          chunks.append(current_chunk.strip())
-                          current_chunk = ""
+                  if len(block) <= max_length:
+                      chunks.append(block.strip())
+                      continue
 
-                      if len(block) > max_length:
-                          lines = block.split("\n")
-                          for line in lines:
-                              if len(current_chunk) + len(line) + 1 > max_length:
-                                  chunks.append(current_chunk.strip())
-                                  current_chunk = line + "\n"
-                              else:
-                                  current_chunk += line + "\n"
-                      else:
-                          current_chunk = block
+                  if "<blockquote" in block:
+                      chunks.extend(_split_blockquote_block(block, max_length))
                   else:
-                      current_chunk += block
+                      chunks.extend(_split_plain_text(block, max_length))
 
-              if current_chunk.strip():
-                  chunks.append(current_chunk.strip())
-
-              return chunks
+              return [chunk for chunk in chunks if chunk.strip()]
 
           async def send_to_telegram(text: str):
               if not BOT_TOKEN or not CHAT_ID:
@@ -1878,24 +1934,25 @@ jobs:
               url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
               chunks = split_message(text, max_length=3900)
 
-              print(f"ℹ️ Сообщение длинной {len(text)} символов. Отправка {len(chunks)} частей...")
+              print(f"ℹ️ Сообщение длиной {len(text)} символов. Отправка {len(chunks)} частей...")
 
               async with aiohttp.ClientSession() as session:
                   for idx, chunk in enumerate(chunks, start=1):
                       payload = {
-                          "chat_id": CHAT_ID, 
-                          "text": chunk, 
-                          "parse_mode": "HTML", 
-                          "disable_web_page_preview": True
+                          "chat_id": CHAT_ID,
+                          "text": chunk,
+                          "parse_mode": "HTML",
+                          "disable_web_page_preview": True,
                       }
                       try:
                           async with session.post(url, json=payload, timeout=HTTP_TIMEOUT) as resp:
+                              response_text = await resp.text()
                               if resp.status == 200:
                                   print(f"🚀 Часть [{idx}/{len(chunks)}] успешно отправлена!")
                               else:
-                                  print(f"❌ Ошибка Telegram ({resp.status}): {await resp.text()}")
+                                  print(f"❌ Ошибка Telegram ({resp.status}) на части {idx}/{len(chunks)}: {response_text}")
                       except Exception as e:
-                          print(f"💥 Ошибка отправки: {e}")
+                          print(f"💥 Ошибка отправки части {idx}/{len(chunks)}: {e}")
           EOF
 
           cat << 'EOF' > main.py
