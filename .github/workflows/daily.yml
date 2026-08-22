@@ -728,34 +728,16 @@ jobs:
           async def translate_to_russian(session: aiohttp.ClientSession, text: str) -> str:
               if not text:
                   return text
-
-              clean_text = normalize_news_title(text)
-
-              # Если Yahoo уже вернул русский заголовок, не трогаем его.
-              if has_cyrillic(clean_text):
-                  return clean_text
-
               try:
-                  url = (
-                      "https://translate.googleapis.com/translate_a/single"
-                      f"?client=gtx&sl=auto&tl=ru&dt=t&q={urllib.parse.quote(clean_text)}"
-                  )
+                  url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ru&dt=t&q={urllib.parse.quote(text)}"
                   async with session.get(url, timeout=6) as resp:
                       if resp.status == 200:
                           data = await resp.json()
-                          translated = "".join(
-                              [segment[0] for segment in data[0] if segment and segment[0]]
-                          )
-                          translated = html.unescape(normalize_news_title(translated))
-
-                          # Важно: если переводчик вернул английский текст без кириллицы,
-                          # не показываем англоязычный заголовок в Telegram.
-                          if translated and has_cyrillic(translated):
-                              return translated
+                          translated = "".join([segment[0] for segment in data[0] if segment[0]])
+                          return html.unescape(translated)
               except Exception:
                   pass
-
-              return ""
+              return text
 
           def is_generic_market_news(title: str) -> bool:
               text = title.lower()
@@ -945,15 +927,9 @@ jobs:
               all_news.sort(key=lambda item: item["score"], reverse=True)
               best = all_news[0]
               translated_title = await translate_to_russian(session, best["title"])
+              publisher = f" · {best['publisher']}" if best.get("publisher") else ""
 
-              if translated_title:
-                  publisher = f" · {best['publisher']}" if best.get("publisher") else ""
-                  return [f"• 📰 {best['ticker']}: {translated_title}{publisher}"]
-
-              # Если перевод недоступен, не показываем английский заголовок.
-              return [
-                  f"• 📰 {best['ticker']}: найден новостной драйвер, но перевод заголовка недоступен."
-              ]
+              return [f"• 📰 {best['ticker']}: {translated_title}{publisher}"]
 
           def get_single_ipo_card(symbol: str, name: str, ipo_date: str, fallback_price: str) -> str:
               try:
