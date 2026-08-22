@@ -1498,7 +1498,142 @@ jobs:
           from modules.config import BOT_NAME
 
           def escape_html(text: str) -> str:
-              return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+              return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+          def format_signed_percent(value: float, digits: int = 2) -> str:
+              try:
+                  number = float(value)
+              except (TypeError, ValueError):
+                  number = 0.0
+              return f"+{number:.{digits}f}%" if number > 0 else f"{number:.{digits}f}%"
+
+          def format_ticker_drivers(top_tickers: list, limit: int = 3) -> str:
+              if not top_tickers:
+                  return "ключевые тикеры сектора"
+
+              tickers = []
+              for item in top_tickers[:limit]:
+                  if isinstance(item, (tuple, list)) and item:
+                      tickers.append(str(item[0]))
+
+              return ", ".join(tickers) if tickers else "ключевые тикеры сектора"
+
+          def classify_fund_us_relation(us_change: float, il_change: float) -> str:
+              us = float(us_change or 0.0)
+              il = float(il_change or 0.0)
+
+              if abs(us) < 0.15 and abs(il) < 0.15:
+                  return "спокойное движение"
+
+              if us > 0 and il > 0:
+                  if abs(il) >= abs(us) * 1.4:
+                      return "сильнее US-сектора"
+                  if abs(il) <= abs(us) * 0.5:
+                      return "отстаёт от US-сектора"
+                  return "следует за US-сектором"
+
+              if us < 0 and il < 0:
+                  if abs(il) >= abs(us) * 1.4:
+                      return "усиливает снижение"
+                  if abs(il) <= abs(us) * 0.5:
+                      return "снижается мягче US-сектора"
+                  return "следует за US-сектором"
+
+              if us > 0 and il < 0:
+                  return "расходится с US-сектором"
+
+              if us < 0 and il > 0:
+                  return "сильнее US-сектора"
+
+              if us > 0 and abs(il) < 0.15:
+                  return "пока не подтверждает рост US"
+
+              if us < 0 and abs(il) < 0.15:
+                  return "пока устойчивее US-сектора"
+
+              return "смешанная связь"
+
+          def build_fund_signal(fund_data: dict, us_change: float) -> tuple[str, str]:
+              day = float(fund_data.get("daily", 0.0) or 0.0)
+              month = float(fund_data.get("mtd", 0.0) or 0.0)
+              year = float(fund_data.get("ytd", 0.0) or 0.0)
+              us = float(us_change or 0.0)
+
+              positive_points = sum([
+                  day > 0,
+                  month > 0,
+                  year > 0,
+                  us > 0,
+              ])
+              caution_points = sum([
+                  day < 0,
+                  month < 0,
+                  year < 0,
+                  us < 0,
+              ])
+
+              if positive_points >= 3 and caution_points <= 1:
+                  return "🟢", "Positive"
+
+              if caution_points >= 3:
+                  return "🔴", "Caution"
+
+              return "🟡", "Neutral"
+
+          def build_fund_outlook(sector: dict) -> str:
+              fund_data = sector.get("il_fund_data", {})
+              day = float(fund_data.get("daily", 0.0) or 0.0)
+              month = float(fund_data.get("mtd", 0.0) or 0.0)
+              year = float(fund_data.get("ytd", 0.0) or 0.0)
+              us = float(sector.get("avg_change", 0.0) or 0.0)
+              drivers = escape_html(format_ticker_drivers(sector.get("top_3_tickers", [])))
+
+              if day > 0 and us > 0 and month > 0:
+                  return (
+                      f"движение выглядит подтверждённым: фонд и US-сектор идут вверх. "
+                      f"Для продолжения важно, чтобы поддержку сохраняли {drivers}."
+                  )
+
+              if day < 0 and us < 0 and (month < 0 or year < 0):
+                  return (
+                      f"давление подтверждено и фонд движется вместе со слабым US-сектором. "
+                      f"Для улучшения картины нужен разворот в {drivers}."
+                  )
+
+              if us > 0 and day < 0:
+                  return (
+                      f"есть расхождение: US-сектор растёт, но фонд это не подтверждает. "
+                      f"Следить, догонит ли фонд движение в {drivers} в ближайшие дни."
+                  )
+
+              if us < 0 and day > 0:
+                  return (
+                      f"фонд выглядит устойчивее US-сектора, но без поддержки со стороны {drivers} "
+                      f"движение может быть нестабильным."
+                  )
+
+              if month > 0 and year > 0 and day < 0:
+                  return (
+                      f"среднесрочный тренд остаётся положительным, но сегодня виден откат. "
+                      f"Важно, удержит ли сектор поддержку в {drivers}."
+                  )
+
+              if month < 0 and year < 0 and day > 0:
+                  return (
+                      f"дневной рост пока больше похож на отскок внутри слабой фазы. "
+                      f"Для разворота нужно подтверждение от {drivers}."
+                  )
+
+              if abs(day) < 0.2 and abs(us) < 0.2:
+                  return (
+                      f"движение спокойное, явного импульса нет. "
+                      f"Следить за появлением направления в {drivers}."
+                  )
+
+              return (
+                  f"картина смешанная: фонд и US-сектор дают неоднозначный сигнал. "
+                  f"Главный ориентир на ближайшие дни — динамика {drivers}."
+              )
 
           def build_telegram_message(sectors_data: list) -> str:
               tz_il = timezone(timedelta(hours=3))
@@ -1506,7 +1641,8 @@ jobs:
 
               lines = [
                   "📈 <b>Рыночный Дайджест</b>",
-                  f"📅 {now_str} (IDT) 🇮🇱\n",
+                  f"📅 {now_str} (IDT) 🇮🇱",
+                  "",
                   "<b>📊 ОБЗОР СЕКТОРОВ (US) И ФОНДОВ (IL)</b>",
                   "<code>Сектор       US      IL   Рейтинг</code>",
                   "<code>"
@@ -1523,10 +1659,12 @@ jobs:
 
                   score_emoji = "🟢" if s['score'] >= 65 else ("🟡" if s['score'] >= 40 else "🔴")
                   lines.append(f"{icon}{name:<6} {us_str:>6} {il_str:>6}  {score_emoji}{s['score']:>3}/100")
-              lines.append("</code>\n")
+              lines.append("</code>")
+              lines.append("")
 
               lines.append("<blockquote expandable>")
-              lines.append("🔍 <b>ДРАЙВЕРЫ ДВИЖЕНИЯ И ПОКАЗАТЕЛИ СЕКТОРОВ</b>\n")
+              lines.append("🔍 <b>ДРАЙВЕРЫ ДВИЖЕНИЯ И ПОКАЗАТЕЛИ СЕКТОРОВ</b>")
+              lines.append("")
               for s in sectors_data:
                   ch_sign = f"+{s['avg_change']:.2f}%" if s['avg_change'] > 0 else f"{s['avg_change']:.2f}%"
                   lines.append(f"<b>{s['icon']} {escape_html(s['name'])}</b> ({ch_sign})")
@@ -1538,32 +1676,42 @@ jobs:
                   for n in s['news']:
                       lines.append(f"  {escape_html(n)}")
                   lines.append("")
-              lines.append("</blockquote>\n")
+              lines.append("</blockquote>")
+              lines.append("")
 
               ta_stocks_sorted = sorted(sectors_data, key=lambda x: x['il_fund_data']['daily'], reverse=True)
 
               lines.append("<blockquote expandable>")
-              lines.append("🇮🇱 <b>ДОХОДНОСТЬ ИЗРАИЛЬСКИХ ФОНДОВ (תשואות)</b>\n")
+              lines.append("🇮🇱 <b>ДОХОДНОСТЬ И АНАЛИТИКА ИЗРАИЛЬСКИХ ФОНДОВ</b>")
+              lines.append("")
               for s in ta_stocks_sorted:
                   f_data = s['il_fund_data']
                   d_ch = f_data['daily']
                   mtd_ch = f_data['mtd']
                   ytd_ch = f_data['ytd']
+                  us_ch = s.get("avg_change", 0.0)
 
                   ch_emoji = "🟢" if d_ch > 0 else ("🔴" if d_ch < 0 else "⚪")
+                  signal_emoji, signal_text = build_fund_signal(f_data, us_ch)
+                  relation = classify_fund_us_relation(us_ch, d_ch)
+                  outlook = build_fund_outlook(s)
 
-                  d_str = f"+{d_ch:.2f}%" if d_ch > 0 else f"{d_ch:.2f}%"
-                  mtd_str = f"+{mtd_ch:.2f}%" if mtd_ch > 0 else f"{mtd_ch:.2f}%"
-                  ytd_str = f"+{ytd_ch:.2f}%" if ytd_ch > 0 else f"{ytd_ch:.2f}%"
+                  d_str = format_signed_percent(d_ch)
+                  mtd_str = format_signed_percent(mtd_ch)
+                  ytd_str = format_signed_percent(ytd_ch)
+                  us_str = format_signed_percent(us_ch)
 
-                  lines.append(
-                      f"{ch_emoji} <b>{escape_html(s['il_name_eng'])}</b> ({s['icon']})\n"
-                      f"└ <code>{s['fund_id']}</code> · <b>День: {d_str}</b> | <b>Месяц: {mtd_str}</b> | <b>Год: {ytd_str}</b>"
-                  )
+                  lines.append(f"{ch_emoji} <b>{escape_html(s['il_name_eng'])}</b> ({s['icon']} {escape_html(s['short_eng'])})")
+                  lines.append(f"└ <code>{s['fund_id']}</code> · <b>День: {d_str}</b> | <b>Месяц: {mtd_str}</b> | <b>Год: {ytd_str}</b>")
+                  lines.append(f"   📡 US-сектор: <b>{us_str}</b> | Связь: <i>{escape_html(relation)}</i>")
+                  lines.append(f"   🧭 Signal: <b>{signal_emoji} {signal_text}</b>")
+                  lines.append(f"   └ {escape_html(outlook)}")
+                  lines.append("")
               lines.append("</blockquote>")
 
-              lines.append(f"\n{BOT_NAME}")
-              return "\n".join(lines)
+              lines.append(f"")
+              lines.append(f"{BOT_NAME}")
+              return chr(10).join(lines)
 
           def build_ipo_message(ipo_cards: list) -> str:
               tz_il = timezone(timedelta(hours=3))
@@ -1571,14 +1719,16 @@ jobs:
 
               lines = [
                   "🔔 <b>ЕЖЕНЕДЕЛЬНЫЙ IPO ДАЙДЖЕСТ</b>",
-                  f"📅 {now_str} | Субботний обзор 🇮🇱\n",
+                  f"📅 {now_str} | Субботний обзор 🇮🇱",
+                  "",
                   "<blockquote expandable>"
               ]
               for card in ipo_cards:
                   lines.append(f"{card}")
               lines.append("</blockquote>")
-              lines.append(f"\n{BOT_NAME}")
-              return "\n".join(lines)
+              lines.append("")
+              lines.append(f"{BOT_NAME}")
+              return chr(10).join(lines)
 
           def _format_int(value):
               if value is None or value == "":
@@ -1587,22 +1737,22 @@ jobs:
                   return f"{int(value):,}".replace(",", " ")
               except (TypeError, ValueError):
                   return escape_html(str(value))
-          
+
           def _format_ipo_item(event: dict, date_label: str) -> list[str]:
               company = escape_html(event.get("company_name", "Unknown company"))
               ticker = escape_html(event.get("ticker") or "N/A")
               exchange = escape_html(event.get("exchange") or "N/A")
               status = escape_html(event.get("status") or "N/A")
               source = escape_html(event.get("source") or "N/A")
-          
+
               lines = [
                   f"• <b>{company}</b> (<code>{ticker}</code>)",
                   f"  🏛 {exchange} · {date_label}: <b>{escape_html(event.get('planned_ipo_date') or event.get('first_trading_date') or 'N/A')}</b>",
               ]
-          
+
               if event.get("previous_ipo_date"):
                   lines.append(f"  ↳ previous date: {escape_html(event['previous_ipo_date'])}")
-          
+
               price_bits = []
               if event.get("price_range"):
                   price_bits.append(f"range {escape_html(event['price_range'])}")
@@ -1610,40 +1760,43 @@ jobs:
                   price_bits.append(f"offer {escape_html(event['offer_price'])}")
               if price_bits:
                   lines.append(f"  💵 Price: {', '.join(price_bits)}")
-          
+
               shares = _format_int(event.get("shares_offered"))
               if shares:
                   lines.append(f"  📦 Shares offered: {shares}")
-          
+
               if event.get("change_type"):
                   changed_fields = ", ".join(event.get("changed_fields", []))
                   changed_suffix = f" ({escape_html(changed_fields)})" if changed_fields else ""
                   lines.append(f"  🔄 {escape_html(event['change_type'])}{changed_suffix}")
-          
+
               lines.append(f"  📌 Status: {status}")
               lines.append(f"  🔗 Source: {source}")
               return lines
-          
+
           def build_ipo_radar_message(radar: dict) -> str:
               tz_il = timezone(timedelta(hours=3))
               now_str = datetime.now(tz_il).strftime("%d.%m.%Y")
-          
+
               date_updates = radar.get("date_updates", [])
               new_listings = radar.get("new_listings", [])
-          
+
               lines = [
                   "🔔 <b>Weekly IPO Radar</b>",
                   f"📅 {now_str} 🇮🇱",
-                  f"🗓 Window: {escape_html(radar.get('window_start', 'N/A'))} → {escape_html(radar.get('window_end', 'N/A'))}\n",
+                  f"🗓 Window: {escape_html(radar.get('window_start', 'N/A'))} → {escape_html(radar.get('window_end', 'N/A'))}",
+                  "",
               ]
-          
+
               if not date_updates and not new_listings:
                   lines.append("No notable IPO updates this week")
                   if not radar.get("source_ok", True):
                       lines.append("IPO data source unavailable; report was not updated.")
-                  lines.append("\n<i>Dates may change. Not financial advice.</i>")
-                  lines.append(f"\n{BOT_NAME}")
-                  return "\n".join(lines)
+                  lines.append("")
+                  lines.append("<i>Dates may change. Not financial advice.</i>")
+                  lines.append("")
+                  lines.append(f"{BOT_NAME}")
+                  return chr(10).join(lines)
 
               if radar.get("previous_snapshot_found"):
                   lines.append("<b>1. IPO dates announced/updated this week</b>")
@@ -1656,8 +1809,9 @@ jobs:
                       lines.append("")
                   lines.append("</blockquote>")
               else:
-                  lines.append("No notable IPO date updates found.\n")
-          
+                  lines.append("No notable IPO date updates found.")
+                  lines.append("")
+
               lines.append("<b>2. New public listings this week</b>")
               if new_listings:
                   lines.append("<blockquote expandable>")
@@ -1667,11 +1821,12 @@ jobs:
                   lines.append("</blockquote>")
               else:
                   lines.append("No notable new listings found.")
-          
-              lines.append("\n<i>Dates may change. Not financial advice.</i>")
-              lines.append(f"\n{BOT_NAME}")
-              return "\n".join(lines)
 
+              lines.append("")
+              lines.append("<i>Dates may change. Not financial advice.</i>")
+              lines.append("")
+              lines.append(f"{BOT_NAME}")
+              return chr(10).join(lines)
           EOF
 
           cat << 'EOF' > modules/telegram_sender.py
