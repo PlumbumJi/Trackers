@@ -718,8 +718,6 @@ jobs:
           import yfinance as yf
           from modules.config import HTTP_TIMEOUT, HEADERS
 
-          def has_cyrillic(text: str) -> bool:
-              return bool(re.search(r"[а-яА-ЯёЁ]", str(text or "")))
 
           def normalize_news_title(title: str) -> str:
               title = html.unescape(str(title or "")).strip()
