@@ -196,7 +196,8 @@ jobs:
 
           from modules.config import HEADERS, HTTP_TIMEOUT
 
-          EMPTY_RETURNS = {"daily": None, "mtd": None, "ytd": None}
+          RETURN_KEYS = ("daily", "mtd", "ytd", "weekly", "days30")
+          EMPTY_RETURNS = {key: None for key in RETURN_KEYS}
 
 
           def parse_optional_float(value: Any) -> Optional[float]:
@@ -220,13 +221,13 @@ jobs:
 
 
           def normalize_returns(data: dict) -> dict:
-              return {key: parse_optional_float(data.get(key)) for key in ("daily", "mtd", "ytd")}
+              return {key: parse_optional_float(data.get(key)) for key in RETURN_KEYS}
 
 
           def valid_returns(data: Any) -> bool:
               if not isinstance(data, dict):
                   return False
-              values = [parse_optional_float(data.get(key)) for key in ("daily", "mtd", "ytd")]
+              values = [parse_optional_float(data.get(key)) for key in RETURN_KEYS]
               return any(value is not None for value in values) and all(
                   value is None or -150.0 <= value <= 250.0 for value in values
               )
@@ -300,15 +301,53 @@ jobs:
               return normalize_returns(data) if valid_returns(data) else None
 
 
+          def parse_bizportal_performance_page(html: str, fund_id: str) -> dict:
+              soup = BeautifulSoup(html, "html.parser")
+              for tag in soup(["script", "style", "noscript"]):
+                  tag.decompose()
+              page_text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True))
+
+              def find_return(pattern: str) -> Optional[float]:
+                  match = re.search(
+                      rf"{pattern}\s*(?:\||:|：)?\s*([+\-]?\d+(?:[.,]\d+)?)\s*%",
+                      page_text,
+                  )
+                  return parse_optional_float(match.group(1)) if match else None
+
+              data = {
+                  "weekly": find_return(r"שבועי"),
+                  "days30": find_return(r"30\s*יום"),
+              }
+              print(
+                  f"🔍 Bizportal performance {fund_id}: weekly={data['weekly']}, "
+                  f"days30={data['days30']}, html={len(html)}"
+              )
+              return data
+
+
           async def fetch_bizportal_page(session: aiohttp.ClientSession, fund_id: str) -> tuple[str, Optional[dict]]:
-              url = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
+              general_url = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
+              performance_url = f"https://www.bizportal.co.il/mutualfunds/quote/performance/{fund_id}"
               headers = dict(HEADERS, Referer="https://www.bizportal.co.il/mutualfunds")
-              try:
+
+              async def load(url: str) -> Optional[str]:
                   async with session.get(url, headers=headers, allow_redirects=True) as response:
                       html = await response.text(errors="ignore")
                       if response.status == 200:
-                          return fund_id, parse_bizportal_page(html, fund_id)
-                      print(f"⚠️ Bizportal {fund_id}: HTTP {response.status}")
+                          return html
+                      print(f"⚠️ Bizportal {fund_id}: HTTP {response.status} at {url}")
+                      return None
+
+              try:
+                  general_html, performance_html = await asyncio.gather(
+                      load(general_url), load(performance_url)
+                  )
+                  general = parse_bizportal_page(general_html, fund_id) if general_html else None
+                  if not general:
+                      return fund_id, None
+                  if performance_html:
+                      general.update(parse_bizportal_performance_page(performance_html, fund_id))
+                  return fund_id, normalize_returns(general)
               except Exception as error:
                   print(f"⚠️ Bizportal {fund_id}: {error}")
               return fund_id, None
@@ -334,15 +373,19 @@ jobs:
                   await context.route("**/*", block_heavy_resources)
                   page = await context.new_page()
                   for fund_id in sorted(fund_ids):
-                      url = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
                       try:
-                          response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                          general_url = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
+                          performance_url = f"https://www.bizportal.co.il/mutualfunds/quote/performance/{fund_id}"
+                          response = await page.goto(general_url, wait_until="domcontentloaded", timeout=30000)
                           await page.wait_for_timeout(1500)
                           data = parse_bizportal_page(await page.content(), fund_id)
                           status = response.status if response else "NO_RESPONSE"
                           print(f"🎭 Bizportal Playwright {fund_id}: HTTP {status}")
                           if data:
-                              results[fund_id] = data
+                              await page.goto(performance_url, wait_until="domcontentloaded", timeout=30000)
+                              await page.wait_for_timeout(1000)
+                              data.update(parse_bizportal_performance_page(await page.content(), fund_id))
+                              results[fund_id] = normalize_returns(data)
                       except Exception as error:
                           print(f"⚠️ Bizportal Playwright {fund_id}: {error}")
                   await browser.close()
@@ -367,10 +410,21 @@ jobs:
                   if data:
                       by_fund_id[fund_id] = data
 
-              missing_ids = fund_ids - set(by_fund_id)
-              if missing_ids:
-                  print(f"ℹ️ Playwright fallback: {len(missing_ids)} funds")
-                  by_fund_id.update(await fetch_bizportal_playwright(missing_ids))
+              fallback_ids = {
+                  fund_id for fund_id in fund_ids
+                  if fund_id not in by_fund_id
+                  or by_fund_id[fund_id].get("weekly") is None
+                  or by_fund_id[fund_id].get("days30") is None
+              }
+              if fallback_ids:
+                  print(f"ℹ️ Playwright fallback: {len(fallback_ids)} funds")
+                  fallback_data = await fetch_bizportal_playwright(fallback_ids)
+                  for fund_id, fallback in fallback_data.items():
+                      current = by_fund_id.get(fund_id, dict(EMPTY_RETURNS))
+                      by_fund_id[fund_id] = {
+                          key: current.get(key) if current.get(key) is not None else fallback.get(key)
+                          for key in RETURN_KEYS
+                      }
 
               results = {}
               for fund_id, sector in fund_to_sector.items():
@@ -450,6 +504,14 @@ jobs:
               close_60d = history[max(0, len(history) - 61)]["close"]
               change_60d = ((current_close - close_60d) / close_60d) * 100.0 if close_60d > 0 else 0.0
 
+              def trailing_change(sessions: int) -> Optional[float]:
+                  if len(history) <= sessions:
+                      return None
+                  base = history[-(sessions + 1)]["close"]
+                  if base <= 0:
+                      return None
+                  return round(((current_close - base) / base) * 100.0, 2)
+
               if current_close >= year_high * 0.95:
                   trend = "около годовых максимумов"
               elif current_close <= year_low * 1.05:
@@ -470,6 +532,81 @@ jobs:
                   "event_change": round(event_change, 2),
                   "event_date": timestamp_to_date(event_start),
                   "trend": trend,
+                  "change_5d": trailing_change(5),
+                  "change_20d": trailing_change(20),
+              }
+
+
+          def analyze_entry_zone(fund_data: dict, year_data: dict) -> dict:
+              daily = parse_optional_float(fund_data.get("daily"))
+              weekly = parse_optional_float(fund_data.get("weekly"))
+              days30 = parse_optional_float(fund_data.get("days30"))
+              us5 = parse_optional_float(year_data.get("change_5d"))
+              us20 = parse_optional_float(year_data.get("change_20d"))
+              values = (daily, weekly, days30, us5, us20)
+
+              if any(value is None for value in values):
+                  return {
+                      "status_key": "wait",
+                      "icon": "⚪",
+                      "label": "Недостаточно данных",
+                      "score": 0,
+                      "conditions": "0/4",
+                      "daily": daily,
+                      "weekly": weekly,
+                      "days30": days30,
+                      "us5": us5,
+                      "us20": us20,
+                      "reasons": ["не получены все данные для честной оценки"],
+                  }
+
+              prior_period = (((1.0 + days30 / 100.0) / (1.0 + weekly / 100.0)) - 1.0) * 100.0 \
+                  if weekly > -100.0 else days30
+              correction = days30 < 0.0 and prior_period <= -1.0
+              fund_turn = weekly > 0.0
+              us_turn = us5 > 0.0
+              us_trend = us20 > 0.0
+              conditions_met = sum((correction, fund_turn, us_turn, us_trend))
+              early_recovery = fund_turn and weekly < max(1.0, abs(prior_period) * 0.70)
+              score = conditions_met * 25
+
+              if weekly < 0.0 and us5 <= 0.0:
+                  status_key, icon, label = "falling", "🔴", "Падение продолжается"
+                  reasons = ["фонд снижается за неделю", "US-сектор ещё не развернулся"]
+              elif correction and fund_turn and us_turn and us_trend and early_recovery:
+                  status_key, icon, label = "optimal", "🟢", "Оптимальная зона"
+                  reasons = [
+                      "фонд всё ещё ниже уровня 30 дней назад",
+                      "недельная динамика уже положительная",
+                      "US-сектор растёт за 5 и 20 торговых дней",
+                  ]
+              elif correction and us_turn:
+                  status_key, icon, label = "forming", "🟡", "Зона формируется"
+                  reasons = ["коррекция уже произошла", "US-сектор начал восстановление"]
+                  if not fund_turn:
+                      reasons.append("сам фонд ещё не подтвердил разворот")
+                  elif not us_trend:
+                      reasons.append("среднесрочный импульс US ещё слабый")
+              elif fund_turn and us_turn and (days30 >= 0.0 or not early_recovery):
+                  status_key, icon, label = "late", "🟠", "Вход запоздал"
+                  reasons = ["рост уже заметно восстановил месячное снижение", "лучше ждать нового отката"]
+              else:
+                  status_key, icon, label = "wait", "⚪", "Ждать отката"
+                  reasons = ["нет сочетания коррекции и подтверждённого разворота"]
+
+              return {
+                  "status_key": status_key,
+                  "icon": icon,
+                  "label": label,
+                  "score": score,
+                  "conditions": f"{conditions_met}/4",
+                  "daily": daily,
+                  "weekly": weekly,
+                  "days30": days30,
+                  "us5": us5,
+                  "us20": us20,
+                  "prior_period": round(prior_period, 2),
+                  "reasons": reasons,
               }
 
 
@@ -1016,6 +1153,79 @@ jobs:
               return "🟡", "Neutral"
 
 
+          def build_entry_radar_lines(sectors_data: list[dict]) -> list[str]:
+              priority = {"optimal": 5, "forming": 4, "wait": 3, "late": 2, "falling": 1}
+              ranked = sorted(
+                  sectors_data,
+                  key=lambda item: (
+                      priority.get(item.get("entry_analysis", {}).get("status_key"), 0),
+                      item.get("entry_analysis", {}).get("score", 0),
+                  ),
+                  reverse=True,
+              )
+              best = ranked[0] if ranked else None
+              lines = ["<blockquote expandable>", "🎯 <b>РАДАР ТОЧЕК ВХОДА</b>", ""]
+
+              if not best:
+                  lines.append("⚪ Данных для оценки пока нет.")
+                  lines.extend(["</blockquote>", "", BOT_NAME])
+                  return lines
+
+              signal = best.get("entry_analysis", {})
+              if signal.get("status_key") == "optimal":
+                  lines.append(
+                      f"🏆 <b>ЛУЧШИЙ СИГНАЛ: {best['icon']} "
+                      f"{escape_html(best['il_name_eng'])}</b>"
+                  )
+                  lines.append("🟢 <b>ОПТИМАЛЬНАЯ ЗОНА ВХОДА ПО ТЕКУЩЕЙ МОДЕЛИ</b>")
+              else:
+                  lines.append("⚪ <b>СЕГОДНЯ ОПТИМАЛЬНОЙ ТОЧКИ ВХОДА НЕТ</b>")
+                  lines.append(
+                      f"Ближе всего: {best['icon']} <b>{escape_html(best['il_name_eng'])}</b> · "
+                      f"{signal.get('icon', '⚪')} {escape_html(signal.get('label', 'Ждать'))}"
+                  )
+
+              lines.append(
+                  f"30д {format_percent(signal.get('days30'), 1)} · "
+                  f"1н {format_percent(signal.get('weekly'), 1)} · "
+                  f"сегодня {format_percent(signal.get('daily'), 1)}"
+              )
+              lines.append(
+                  f"🇺🇸 {escape_html((best.get('year_analysis') or {}).get('proxy_ticker', 'US'))}: "
+                  f"5д {format_percent(signal.get('us5'), 1)} · "
+                  f"20д {format_percent(signal.get('us20'), 1)} · "
+                  f"условия {escape_html(signal.get('conditions', '0/4'))}"
+              )
+              if signal.get("reasons"):
+                  lines.append("Почему:")
+                  lines.extend(f"• {escape_html(reason)}" for reason in signal["reasons"])
+
+              lines.extend(["", "<b>📋 ВСЕ ФОНДЫ</b>"])
+              for sector in ranked:
+                  entry = sector.get("entry_analysis", {})
+                  lines.append(
+                      f"{entry.get('icon', '⚪')} {sector['icon']} "
+                      f"<b>{escape_html(sector['short_eng'])}</b> · "
+                      f"30д {format_percent(entry.get('days30'), 1)} · "
+                      f"1н {format_percent(entry.get('weekly'), 1)} · "
+                      f"US5д {format_percent(entry.get('us5'), 1)}"
+                  )
+                  lines.append(
+                      f"└ {escape_html(entry.get('label', 'Нет данных'))} · "
+                      f"условия {escape_html(entry.get('conditions', '0/4'))}"
+                  )
+
+              lines.extend([
+                  "",
+                  "<i>Оптимальная зона = коррекция ещё не отыграна, но фонд и US-сектор уже подтверждают разворот. "
+                  "Это модель момента входа, а не гарантия достижения дна.</i>",
+                  "</blockquote>",
+                  "",
+                  BOT_NAME,
+              ])
+              return lines
+
+
           def build_telegram_message(sectors_data: list[dict]) -> str:
               now_str = datetime.now(ISRAEL_TZ).strftime("%d.%m.%Y | %H:%M")
               lines = [
@@ -1104,7 +1314,8 @@ jobs:
                       if year.get("trend"):
                           parts.append(escape_html(year["trend"]))
                       lines.append("   " + " · ".join(parts))
-              lines.extend(["</blockquote>", "", BOT_NAME])
+              lines.extend(["</blockquote>", ""])
+              lines.extend(build_entry_radar_lines(sectors_data))
               return "\n".join(lines)
 
 
@@ -1225,14 +1436,21 @@ jobs:
 
 
           def split_message(text: str, max_length: int = 3900) -> list[str]:
+              il_marker = "<blockquote expandable>\n🇮🇱 <b>ДОХОДНОСТЬ И АНАЛИТИКА ИЗРАИЛЬСКИХ ФОНДОВ</b>"
+              entry_marker = "<blockquote expandable>\n🎯 <b>РАДАР ТОЧЕК ВХОДА</b>"
+              il_position = text.find(il_marker)
+              entry_position = text.find(entry_marker)
+              if 0 < il_position < entry_position:
+                  logical_parts = [
+                      text[:il_position].strip(),
+                      text[il_position:entry_position].strip(),
+                      text[entry_position:].strip(),
+                  ]
+                  if all(part and len(part) <= max_length for part in logical_parts):
+                      print("✂️ Market digest split into 3 logical messages")
+                      return logical_parts
               if len(text) <= max_length:
                   return [text]
-              marker = "<blockquote expandable>\n🇮🇱 <b>ДОХОДНОСТЬ И АНАЛИТИКА ИЗРАИЛЬСКИХ ФОНДОВ</b>"
-              position = text.find(marker)
-              if position != -1:
-                  first, second = text[:position].strip(), text[position:].strip()
-                  if len(first) <= max_length and len(second) <= max_length:
-                      return [first, second]
               chunks = []
               for raw in text.split("</blockquote>"):
                   if not raw.strip():
@@ -1275,7 +1493,12 @@ jobs:
           from modules.config import SECTORS_CONFIG
           from modules.formatter import build_ipo_radar_message, build_telegram_message
           from modules.ipo import fetch_weekly_ipo_radar
-          from modules.market import fetch_all_israeli_funds, fetch_all_year_analytics, fetch_all_yahoo_data
+          from modules.market import (
+              analyze_entry_zone,
+              fetch_all_israeli_funds,
+              fetch_all_year_analytics,
+              fetch_all_yahoo_data,
+          )
           from modules.news import fetch_historical_trigger, fetch_sector_news
           from modules.telegram_sender import send_to_telegram
 
@@ -1335,6 +1558,14 @@ jobs:
                   results = []
                   for row, news_task in zip(sector_rows, sector_tasks):
                       sector, config, top_movements, average = row
+                      fund_data = il_results.get(sector, {
+                          "daily": None,
+                          "mtd": None,
+                          "ytd": None,
+                          "weekly": None,
+                          "days30": None,
+                      })
+                      year_data = year_results.get(sector, {})
                       results.append({
                           "short_eng": config["short_eng"],
                           "name": config["name"],
@@ -1345,8 +1576,9 @@ jobs:
                           "top_3_tickers": top_movements,
                           "score": calculate_sector_score(average),
                           "news": await news_task,
-                          "il_fund_data": il_results.get(sector, {"daily": None, "mtd": None, "ytd": None}),
-                          "year_analysis": year_results.get(sector, {}),
+                          "il_fund_data": fund_data,
+                          "year_analysis": year_data,
+                          "entry_analysis": analyze_entry_zone(fund_data, year_data),
                       })
 
               results.sort(
