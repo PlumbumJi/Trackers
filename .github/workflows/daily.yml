@@ -204,7 +204,7 @@ jobs:
           import asyncio
           import math
           import re
-          from datetime import datetime, timezone
+          from datetime import datetime, timedelta, timezone
           from typing import Any, Optional
 
           import aiohttp
@@ -622,10 +622,26 @@ jobs:
               today = datetime.now(timezone.utc).date()
               fund_date = parse_source_date(fund_data.get("update_date"))
               market_date = parse_source_date(year_data.get("market_date"))
+
+              def trading_sessions_since(source_date, local_market: bool) -> int:
+                  if not source_date or source_date >= today:
+                      return 0
+                  sessions = 0
+                  cursor = source_date
+                  session_days = {6, 0, 1, 2, 3} if local_market else {0, 1, 2, 3, 4}
+                  while cursor < today:
+                      cursor += timedelta(days=1)
+                      sessions += int(cursor.weekday() in session_days)
+                  return sessions
+
               stale_reasons = []
-              if fund_date and (today - fund_date).days > 4:
+              if fund_date and trading_sessions_since(fund_date, local_market=True) > 4:
                   stale_reasons.append(f"данные фонда не обновлялись с {fund_date.isoformat()}")
-              if entry_mode != "local" and market_date and (today - market_date).days > 4:
+              if (
+                  entry_mode != "local"
+                  and market_date
+                  and trading_sessions_since(market_date, local_market=False) > 4
+              ):
                   stale_reasons.append(f"данные базового рынка не обновлялись с {market_date.isoformat()}")
 
               fallback_threshold = float(config.get("fallback_correction", 4.0))
@@ -644,28 +660,6 @@ jobs:
                   if price is not None and high52 not in (None, 0.0)
                   else None
               )
-
-              if stale_reasons:
-                  return {
-                      "status_key": "unavailable",
-                      "icon": "⚪",
-                      "label": "Данные устарели",
-                      "score": 0,
-                      "conditions": "0/0",
-                      "condition_details": [],
-                      "daily": daily,
-                      "weekly": weekly,
-                      "days30": days30,
-                      "us5": us5,
-                      "us20": us20,
-                      "from_high52": from_high52,
-                      "correction_threshold": round(correction_threshold, 1),
-                      "fund_date": fund_date.isoformat() if fund_date else None,
-                      "market_date": market_date.isoformat() if market_date else None,
-                      "next_step": "дождаться новой торговой сессии",
-                      "invalidation": "",
-                      "reasons": stale_reasons,
-                  }
 
               required = [daily, weekly, days30]
               if entry_mode != "local":
@@ -774,6 +768,13 @@ jobs:
                   else "сигнал отменяется, если неделя фонда или рынок за 5 дней снова уйдут в минус"
               )
 
+              # Старые значения остаются видны для контекста, но не могут создать сигнал входа.
+              if stale_reasons:
+                  status_key, icon, label = "unavailable", "⚪", "Проверить свежесть"
+                  reasons = stale_reasons
+                  next_step = "дождаться обновления источника"
+                  invalidation = ""
+
               return {
                   "status_key": status_key,
                   "icon": icon,
@@ -846,6 +847,7 @@ jobs:
           LOW_VALUE_PHRASES = (
               "stocks to watch", "should you buy", "could dominate", "here's what",
               "biggest risk", "street calls", "top stocks", "best stocks", "stock picks",
+              "is it a buy", "is a buy", "will gain", "just bought", "billionaire bought",
           )
 
 
@@ -860,24 +862,51 @@ jobs:
           async def translate_to_russian(session: aiohttp.ClientSession, text: str) -> str:
               if not text:
                   return text
-              url = (
+
+              def has_cyrillic(value: str) -> bool:
+                  return bool(re.search(r"[А-Яа-яЁё]", value or ""))
+
+              google_url = (
                   "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ru&dt=t&q="
                   + urllib.parse.quote(text)
               )
               try:
-                  async with session.get(url, timeout=6) as response:
-                      if response.status != 200:
+                  async with session.get(google_url, timeout=7) as response:
+                      if response.status == 200:
+                          data = await response.json()
+                          translated = "".join(
+                              str(segment[0]) for segment in data[0]
+                              if isinstance(segment, list) and segment and segment[0]
+                          ).strip()
+                          translated = html.unescape(translated)
+                          if translated and has_cyrillic(translated):
+                              return translated
+                      else:
                           print(f"⚠️ Google Translate: HTTP {response.status}")
-                          return text
-                      data = await response.json()
-                  translated = "".join(
-                      str(segment[0]) for segment in data[0]
-                      if isinstance(segment, list) and segment and segment[0]
-                  ).strip()
-                  return html.unescape(translated) if translated else text
               except Exception as error:
-                  print(f"⚠️ Translation: {error}")
-                  return text
+                  print(f"⚠️ Google translation: {error}")
+
+              try:
+                  params = {"q": text, "langpair": "en|ru"}
+                  async with session.get(
+                      "https://api.mymemory.translated.net/get",
+                      params=params,
+                      timeout=7,
+                  ) as response:
+                      if response.status == 200:
+                          payload = await response.json()
+                          translated = html.unescape(str(
+                              payload.get("responseData", {}).get("translatedText", "")
+                          )).strip()
+                          if translated and has_cyrillic(translated):
+                              return translated
+                      else:
+                          print(f"⚠️ MyMemory Translate: HTTP {response.status}")
+              except Exception as error:
+                  print(f"⚠️ Fallback translation: {error}")
+
+              print("⚠️ Translation unavailable; English headline suppressed")
+              return "перевод заголовка временно недоступен"
 
 
           def news_score(item: dict, candidate_tickers: list[str], sector_name: str) -> int:
@@ -1295,7 +1324,7 @@ jobs:
 
           def format_percent(value: Optional[float], digits: int = 2) -> str:
               if value is None:
-                  return "N/A"
+                  return "—"
               number = float(value)
               return f"+{number:.{digits}f}%" if number > 0 else f"{number:.{digits}f}%"
 
@@ -1329,14 +1358,24 @@ jobs:
               values = [fund_data.get("daily"), fund_data.get("mtd"), fund_data.get("ytd"), us_change]
               available = [float(value) for value in values if value is not None]
               if len(available) < 3:
-                  return "⚪", "No data"
+                  return "⚪", "Нет данных"
               positive = sum(value > 0 for value in available)
               negative = sum(value < 0 for value in available)
               if positive >= 3 and negative <= 1:
-                  return "🟢", "Positive"
+                  return "🟢", "Позитивно"
               if negative >= 3:
-                  return "🔴", "Caution"
-              return "🟡", "Neutral"
+                  return "🔴", "Осторожно"
+              return "🟡", "Нейтрально"
+
+
+          def parse_report_date(value: object):
+              text = str(value or "").strip()
+              for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d.%m.%Y", "%d/%m/%y", "%d.%m.%y"):
+                  try:
+                      return datetime.strptime(text, fmt).date()
+                  except ValueError:
+                      continue
+              return None
 
 
           def build_entry_radar_lines(sectors_data: list[dict]) -> list[str]:
@@ -1490,30 +1529,37 @@ jobs:
               now_str = datetime.now(ISRAEL_TZ).strftime("%d.%m.%Y | %H:%M")
               lines = [
                   "📈 <b>Рыночный Дайджест</b>",
-                  f"📅 {now_str} (Israel) 🇮🇱",
+                  f"📅 {now_str} (Израиль) 🇮🇱",
                   "",
-                  "<b>📊 ОБЗОР СЕКТОРОВ (US) И ФОНДОВ (IL)</b>",
-                  "<code>Сектор       US      IL   Импульс</code>",
+                  "<b>📊 БАЗОВЫЙ РЫНОК И ФОНДЫ ИЗРАИЛЯ</b>",
+                  "<code>Сектор      База    Фонд  Сила дня</code>",
                   "<code>",
               ]
               for sector in sectors_data:
                   us_change = sector.get("avg_change")
                   il_change = sector["il_fund_data"].get("daily")
                   score = sector.get("score")
-                  score_text = " N/A" if score is None else f"{score:>3}/100"
+                  is_local = sector.get("entry_mode") == "local"
+                  base_text = "локал." if is_local else format_percent(us_change, 1)
+                  score_text = "   —" if score is None else f"{score:>3}/100"
                   score_icon = "⚪" if score is None else "🟢" if score >= 65 else "🟡" if score >= 40 else "🔴"
                   lines.append(
                       f"{sector['icon']}{sector['short_eng'][:6]:<6} "
-                      f"{format_percent(us_change, 1):>6} {format_percent(il_change, 1):>6}  "
+                      f"{base_text:>6} {format_percent(il_change, 1):>6}  "
                       f"{score_icon}{score_text}"
                   )
               lines.extend(["</code>", "", "<blockquote expandable>"])
               lines.append("🔍 <b>ДВИЖЕНИЕ И РЕЛЕВАНТНЫЕ НОВОСТИ</b>")
               lines.append("")
               for sector in sectors_data:
+                  movement_text = (
+                      f"локальный фонд {format_percent(sector['il_fund_data'].get('daily'))}"
+                      if sector.get("entry_mode") == "local"
+                      else format_percent(sector.get("avg_change"))
+                  )
                   lines.append(
                       f"<b>{sector['icon']} {escape_html(sector['name'])}</b> "
-                      f"({format_percent(sector.get('avg_change'))})"
+                      f"({movement_text})"
                   )
                   lines.append(
                       f"  🎯 <i>Ориентир: {escape_html(sector.get('benchmark_name', 'не указан'))}</i>"
@@ -1556,7 +1602,7 @@ jobs:
                   if sector.get("entry_mode") == "local":
                       lines.append(
                           f"   🇮🇱 Локальный фонд · {signal_icon} <b>{signal}</b> · "
-                          f"<i>US-подтверждение не применяется</i>"
+                          f"<i>подтверждение рынка США не применяется</i>"
                       )
                   else:
                       lines.append(
@@ -1572,9 +1618,9 @@ jobs:
                       except ValueError:
                           event_date = ""
                       parts = [
-                          f"🇺🇸 US proxy {escape_html(year.get('proxy_ticker', ''))}",
-                          f"1Y {format_percent(year.get('year_change'), 1)}",
-                          f"max {arrow} {format_percent(year.get('event_change'), 1)}",
+                          f"🌐 Ориентир {escape_html(year.get('proxy_ticker', ''))}",
+                          f"1г {format_percent(year.get('year_change'), 1)}",
+                          f"макс. {arrow} {format_percent(year.get('event_change'), 1)}",
                       ]
                       if event_date:
                           parts.append(event_date)
@@ -1583,6 +1629,14 @@ jobs:
                       if year.get("trend"):
                           parts.append(escape_html(year["trend"]))
                       lines.append("   " + " · ".join(parts))
+
+                      fund_date = parse_report_date(fund.get("update_date"))
+                      market_date = parse_report_date(year.get("market_date"))
+                      if fund_date and market_date and market_date > fund_date:
+                          lines.append(
+                              f"   ⏳ Рынок уже на {market_date.strftime('%d.%m')}, а цена фонда — на "
+                              f"{fund_date.strftime('%d.%m')}; движение рынка ещё может быть не отражено."
+                          )
               lines.extend(["</blockquote>", ""])
               lines.extend(build_entry_radar_lines(sectors_data))
               return "\n".join(lines)
@@ -1776,10 +1830,10 @@ jobs:
           from modules.telegram_sender import send_to_telegram
 
 
-          def calculate_sector_score(avg_change):
-              if avg_change is None:
+          def calculate_sector_score(day_change):
+              if day_change is None:
                   return None
-              return max(0, min(100, int(50 + float(avg_change) * 15.0)))
+              return max(0, min(100, int(50 + float(day_change) * 15.0)))
 
 
           async def run_market_analytics(entry_only: bool = False) -> None:
@@ -1848,6 +1902,11 @@ jobs:
                           "days30": None,
                       })
                       year_data = year_results.get(sector, {})
+                      strength_change = (
+                          fund_data.get("daily")
+                          if config.get("entry_mode") == "local"
+                          else benchmark_change
+                      )
                       results.append({
                           "short_eng": config["short_eng"],
                           "name": config["name"],
@@ -1858,7 +1917,7 @@ jobs:
                           "entry_mode": config.get("entry_mode", "global"),
                           "avg_change": round(benchmark_change, 2) if benchmark_change is not None else None,
                           "top_3_tickers": top_movements,
-                          "score": calculate_sector_score(benchmark_change),
+                          "score": calculate_sector_score(strength_change),
                           "news": await news_task if news_task else [],
                           "il_fund_data": fund_data,
                           "year_analysis": year_data,
