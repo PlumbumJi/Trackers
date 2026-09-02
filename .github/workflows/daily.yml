@@ -5,6 +5,9 @@ on:
     # Daily market digest at 23:15 Israel time, with automatic DST handling.
     - cron: '15 23 * * *'
       timezone: 'Asia/Jerusalem'
+    # Morning confirmation: sends only when an optimal entry zone exists.
+    - cron: '5 9 * * 1-5'
+      timezone: 'Asia/Jerusalem'
     # Weekly IPO digest on Saturday at 22:00 Israel time.
     - cron: '0 22 * * 6'
       timezone: 'Asia/Jerusalem'
@@ -17,6 +20,7 @@ on:
         type: choice
         options:
           - market
+          - entry
           - ipo
 
 permissions:
@@ -52,6 +56,8 @@ jobs:
             mode="${MANUAL_REPORT_TYPE:-market}"
           elif [[ "$EVENT_SCHEDULE" == "0 22 * * 6" ]]; then
             mode="ipo"
+          elif [[ "$EVENT_SCHEDULE" == "5 9 * * 1-5" ]]; then
+            mode="entry"
           else
             mode="market"
           fi
@@ -116,68 +122,79 @@ jobs:
           SECTORS_CONFIG = {
               "Oil": {
                   "name": "Нефть и Энергетика", "icon": "🛢️", "short_eng": "Oil",
-                  "news_ticker": "USO", "proxy_ticker": "USO", "history_news_ticker": "VLO",
+                  "news_ticker": "CL=F", "proxy_ticker": "CL=F", "history_news_ticker": "VLO",
+                  "benchmark_name": "WTI", "entry_mode": "leveraged", "fallback_correction": 8.0,
                   "fund_id": "5141841", "il_name_eng": "Barak Ultra WTI x3",
-                  "tickers": ["BZ=F", "CL=F", "USO", "OVX", "XLE", "VLO"],
+                  "tickers": ["BZ=F", "CL=F", "USO", "XLE", "VLO"],
               },
               "AI": {
                   "name": "Искусственный Интеллект", "icon": "🤖", "short_eng": "AI",
-                  "news_ticker": "NVDA", "proxy_ticker": "NVDA", "history_news_ticker": "NVDA",
+                  "news_ticker": "BOTZ", "proxy_ticker": "BOTZ", "history_news_ticker": "NVDA",
+                  "benchmark_name": "BlueStar AI / BOTZ proxy", "entry_mode": "global", "fallback_correction": 4.0,
                   "fund_id": "5140744", "il_name_eng": "Migdal AI",
                   "tickers": ["NVDA", "MSFT", "AMD", "AVGO", "PLTR", "GOOGL", "AMZN", "BOTZ"],
               },
               "Cybersecurity": {
                   "name": "Кибербезопасность", "icon": "🛡️", "short_eng": "Cyber",
                   "news_ticker": "CIBR", "proxy_ticker": "CIBR", "history_news_ticker": "CRWD",
+                  "benchmark_name": "Global Cyber / CIBR proxy", "entry_mode": "global", "fallback_correction": 4.0,
                   "fund_id": "5135025", "il_name_eng": "IBI Global Cyber",
                   "tickers": ["CIBR", "HACK", "CRWD", "PANW", "FTNT", "ZS", "NET"],
               },
               "Gaming": {
                   "name": "Игровая Индустрия", "icon": "🎮", "short_eng": "Game",
                   "news_ticker": "SONY", "proxy_ticker": "HERO", "history_news_ticker": "TTWO",
+                  "benchmark_name": "BlueStar E-Games / HERO proxy", "entry_mode": "global", "fallback_correction": 4.0,
                   "fund_id": "5128624", "il_name_eng": "MTF Bluestar E-Games",
                   "tickers": ["NVDA", "MSFT", "TTWO", "EA", "RBLX", "SONY", "NTDOY", "HERO"],
               },
               "Gold": {
                   "name": "Золото и Металлы", "icon": "🥇", "short_eng": "Gold",
                   "news_ticker": "GLD", "proxy_ticker": "GLD", "history_news_ticker": "NEM",
+                  "benchmark_name": "Gold / GLD proxy", "entry_mode": "global", "fallback_correction": 3.0,
                   "fund_id": "5100961", "il_name_eng": "Meitav Gold",
                   "tickers": ["GLD", "GDX", "SLV", "NEM", "GOLD"],
               },
               "Clean Energy": {
                   "name": "Зеленая энергетика", "icon": "☀️", "short_eng": "Clean",
                   "news_ticker": "FSLR", "proxy_ticker": "ICLN", "history_news_ticker": "FSLR",
+                  "benchmark_name": "Global Green Energy / ICLN proxy", "entry_mode": "global", "fallback_correction": 4.0,
                   "fund_id": "5136148", "il_name_eng": "Yelin Green Energy",
                   "tickers": ["ICLN", "TAN", "FAN", "FSLR", "ENPH", "SEDG"],
               },
               "Aerospace": {
                   "name": "Авиация и Космос", "icon": "✈️", "short_eng": "Aero",
                   "news_ticker": "ITA", "proxy_ticker": "ITA", "history_news_ticker": "LMT",
+                  "benchmark_name": "Global Aerospace & Defense / ITA proxy", "entry_mode": "global", "fallback_correction": 3.0,
                   "fund_id": "5125752", "il_name_eng": "MTF Aerospace & Def",
                   "tickers": ["BA", "EADSY", "LMT", "RTX", "ITA", "NOC"],
               },
               "Biotech": {
                   "name": "Биотех и Медицина", "icon": "🧬", "short_eng": "Bio",
                   "news_ticker": "LLY", "proxy_ticker": "IBB", "history_news_ticker": "LLY",
+                  "benchmark_name": "NASDAQ Biotechnology / IBB", "entry_mode": "global", "fallback_correction": 4.0,
                   "fund_id": "5131206", "il_name_eng": "KSM Nasdaq Biotech",
                   "tickers": ["LLY", "NVO", "PFE", "MRNA", "AMGN", "XBI", "IBB"],
               },
               "Banking": {
                   "name": "Банковский сектор", "icon": "🏦", "short_eng": "Bank",
-                  "news_ticker": "JPM", "proxy_ticker": "KBE", "history_news_ticker": "JPM",
+                  "news_ticker": "Israel banks", "proxy_ticker": "", "history_news_ticker": "",
+                  "benchmark_name": "Israel Banks & Insurance", "entry_mode": "local", "fallback_correction": 3.0,
                   "fund_id": "5133236", "il_name_eng": "ATF Israel Banks",
-                  "tickers": ["JPM", "BAC", "GS", "MS", "WFC", "XLF", "KBE"],
+                  "tickers": [],
               },
               "Cloud": {
                   "name": "Облачные технологии", "icon": "☁️", "short_eng": "Cloud",
                   "news_ticker": "WCLD", "proxy_ticker": "WCLD", "history_news_ticker": "MSFT",
+                  "benchmark_name": "Global Cloud & Cyber / WCLD proxy", "entry_mode": "global", "fallback_correction": 4.0,
                   "fund_id": "5132220", "il_name_eng": "More Cloud Cyber",
                   "tickers": ["MSFT", "AMZN", "GOOGL", "ORCL", "SNOW", "WCLD", "CLOU"],
               },
               "EV": {
                   "name": "Электромобили", "icon": "🚗", "short_eng": "EV",
                   "news_ticker": "TSLA", "proxy_ticker": "DRIV", "history_news_ticker": "TSLA",
-                  "fund_id": "5132709", "il_name_eng": "Migdal EV & Auto",
+                  "benchmark_name": "Global Electric Vehicle / DRIV proxy", "entry_mode": "global", "fallback_correction": 5.0,
+                  "fund_id": "5132709", "il_name_eng": "IBI Global Electric Vehicles",
                   "tickers": ["TSLA", "BYDDY", "RIVN", "LI", "DRIV", "LCID"],
               },
           }
@@ -197,7 +214,8 @@ jobs:
           from modules.config import HEADERS, HTTP_TIMEOUT
 
           RETURN_KEYS = ("daily", "mtd", "ytd", "weekly", "days30")
-          EMPTY_RETURNS = {key: None for key in RETURN_KEYS}
+          FUND_META_KEYS = ("price", "high52", "low52", "volatility", "update_date", "source_name")
+          EMPTY_RETURNS = {key: None for key in RETURN_KEYS + FUND_META_KEYS}
 
 
           def parse_optional_float(value: Any) -> Optional[float]:
@@ -221,7 +239,12 @@ jobs:
 
 
           def normalize_returns(data: dict) -> dict:
-              return {key: parse_optional_float(data.get(key)) for key in RETURN_KEYS}
+              result = {key: parse_optional_float(data.get(key)) for key in RETURN_KEYS}
+              for key in ("price", "high52", "low52", "volatility"):
+                  result[key] = parse_optional_float(data.get(key))
+              for key in ("update_date", "source_name"):
+                  result[key] = str(data.get(key) or "").strip() or None
+              return result
 
 
           def valid_returns(data: Any) -> bool:
@@ -234,8 +257,7 @@ jobs:
 
 
           async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple[str, dict]:
-              api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
-              url = f"https://query1.finance.yahoo.com/v8/finance/chart/{api_ticker}?range=1d&interval=1m"
+              url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1d&interval=1m"
               try:
                   async with session.get(url, headers=HEADERS) as response:
                       if response.status == 200:
@@ -269,6 +291,27 @@ jobs:
               page_text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True))
               month_match = re.search(r"(?:%\s*)?החודש\s*[:：]?\s*([+\-]?\d+(?:[.,]\d+)?)\s*%", page_text)
               year_match = re.search(r"(?:%\s*)?השנה\s*[:：]?\s*([+\-]?\d+(?:[.,]\d+)?)\s*%", page_text)
+              price_match = re.search(r"מחיר פדיון\s*([+\-]?\d+(?:[.,]\d+)?)", page_text)
+              volatility_match = re.search(
+                  r"סטיית תקן\s*\(שנה\)\s*[:：]?\s*([+\-]?\d+(?:[.,]\d+)?)",
+                  page_text,
+              )
+              range_match = re.search(
+                  r"טווח 52 שבועות\s*([+\-]?\d+(?:[.,]\d+)?)\s*([+\-]?\d+(?:[.,]\d+)?)",
+                  page_text,
+              )
+              date_match = re.search(
+                  r"(?:מועד עדכון אחרון|תאריך עדכון)\s*[:\-]?\s*(\d{1,2}[./]\d{1,2}[./]\d{2,4})",
+                  page_text,
+              )
+              title = soup.find("h1")
+
+              high52 = low52 = None
+              if range_match:
+                  first = parse_optional_float(range_match.group(1))
+                  second = parse_optional_float(range_match.group(2))
+                  if first is not None and second is not None:
+                      high52, low52 = max(first, second), min(first, second)
 
               daily = None
               month_position = month_match.start() if month_match else len(page_text)
@@ -293,6 +336,14 @@ jobs:
                   "daily": daily,
                   "mtd": parse_optional_float(month_match.group(1) if month_match else None),
                   "ytd": parse_optional_float(year_match.group(1) if year_match else None),
+                  "price": parse_optional_float(price_match.group(1) if price_match else None),
+                  "high52": high52,
+                  "low52": low52,
+                  "volatility": parse_optional_float(
+                      volatility_match.group(1) if volatility_match else None
+                  ),
+                  "update_date": date_match.group(1) if date_match else None,
+                  "source_name": title.get_text(" ", strip=True) if title else None,
               }
               print(
                   f"🔍 Bizportal {fund_id}: daily={data['daily']}, "
@@ -325,9 +376,20 @@ jobs:
               return data
 
 
+          def parse_fund_update_date(html: str) -> Optional[str]:
+              soup = BeautifulSoup(html, "html.parser")
+              page_text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True))
+              match = re.search(
+                  r"(?:מועד עדכון אחרון|נכון ל)\s*[:\-]?\s*(\d{1,2}[./]\d{1,2}[./]\d{2,4})",
+                  page_text,
+              )
+              return match.group(1) if match else None
+
+
           async def fetch_bizportal_page(session: aiohttp.ClientSession, fund_id: str) -> tuple[str, Optional[dict]]:
               general_url = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
               performance_url = f"https://www.bizportal.co.il/mutualfunds/quote/performance/{fund_id}"
+              update_url = f"https://finance.themarker.com/mtf/{fund_id}"
               headers = dict(HEADERS, Referer="https://www.bizportal.co.il/mutualfunds")
 
               async def load(url: str) -> Optional[str]:
@@ -339,14 +401,16 @@ jobs:
                       return None
 
               try:
-                  general_html, performance_html = await asyncio.gather(
-                      load(general_url), load(performance_url)
+                  general_html, performance_html, update_html = await asyncio.gather(
+                      load(general_url), load(performance_url), load(update_url)
                   )
                   general = parse_bizportal_page(general_html, fund_id) if general_html else None
                   if not general:
                       return fund_id, None
                   if performance_html:
                       general.update(parse_bizportal_performance_page(performance_html, fund_id))
+                  if update_html:
+                      general["update_date"] = parse_fund_update_date(update_html) or general.get("update_date")
                   return fund_id, normalize_returns(general)
               except Exception as error:
                   print(f"⚠️ Bizportal {fund_id}: {error}")
@@ -423,7 +487,7 @@ jobs:
                       current = by_fund_id.get(fund_id, dict(EMPTY_RETURNS))
                       by_fund_id[fund_id] = {
                           key: current.get(key) if current.get(key) is not None else fallback.get(key)
-                          for key in RETURN_KEYS
+                          for key in RETURN_KEYS + FUND_META_KEYS
                       }
 
               results = {}
@@ -437,8 +501,7 @@ jobs:
 
 
           async def fetch_ticker_year_history(session: aiohttp.ClientSession, ticker: str) -> list[dict]:
-              api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
-              url = f"https://query1.finance.yahoo.com/v8/finance/chart/{api_ticker}?range=1y&interval=1d"
+              url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=1y&interval=1d"
               try:
                   async with session.get(url, headers=HEADERS) as response:
                       if response.status != 200:
@@ -527,6 +590,7 @@ jobs:
 
               return {
                   "proxy_ticker": ticker,
+                  "market_date": timestamp_to_date(history[-1]["timestamp"]),
                   "year_change": round(((current_close - first_close) / first_close) * 100.0, 2),
                   "event_direction": event_direction,
                   "event_change": round(event_change, 2),
@@ -537,75 +601,197 @@ jobs:
               }
 
 
-          def analyze_entry_zone(fund_data: dict, year_data: dict) -> dict:
+          def analyze_entry_zone(fund_data: dict, year_data: dict, config: dict) -> dict:
               daily = parse_optional_float(fund_data.get("daily"))
               weekly = parse_optional_float(fund_data.get("weekly"))
               days30 = parse_optional_float(fund_data.get("days30"))
+              volatility = parse_optional_float(fund_data.get("volatility"))
               us5 = parse_optional_float(year_data.get("change_5d"))
               us20 = parse_optional_float(year_data.get("change_20d"))
-              values = (daily, weekly, days30, us5, us20)
+              entry_mode = config.get("entry_mode", "global")
 
-              if any(value is None for value in values):
+              def parse_source_date(value: Any):
+                  text = str(value or "").strip()
+                  for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d.%m.%Y", "%d/%m/%y", "%d.%m.%y"):
+                      try:
+                          return datetime.strptime(text, fmt).date()
+                      except ValueError:
+                          continue
+                  return None
+
+              today = datetime.now(timezone.utc).date()
+              fund_date = parse_source_date(fund_data.get("update_date"))
+              market_date = parse_source_date(year_data.get("market_date"))
+              stale_reasons = []
+              if fund_date and (today - fund_date).days > 4:
+                  stale_reasons.append(f"данные фонда не обновлялись с {fund_date.isoformat()}")
+              if entry_mode != "local" and market_date and (today - market_date).days > 4:
+                  stale_reasons.append(f"данные базового рынка не обновлялись с {market_date.isoformat()}")
+
+              fallback_threshold = float(config.get("fallback_correction", 4.0))
+              if volatility is not None and volatility > 0:
+                  correction_threshold = max(
+                      2.0,
+                      min(12.0, (volatility / math.sqrt(12.0)) * 0.50),
+                  )
+              else:
+                  correction_threshold = fallback_threshold
+
+              price = parse_optional_float(fund_data.get("price"))
+              high52 = parse_optional_float(fund_data.get("high52"))
+              from_high52 = (
+                  round(((price - high52) / high52) * 100.0, 2)
+                  if price is not None and high52 not in (None, 0.0)
+                  else None
+              )
+
+              if stale_reasons:
                   return {
-                      "status_key": "wait",
+                      "status_key": "unavailable",
                       "icon": "⚪",
-                      "label": "Недостаточно данных",
+                      "label": "Данные устарели",
                       "score": 0,
-                      "conditions": "0/4",
+                      "conditions": "0/0",
+                      "condition_details": [],
                       "daily": daily,
                       "weekly": weekly,
                       "days30": days30,
                       "us5": us5,
                       "us20": us20,
+                      "from_high52": from_high52,
+                      "correction_threshold": round(correction_threshold, 1),
+                      "fund_date": fund_date.isoformat() if fund_date else None,
+                      "market_date": market_date.isoformat() if market_date else None,
+                      "next_step": "дождаться новой торговой сессии",
+                      "invalidation": "",
+                      "reasons": stale_reasons,
+                  }
+
+              required = [daily, weekly, days30]
+              if entry_mode != "local":
+                  required.extend([us5, us20])
+              if any(value is None for value in required):
+                  return {
+                      "status_key": "unavailable",
+                      "icon": "⚪",
+                      "label": "Недостаточно данных",
+                      "score": 0,
+                      "conditions": "0/0",
+                      "condition_details": [],
+                      "daily": daily,
+                      "weekly": weekly,
+                      "days30": days30,
+                      "us5": us5,
+                      "us20": us20,
+                      "from_high52": from_high52,
+                      "correction_threshold": round(correction_threshold, 1),
+                      "fund_date": fund_date.isoformat() if fund_date else None,
+                      "market_date": market_date.isoformat() if market_date else None,
+                      "next_step": "дождаться обновления всех обязательных данных",
+                      "invalidation": "",
                       "reasons": ["не получены все данные для честной оценки"],
                   }
 
-              prior_period = (((1.0 + days30 / 100.0) / (1.0 + weekly / 100.0)) - 1.0) * 100.0 \
-                  if weekly > -100.0 else days30
-              correction = days30 < 0.0 and prior_period <= -1.0
+              correction = days30 <= -correction_threshold
               fund_turn = weekly > 0.0
-              us_turn = us5 > 0.0
-              us_trend = us20 > 0.0
-              conditions_met = sum((correction, fund_turn, us_turn, us_trend))
-              early_recovery = fund_turn and weekly < max(1.0, abs(prior_period) * 0.70)
-              score = conditions_met * 25
+              daily_confirm = daily > 0.0
+              us_turn = us5 > 0.0 if us5 is not None else False
+              us_trend = us20 > 0.0 if us20 is not None else False
+              early_recovery = fund_turn and weekly < max(1.0, abs(days30) * 0.60)
 
-              if weekly < 0.0 and us5 <= 0.0:
+              if entry_mode == "local":
+                  details = [
+                      ("коррекция", correction),
+                      ("неделя фонда", fund_turn),
+                      ("сегодня фонд", daily_confirm),
+                  ]
+              else:
+                  details = [
+                      ("коррекция", correction),
+                      ("неделя фонда", fund_turn),
+                      ("рынок 5д", us_turn),
+                      ("рынок 20д", us_trend),
+                  ]
+                  if entry_mode == "leveraged":
+                      details.append(("сегодня фонд", daily_confirm))
+
+              conditions_met = sum(passed for _, passed in details)
+              all_confirmed = all(passed for _, passed in details)
+              score = round((conditions_met / len(details)) * 100) if details else 0
+
+              if weekly < 0.0 and (entry_mode == "local" or not us_turn):
                   status_key, icon, label = "falling", "🔴", "Падение продолжается"
-                  reasons = ["фонд снижается за неделю", "US-сектор ещё не развернулся"]
-              elif correction and fund_turn and us_turn and us_trend and early_recovery:
+                  reasons = ["фонд снижается за неделю"]
+                  if entry_mode != "local":
+                      reasons.append("базовый рынок ещё не развернулся за 5 дней")
+                  next_step = "ждать положительной недели фонда"
+              elif all_confirmed and early_recovery:
                   status_key, icon, label = "optimal", "🟢", "Оптимальная зона"
                   reasons = [
-                      "фонд всё ещё ниже уровня 30 дней назад",
-                      "недельная динамика уже положительная",
-                      "US-сектор растёт за 5 и 20 торговых дней",
+                      f"30-дневное снижение глубже порога {correction_threshold:.1f}%",
+                      "фонд уже показывает положительную неделю",
                   ]
-              elif correction and us_turn:
+                  if entry_mode == "local":
+                      reasons.append("дневное движение подтверждает локальный разворот")
+                  else:
+                      reasons.append("базовый рынок растёт за 5 и 20 торговых дней")
+                  next_step = "проверить актуальность данных перед подачей заявки"
+              elif correction and (
+                  (entry_mode == "local" and daily_confirm)
+                  or (entry_mode != "local" and us_turn)
+              ):
                   status_key, icon, label = "forming", "🟡", "Зона формируется"
-                  reasons = ["коррекция уже произошла", "US-сектор начал восстановление"]
+                  reasons = ["коррекция достигла рабочего порога"]
                   if not fund_turn:
-                      reasons.append("сам фонд ещё не подтвердил разворот")
-                  elif not us_trend:
-                      reasons.append("среднесрочный импульс US ещё слабый")
-              elif fund_turn and us_turn and (days30 >= 0.0 or not early_recovery):
+                      reasons.append("сам фонд ещё не подтвердил недельный разворот")
+                      next_step = "ждать положительной недели фонда"
+                  elif entry_mode != "local" and not us_trend:
+                      reasons.append("20-дневный импульс базового рынка ещё отрицательный")
+                      next_step = "ждать положительного импульса рынка за 20 дней"
+                  else:
+                      next_step = "ждать полного подтверждения условий модели"
+              elif fund_turn and (
+                  (entry_mode == "local" and daily_confirm)
+                  or (entry_mode != "local" and us_turn)
+              ) and (days30 >= 0.0 or not early_recovery):
                   status_key, icon, label = "late", "🟠", "Вход запоздал"
-                  reasons = ["рост уже заметно восстановил месячное снижение", "лучше ждать нового отката"]
+                  reasons = ["рост уже отыграл коррекцию или коррекции не было"]
+                  next_step = "ждать нового снижения к рабочему порогу"
               else:
-                  status_key, icon, label = "wait", "⚪", "Ждать отката"
-                  reasons = ["нет сочетания коррекции и подтверждённого разворота"]
+                  status_key, icon = "wait", "⚪"
+                  if weekly < 0.0 and entry_mode != "local" and us_turn:
+                      label = "Ждать разворота фонда"
+                      reasons = ["базовый рынок растёт, но фонд ещё снижается"]
+                      next_step = "ждать положительной недели фонда"
+                  else:
+                      label = "Ждать отката"
+                      reasons = ["нет достаточной коррекции с подтверждённым разворотом"]
+                      next_step = f"ждать 30-дневного снижения не менее {correction_threshold:.1f}%"
+
+              invalidation = (
+                  "сигнал отменяется при отрицательной неделе фонда"
+                  if entry_mode == "local"
+                  else "сигнал отменяется, если неделя фонда или рынок за 5 дней снова уйдут в минус"
+              )
 
               return {
                   "status_key": status_key,
                   "icon": icon,
                   "label": label,
                   "score": score,
-                  "conditions": f"{conditions_met}/4",
+                  "conditions": f"{conditions_met}/{len(details)}",
+                  "condition_details": details,
                   "daily": daily,
                   "weekly": weekly,
                   "days30": days30,
                   "us5": us5,
                   "us20": us20,
-                  "prior_period": round(prior_period, 2),
+                  "from_high52": from_high52,
+                  "correction_threshold": round(correction_threshold, 1),
+                  "fund_date": fund_date.isoformat() if fund_date else None,
+                  "market_date": market_date.isoformat() if market_date else None,
+                  "next_step": next_step,
+                  "invalidation": invalidation,
                   "reasons": reasons,
               }
 
@@ -641,7 +827,7 @@ jobs:
           from modules.config import FINNHUB_API_KEY, HEADERS, HTTP_TIMEOUT
 
           FINNHUB_COMPANY_NEWS_URL = "https://finnhub.io/api/v1/company-news"
-          MAX_NEWS_AGE_HOURS = 96
+          MAX_NEWS_AGE_HOURS = 48
 
           SECTOR_KEYWORDS = {
               "Oil": ["oil", "crude", "wti", "brent", "opec", "energy", "refinery", "inventory"],
@@ -758,12 +944,12 @@ jobs:
                   if score >= 35:
                       scored.append((score, int(item.get("providerPublishTime") or 0), title))
               if not scored:
-                  return ["• 📰 Явной релевантной новости за последние 96 часов не найдено."]
+                  return ["• 📰 Подтверждённый новостной фон за последние 48 часов не найден."]
               scored.sort(key=lambda value: (value[0], value[1]), reverse=True)
               translated = await translate_to_russian(session, scored[0][2])
               if len(translated) > 150:
                   translated = translated[:147].rstrip() + "..."
-              return [f"• 📰 {translated}"]
+              return [f"• 📰 Возможный новостной фон: {translated}"]
 
 
           def historical_news_score(item: dict, ticker: str, sector_name: str) -> int:
@@ -1154,7 +1340,10 @@ jobs:
 
 
           def build_entry_radar_lines(sectors_data: list[dict]) -> list[str]:
-              priority = {"optimal": 5, "forming": 4, "wait": 3, "late": 2, "falling": 1}
+              priority = {
+                  "optimal": 6, "forming": 5, "wait": 4,
+                  "late": 3, "falling": 2, "unavailable": 1,
+              }
               ranked = sorted(
                   sectors_data,
                   key=lambda item: (
@@ -1163,25 +1352,35 @@ jobs:
                   ),
                   reverse=True,
               )
-              best = ranked[0] if ranked else None
               lines = ["<blockquote expandable>", "🎯 <b>РАДАР ТОЧЕК ВХОДА</b>", ""]
-
-              if not best:
-                  lines.append("⚪ Данных для оценки пока нет.")
-                  lines.extend(["</blockquote>", "", BOT_NAME])
+              if not ranked:
+                  lines.extend(["⚪ Данных для оценки пока нет.", "</blockquote>", "", BOT_NAME])
                   return lines
 
-              signal = best.get("entry_analysis", {})
+              candidates = [
+                  item for item in ranked
+                  if item.get("entry_analysis", {}).get("status_key") in {"optimal", "forming"}
+              ]
+              focus = candidates[0] if candidates else ranked[0]
+              signal = focus.get("entry_analysis", {})
               if signal.get("status_key") == "optimal":
                   lines.append(
-                      f"🏆 <b>ЛУЧШИЙ СИГНАЛ: {best['icon']} "
-                      f"{escape_html(best['il_name_eng'])}</b>"
+                      f"🏆 <b>ЛУЧШИЙ СИГНАЛ: {focus['icon']} "
+                      f"{escape_html(focus['il_name_eng'])}</b>"
                   )
                   lines.append("🟢 <b>ОПТИМАЛЬНАЯ ЗОНА ВХОДА ПО ТЕКУЩЕЙ МОДЕЛИ</b>")
-              else:
+              elif signal.get("status_key") == "forming":
                   lines.append("⚪ <b>СЕГОДНЯ ОПТИМАЛЬНОЙ ТОЧКИ ВХОДА НЕТ</b>")
                   lines.append(
-                      f"Ближе всего: {best['icon']} <b>{escape_html(best['il_name_eng'])}</b> · "
+                      f"🟡 Под наблюдением: {focus['icon']} "
+                      f"<b>{escape_html(focus['il_name_eng'])}</b> · зона формируется"
+                  )
+              else:
+                  lines.append("⚪ <b>СЕГОДНЯ ОПТИМАЛЬНОЙ ТОЧКИ ВХОДА НЕТ</b>")
+                  lines.append("Кандидатов с формирующейся зоной сейчас нет.")
+                  lines.append(
+                      f"Текущее наблюдение: {focus['icon']} "
+                      f"<b>{escape_html(focus['il_name_eng'])}</b> · "
                       f"{signal.get('icon', '⚪')} {escape_html(signal.get('label', 'Ждать'))}"
                   )
 
@@ -1190,40 +1389,101 @@ jobs:
                   f"1н {format_percent(signal.get('weekly'), 1)} · "
                   f"сегодня {format_percent(signal.get('daily'), 1)}"
               )
-              lines.append(
-                  f"🇺🇸 {escape_html((best.get('year_analysis') or {}).get('proxy_ticker', 'US'))}: "
-                  f"5д {format_percent(signal.get('us5'), 1)} · "
-                  f"20д {format_percent(signal.get('us20'), 1)} · "
-                  f"условия {escape_html(signal.get('conditions', '0/4'))}"
-              )
+              if focus.get("entry_mode") == "local":
+                  lines.append(
+                      f"🇮🇱 Локальный индекс · условия "
+                      f"{escape_html(signal.get('conditions', '0/0'))}"
+                  )
+              else:
+                  lines.append(
+                      f"🌐 {escape_html(focus.get('benchmark_name', 'Базовый рынок'))}: "
+                      f"5д {format_percent(signal.get('us5'), 1)} · "
+                      f"20д {format_percent(signal.get('us20'), 1)} · "
+                      f"условия {escape_html(signal.get('conditions', '0/0'))}"
+                  )
+
+              details = signal.get("condition_details") or []
+              if details:
+                  lines.append("Проверка условий:")
+                  lines.append(" · ".join(
+                      f"{escape_html(name)} {'✅' if passed else '❌'}"
+                      for name, passed in details
+                  ))
+              if signal.get("from_high52") is not None:
+                  lines.append(f"От максимума 52 недель: {format_percent(signal['from_high52'], 1)}")
               if signal.get("reasons"):
                   lines.append("Почему:")
                   lines.extend(f"• {escape_html(reason)}" for reason in signal["reasons"])
+              if signal.get("next_step"):
+                  lines.append(f"➡️ Что ждать: {escape_html(signal['next_step'])}")
+              if signal.get("invalidation") and signal.get("status_key") in {"optimal", "forming"}:
+                  lines.append(f"⚠️ {escape_html(signal['invalidation'])}")
+
+              date_parts = []
+              if signal.get("fund_date"):
+                  date_parts.append(f"IL {escape_html(signal['fund_date'])}")
+              if signal.get("market_date"):
+                  date_parts.append(f"рынок {escape_html(signal['market_date'])}")
+              if date_parts:
+                  lines.append("🕒 Даты данных: " + " · ".join(date_parts))
 
               lines.extend(["", "<b>📋 ВСЕ ФОНДЫ</b>"])
               for sector in ranked:
                   entry = sector.get("entry_analysis", {})
+                  market_text = (
+                      "локальный индекс"
+                      if sector.get("entry_mode") == "local"
+                      else f"рынок5д {format_percent(entry.get('us5'), 1)}"
+                  )
                   lines.append(
                       f"{entry.get('icon', '⚪')} {sector['icon']} "
                       f"<b>{escape_html(sector['short_eng'])}</b> · "
                       f"30д {format_percent(entry.get('days30'), 1)} · "
-                      f"1н {format_percent(entry.get('weekly'), 1)} · "
-                      f"US5д {format_percent(entry.get('us5'), 1)}"
+                      f"1н {format_percent(entry.get('weekly'), 1)} · {market_text}"
                   )
                   lines.append(
                       f"└ {escape_html(entry.get('label', 'Нет данных'))} · "
-                      f"условия {escape_html(entry.get('conditions', '0/4'))}"
+                      f"условия {escape_html(entry.get('conditions', '0/0'))}"
                   )
 
               lines.extend([
                   "",
-                  "<i>Оптимальная зона = коррекция ещё не отыграна, но фонд и US-сектор уже подтверждают разворот. "
-                  "Это модель момента входа, а не гарантия достижения дна.</i>",
-                  "</blockquote>",
-                  "",
-                  BOT_NAME,
+                  "<i>Оптимальная зона = коррекция ещё не отыграна, но фонд и базовый рынок подтверждают разворот. "
+                  "Порог учитывает волатильность фонда. Модель пока не прошла исторический бэктест "
+                  "и не гарантирует достижение дна.</i>",
+                  "</blockquote>", "", BOT_NAME,
               ])
               return lines
+
+
+          def build_entry_alert_message(sectors_data: list[dict]) -> Optional[str]:
+              optimal = sorted(
+                  [
+                      item for item in sectors_data
+                      if item.get("entry_analysis", {}).get("status_key") == "optimal"
+                  ],
+                  key=lambda item: item.get("entry_analysis", {}).get("score", 0),
+                  reverse=True,
+              )
+              if not optimal:
+                  return None
+              lines = ["🚨 <b>УТРЕННЕЕ ПОДТВЕРЖДЕНИЕ ТОЧКИ ВХОДА</b>", ""]
+              for item in optimal[:3]:
+                  entry = item["entry_analysis"]
+                  lines.append(f"🟢 {item['icon']} <b>{escape_html(item['il_name_eng'])}</b>")
+                  lines.append(
+                      f"30д {format_percent(entry.get('days30'), 1)} · "
+                      f"1н {format_percent(entry.get('weekly'), 1)} · "
+                      f"сегодня {format_percent(entry.get('daily'), 1)}"
+                  )
+                  lines.append(f"➡️ {escape_html(entry.get('next_step', 'проверить данные перед заявкой'))}")
+                  lines.append(f"⚠️ {escape_html(entry.get('invalidation', ''))}")
+                  lines.append("")
+              lines.extend([
+                  "<i>Сигнал сформирован правиловой моделью и не является гарантией "
+                  "или персональной рекомендацией.</i>", "", BOT_NAME,
+              ])
+              return "\n".join(lines)
 
 
           def build_telegram_message(sectors_data: list[dict]) -> str:
@@ -1254,6 +1514,9 @@ jobs:
                   lines.append(
                       f"<b>{sector['icon']} {escape_html(sector['name'])}</b> "
                       f"({format_percent(sector.get('avg_change'))})"
+                  )
+                  lines.append(
+                      f"  🎯 <i>Ориентир: {escape_html(sector.get('benchmark_name', 'не указан'))}</i>"
                   )
                   if sector.get("top_3_tickers"):
                       details = ", ".join(
@@ -1290,10 +1553,16 @@ jobs:
                       f"└ <code>{sector['fund_id']}</code> · "
                       f"D {format_percent(daily)} | M {format_percent(fund.get('mtd'))} | Y {format_percent(fund.get('ytd'))}"
                   )
-                  lines.append(
-                      f"   🇺🇸 {format_percent(sector.get('avg_change'))} · {signal_icon} <b>{signal}</b> · "
-                      f"<i>{escape_html(relation_text(sector.get('avg_change'), daily))}</i>"
-                  )
+                  if sector.get("entry_mode") == "local":
+                      lines.append(
+                          f"   🇮🇱 Локальный фонд · {signal_icon} <b>{signal}</b> · "
+                          f"<i>US-подтверждение не применяется</i>"
+                      )
+                  else:
+                      lines.append(
+                          f"   🌐 {format_percent(sector.get('avg_change'))} · {signal_icon} <b>{signal}</b> · "
+                          f"<i>{escape_html(relation_text(sector.get('avg_change'), daily))}</i>"
+                      )
                   year = sector.get("year_analysis") or {}
                   if year:
                       arrow = "↑" if year.get("event_direction") == "up" else "↓"
@@ -1491,7 +1760,11 @@ jobs:
           import aiohttp
 
           from modules.config import SECTORS_CONFIG
-          from modules.formatter import build_ipo_radar_message, build_telegram_message
+          from modules.formatter import (
+              build_entry_alert_message,
+              build_ipo_radar_message,
+              build_telegram_message,
+          )
           from modules.ipo import fetch_weekly_ipo_radar
           from modules.market import (
               analyze_entry_zone,
@@ -1509,9 +1782,12 @@ jobs:
               return max(0, min(100, int(50 + float(avg_change) * 15.0)))
 
 
-          async def run_market_analytics() -> None:
+          async def run_market_analytics(entry_only: bool = False) -> None:
               all_tickers = sorted({
-                  ticker for config in SECTORS_CONFIG.values() for ticker in config["tickers"]
+                  ticker
+                  for config in SECTORS_CONFIG.values()
+                  for ticker in config["tickers"] + [config.get("proxy_ticker", "")]
+                  if ticker
               })
               print("📦 Collecting Yahoo market data...")
               market_data = await fetch_all_yahoo_data(all_tickers)
@@ -1522,15 +1798,16 @@ jobs:
 
               async with aiohttp.ClientSession() as session:
                   history_tasks = {}
-                  for sector, config in SECTORS_CONFIG.items():
-                      year = year_results.get(sector, {})
-                      if year.get("event_date") and config.get("history_news_ticker"):
-                          history_tasks[sector] = asyncio.create_task(fetch_historical_trigger(
-                              session,
-                              config["history_news_ticker"],
-                              year["event_date"],
-                              config["short_eng"],
-                          ))
+                  if not entry_only:
+                      for sector, config in SECTORS_CONFIG.items():
+                          year = year_results.get(sector, {})
+                          if year.get("event_date") and config.get("history_news_ticker"):
+                              history_tasks[sector] = asyncio.create_task(fetch_historical_trigger(
+                                  session,
+                                  config["history_news_ticker"],
+                                  year["event_date"],
+                                  config["short_eng"],
+                              ))
                   for sector, task in history_tasks.items():
                       try:
                           trigger = await task
@@ -1548,16 +1825,21 @@ jobs:
                           if ticker in market_data and market_data[ticker].get("change") is not None
                       ]
                       top_movements = sorted(ticker_details, key=lambda item: abs(item[1]), reverse=True)[:3]
-                      changes = [change for _, change in ticker_details]
-                      average = sum(changes) / len(changes) if changes else None
-                      sector_rows.append((sector, config, top_movements, average))
-                      sector_tasks.append(asyncio.create_task(fetch_sector_news(
-                          session, config["news_ticker"], top_movements, config["short_eng"]
-                      )))
+                      proxy_ticker = config.get("proxy_ticker")
+                      benchmark_change = (
+                          market_data.get(proxy_ticker, {}).get("change")
+                          if proxy_ticker else None
+                      )
+                      sector_rows.append((sector, config, top_movements, benchmark_change))
+                      sector_tasks.append(
+                          asyncio.create_task(fetch_sector_news(
+                              session, config["news_ticker"], top_movements, config["short_eng"]
+                          )) if not entry_only else None
+                      )
 
                   results = []
                   for row, news_task in zip(sector_rows, sector_tasks):
-                      sector, config, top_movements, average = row
+                      sector, config, top_movements, benchmark_change = row
                       fund_data = il_results.get(sector, {
                           "daily": None,
                           "mtd": None,
@@ -1572,13 +1854,15 @@ jobs:
                           "icon": config["icon"],
                           "fund_id": config["fund_id"],
                           "il_name_eng": config["il_name_eng"],
-                          "avg_change": round(average, 2) if average is not None else None,
+                          "benchmark_name": config.get("benchmark_name", ""),
+                          "entry_mode": config.get("entry_mode", "global"),
+                          "avg_change": round(benchmark_change, 2) if benchmark_change is not None else None,
                           "top_3_tickers": top_movements,
-                          "score": calculate_sector_score(average),
-                          "news": await news_task,
+                          "score": calculate_sector_score(benchmark_change),
+                          "news": await news_task if news_task else [],
                           "il_fund_data": fund_data,
                           "year_analysis": year_data,
-                          "entry_analysis": analyze_entry_zone(fund_data, year_data),
+                          "entry_analysis": analyze_entry_zone(fund_data, year_data, config),
                       })
 
               results.sort(
@@ -1588,7 +1872,14 @@ jobs:
                   ),
                   reverse=True,
               )
-              await send_to_telegram(build_telegram_message(results))
+              if entry_only:
+                  alert = build_entry_alert_message(results)
+                  if alert:
+                      await send_to_telegram(alert)
+                  else:
+                      print("ℹ️ No optimal entry zone; morning alert was not sent")
+              else:
+                  await send_to_telegram(build_telegram_message(results))
 
 
           async def run_ipo_digest() -> None:
@@ -1600,6 +1891,8 @@ jobs:
               mode = os.getenv("RUN_MODE", "market").strip().lower()
               if mode == "ipo":
                   await run_ipo_digest()
+              elif mode == "entry":
+                  await run_market_analytics(entry_only=True)
               elif mode == "market":
                   await run_market_analytics()
               else:
