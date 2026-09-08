@@ -25,8 +25,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-    - name: Checkout Source Code
-      uses: actions/checkout@v6
     - name: Set up Python
       uses: actions/setup-python@v7
       with:
@@ -76,7 +74,7 @@ jobs:
         FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
         IPO_STATE_FILE = os.getenv("IPO_STATE_FILE", "ipo_radar_snapshot.json")
         BOT_NAME = "@oil_tracker_pavel_bot"
-        BOT_VERSION = "fund-radar-20260906"
+        BOT_VERSION = "fund-radar-clean-20260908"
         HTTP_TIMEOUT = 15
 
 
@@ -181,13 +179,14 @@ jobs:
         from datetime import datetime, timedelta, timezone
         from html.parser import HTMLParser
         from typing import Any, Optional
+        from zoneinfo import ZoneInfo
 
         import aiohttp
         from playwright.async_api import async_playwright
 
         from modules.config import HEADERS, HTTP_TIMEOUT
 
-        RETURN_KEYS = ("daily", "mtd", "ytd", "weekly", "days30")
+        RETURN_KEYS = ("daily", "mtd", "ytd")
         EMPTY_RETURNS = {key: None for key in RETURN_KEYS}
         IL_CONCURRENCY = 3
         IL_REQUEST_TIMEOUT = 25
@@ -281,7 +280,7 @@ jobs:
                 result[key] = value if value is None or value >= -100.0 else None
             for key in (
                 "source_url", "fetched_at", "update_date", "errors", "access_denied",
-                "source_missing", "price_history", "price_stats",
+                "source_missing", "price_stats",
             ):
                 if key in data:
                     result[key] = data[key]
@@ -297,22 +296,51 @@ jobs:
 
         async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple[str, dict]:
             api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{api_ticker}?range=1d&interval=1m"
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{api_ticker}?range=10d&interval=1d"
             try:
                 async with session.get(url, headers=HEADERS) as response:
                     if response.status == 200:
                         result = (await response.json()).get("chart", {}).get("result") or []
                         if result:
-                            meta = result[0].get("meta", {})
-                            price = parse_optional_float(meta.get("regularMarketPrice"))
-                            previous_close = parse_optional_float(meta.get("chartPreviousClose"))
-                            if price is not None and previous_close not in (None, 0.0):
+                            chart = result[0]
+                            timestamps = chart.get("timestamp") or []
+                            quotes = chart.get("indicators", {}).get("quote") or []
+                            closes = quotes[0].get("close") or [] if quotes else []
+                            points = [
+                                (int(timestamp), float(close))
+                                for timestamp, close in zip(timestamps, closes)
+                                if timestamp is not None and close is not None and float(close) > 0
+                            ]
+                            regular = chart.get("meta", {}).get("currentTradingPeriod", {}).get("regular", {})
+                            now_timestamp = int(datetime.now(timezone.utc).timestamp())
+                            session_start = int(regular.get("start") or 0)
+                            session_end = int(regular.get("end") or 0)
+                            # Yahoo's last daily candle is provisional while that market is open.
+                            if (
+                                len(points) >= 3
+                                and session_start <= now_timestamp < session_end
+                                and points[-1][0] >= session_start
+                            ):
+                                points.pop()
+                            if len(points) >= 2:
+                                timestamp, price = points[-1]
+                                previous_close = points[-2][1]
                                 change = ((price - previous_close) / previous_close) * 100.0
-                                return ticker, {"price": price, "change": round(change, 2)}
+                                timezone_name = chart.get("meta", {}).get("exchangeTimezoneName") or "UTC"
+                                try:
+                                    market_date = datetime.fromtimestamp(timestamp, ZoneInfo(timezone_name)).date().isoformat()
+                                except Exception:
+                                    market_date = datetime.fromtimestamp(timestamp, timezone.utc).date().isoformat()
+                                return ticker, {
+                                    "price": round(price, 2),
+                                    "change": round(change, 2),
+                                    "market_date": market_date,
+                                    "completed_session": True,
+                                }
                     print(f"⚠️ Yahoo ticker {ticker}: HTTP {response.status}")
             except Exception as error:
                 print(f"⚠️ Yahoo ticker {ticker}: {error}")
-            return ticker, {"price": None, "change": None}
+            return ticker, {"price": None, "change": None, "market_date": None, "completed_session": False}
 
 
         async def fetch_all_yahoo_data(tickers: list[str]) -> dict:
@@ -358,21 +386,6 @@ jobs:
                             if key:
                                 data[key] = read_value(key, nums[0].text())
 
-            # Read only the fund column; neighbouring columns contain industry/index returns.
-            mapping = {"שבועי": "weekly", "30 יום": "days30", "החודש": "mtd", "השנה": "ytd"}
-            for table in root.walk("table"):
-                headers = [_clean_text(n.text()) for n in table.walk("th")]
-                if "הקרן" not in headers or "תקופה" not in headers:
-                    continue
-                column = headers.index("הקרן")
-                for row in table.walk("tr"):
-                    cells = [n for n in row.children if isinstance(n, _Node) and n.tag == "td"]
-                    if len(cells) <= column:
-                        continue
-                    key = mapping.get(_clean_text(cells[0].text()))
-                    if key and data[key] is None:
-                        data[key] = read_value(key, cells[column].text())
-
             date_match = re.search(r"(?:תאריך עדכון|מועד עדכון אחרון)\s*[:\-]?\s*(\d{1,2}[./]\d{1,2}[./]\d{4})", page_text)
             if date_match:
                 data["update_date"] = date_match.group(1)
@@ -380,10 +393,6 @@ jobs:
             data["source_missing"] = sorted({key for key in data["source_missing"] if data.get(key) is None})
             print(f"🔍 Bizportal {fund_id}: " + ", ".join(f"{key}={data[key]}" for key in RETURN_KEYS))
             return data if valid_returns(data) else None
-
-
-        def parse_bizportal_performance_page(html: str, fund_id: str) -> dict:
-            return parse_bizportal_page(html, fund_id) or dict(EMPTY_RETURNS)
 
 
         def merge_returns(current: dict, extra: dict) -> dict:
@@ -455,7 +464,12 @@ jobs:
                         await asyncio.sleep(1)
                 return None
 
-            general, performance = await asyncio.gather(load(general_url), load(performance_url))
+            general = await load(general_url)
+            needs_backup = not general or any(
+                general.get(key) is None and key not in general.get("source_missing", [])
+                for key in RETURN_KEYS
+            )
+            performance = await load(performance_url) if needs_backup and not denied.is_set() else None
             result = merge_returns(general or dict(EMPTY_RETURNS), performance or {})
             result["errors"] = list(dict.fromkeys(errors))
             result["access_denied"] = denied.is_set()
@@ -478,7 +492,7 @@ jobs:
                                     continue
                                 results[fund_id] = current
                                 for page_name in ("generalview", "performance"):
-                                    keys = ("daily", "mtd", "ytd") if page_name == "generalview" else RETURN_KEYS
+                                    keys = RETURN_KEYS
                                     if all(current.get(key) is not None or key in current.get("source_missing", []) for key in keys):
                                         continue
                                     url = f"https://www.bizportal.co.il/mutualfunds/quote/{page_name}/{fund_id}"
@@ -664,7 +678,6 @@ jobs:
                     ])
                     for fund_id, history in zip(sorted(fund_ids), histories):
                         if history:
-                            by_fund_id[fund_id]["price_history"] = history
                             by_fund_id[fund_id]["price_stats"] = calculate_price_stats(history)
 
             fallback_ids = {
@@ -909,6 +922,7 @@ jobs:
             "stocks to watch", "should you buy", "could dominate", "here's what",
             "biggest risk", "street calls", "top stocks", "best stocks", "stock picks",
         )
+        TRANSLATION_LIMITER = asyncio.Semaphore(3)
 
 
         def normalize_title(title: str) -> str:
@@ -924,26 +938,45 @@ jobs:
                 return text
             # Keep company names/tickers intact instead of translating Snowflake as a noun.
             source = re.sub(r"\bSnowflake\b", "SNOW", text)
-            url = (
-                "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ru&dt=t&q="
-                + urllib.parse.quote(source)
-            )
-            try:
-                async with session.get(url, timeout=6) as response:
-                    if response.status != 200:
-                        print(f"⚠️ Google Translate: HTTP {response.status}")
-                        return "перевод новости временно недоступен"
-                    data = await response.json()
-                translated = "".join(
-                    str(segment[0]) for segment in data[0]
-                    if isinstance(segment, list) and segment and segment[0]
-                ).strip()
-                if translated and re.search(r"[А-Яа-яЁё]", translated):
-                    return html.unescape(translated)
-                return "перевод новости временно недоступен"
-            except Exception as error:
-                print(f"⚠️ Translation: {error}")
-                return "перевод новости временно недоступен"
+            async with TRANSLATION_LIMITER:
+                try:
+                    url = "https://translate.googleapis.com/translate_a/single"
+                    params = {"client": "gtx", "sl": "auto", "tl": "ru", "dt": "t", "q": source}
+                    async with session.get(url, params=params, timeout=8) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            translated = "".join(
+                                str(segment[0]) for segment in data[0]
+                                if isinstance(segment, list) and segment and segment[0]
+                            ).strip()
+                            if translated and re.search(r"[А-Яа-яЁё]", translated):
+                                return html.unescape(translated)
+                        else:
+                            print(f"⚠️ Google Translate: HTTP {response.status}")
+                except Exception as error:
+                    print(f"⚠️ Google Translate: {type(error).__name__}")
+
+                # Free, keyless fallback documented by MyMemory. It is used only when
+                # the primary endpoint did not return a Russian translation.
+                try:
+                    url = "https://api.mymemory.translated.net/get"
+                    params = {"q": source, "langpair": "en|ru", "mt": "1"}
+                    async with session.get(url, params=params, timeout=10) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            translated = str((data.get("responseData") or {}).get("translatedText") or "").strip()
+                            if (
+                                translated
+                                and re.search(r"[А-Яа-яЁё]", translated)
+                                and "MYMEMORY WARNING" not in translated.upper()
+                            ):
+                                return html.unescape(translated)
+                        else:
+                            print(f"⚠️ MyMemory Translate: HTTP {response.status}")
+                except Exception as error:
+                    print(f"⚠️ MyMemory Translate: {type(error).__name__}")
+
+            return "перевод новости временно недоступен"
 
 
         def news_score(item: dict, candidate_tickers: list[str], sector_name: str) -> int:
@@ -1366,28 +1399,32 @@ jobs:
             return f"+{number:.{digits}f}%" if number > 0 else f"{number:.{digits}f}%"
 
 
-        def relation_text(us_change: Optional[float], il_change: Optional[float]) -> str:
+        def relation_text(us_change: Optional[float], il_change: Optional[float], local_market: bool = False) -> str:
             if us_change is None or il_change is None:
                 return "недостаточно данных"
             us, il = float(us_change), float(il_change)
+            stronger = "сильнее локального рынка" if local_market else "сильнее US-сектора"
+            follows = "следует за локальным рынком" if local_market else "следует за US-сектором"
+            lags = "отстаёт от локального рынка" if local_market else "отстаёт от US-сектора"
+            diverges = "расходится с локальным рынком" if local_market else "расходится с US-сектором"
             if abs(us) < 0.15 and abs(il) < 0.15:
                 return "спокойное движение"
             if us > 0 and il > 0:
                 if abs(il) >= abs(us) * 1.4:
-                    return "сильнее US-сектора"
+                    return stronger
                 if abs(il) <= abs(us) * 0.5:
-                    return "отстаёт от US-сектора"
-                return "следует за US-сектором"
+                    return lags
+                return follows
             if us < 0 and il < 0:
                 if abs(il) >= abs(us) * 1.4:
                     return "усиливает снижение"
                 if abs(il) <= abs(us) * 0.5:
                     return "снижается мягче US-сектора"
-                return "следует за US-сектором"
+                return follows
             if us > 0 and il < 0:
-                return "расходится с US-сектором"
+                return diverges
             if us < 0 and il > 0:
-                return "сильнее US-сектора"
+                return stronger
             return "смешанная связь"
 
 
@@ -1438,8 +1475,10 @@ jobs:
                     f"└ {escape_html(entry['label'])} · до ср.30д {format_percent(entry.get('to_average_30'), 1)} · "
                     f"{escape_html(entry['action'])}"
                 )
-                if entry.get("backtest_total", 0):
+                if entry.get("backtest_total", 0) >= 5:
                     lines.append(f"   История сигнала: {entry['backtest_wins']}/{entry['backtest_total']} возвратов к средней")
+                elif entry.get("backtest_total", 0):
+                    lines.append(f"   История сигнала: мало примеров ({entry['backtest_total']})")
 
             lines.extend([
                 "",
@@ -1483,7 +1522,8 @@ jobs:
                 base_label = "локальный рынок" if sector.get("local_market") else "базовый рынок"
                 lines.append(
                     f"<b>{sector['icon']} {escape_html(sector['name'])}</b> "
-                    f"({base_label} {format_percent(sector.get('avg_change'))})"
+                    f"({base_label} {format_percent(sector.get('avg_change'))}"
+                    f"{(' · ' + escape_html(sector['base_date'])) if sector.get('base_date') else ''})"
                 )
                 if sector.get("top_3_tickers"):
                     details = ", ".join(
@@ -1497,7 +1537,7 @@ jobs:
             lines.extend(["</blockquote>", ""])
 
             lines.extend(["<blockquote expandable>", "🇮🇱 <b>ДОХОДНОСТЬ И АНАЛИТИКА ИЗРАИЛЬСКИХ ФОНДОВ</b>", ""])
-            if not any(any(row["il_fund_data"].get(key) is not None for key in ("daily", "mtd", "ytd", "weekly", "days30")) for row in sectors_data):
+            if not any(any(row["il_fund_data"].get(key) is not None for key in ("daily", "mtd", "ytd")) for row in sectors_data):
                 lines.extend([
                     "⚠️ Израильские данные не получены. Аналитика фондов недоступна.",
                     "Котировки США не заменяют цену израильского фонда.",
@@ -1532,7 +1572,7 @@ jobs:
                 market_icon = "🇮🇱" if sector.get("local_market") else "🌐"
                 lines.append(
                     f"   {market_icon} {format_percent(sector.get('avg_change'))} · {signal_icon} <b>{signal}</b> · "
-                    f"<i>{escape_html(relation_text(sector.get('avg_change'), daily))}</i>"
+                    f"<i>{escape_html(relation_text(sector.get('avg_change'), daily, sector.get('local_market', False)))}</i>"
                 )
                 year = sector.get("year_analysis") or {}
                 if year:
@@ -1792,25 +1832,29 @@ jobs:
                     top_movements = sorted(ticker_details, key=lambda item: abs(item[1]), reverse=True)[:3]
                     driver_changes = [change for _, change in ticker_details]
                     driver_average = sum(driver_changes) / len(driver_changes) if driver_changes else None
-                    proxy_change = (market_data.get(config.get("proxy_ticker"), {}) or {}).get("change")
+                    proxy_row = market_data.get(config.get("proxy_ticker"), {}) or {}
+                    proxy_change = proxy_row.get("change")
                     base_change = driver_average if config.get("local_market") else proxy_change
+                    base_date = proxy_row.get("market_date")
+                    if config.get("local_market") and ticker_details:
+                        dates = [market_data[ticker].get("market_date") for ticker, _ in ticker_details]
+                        dates = [date for date in dates if date]
+                        base_date = max(set(dates), key=dates.count) if dates else None
                     if base_change is None:
                         base_change = driver_average
                         print(f"⚠️ Base proxy unavailable for {sector}; using driver basket average")
-                    sector_rows.append((sector, config, top_movements, base_change))
+                    sector_rows.append((sector, config, top_movements, base_change, base_date))
                     sector_tasks.append(asyncio.create_task(fetch_sector_news(
                         session, config["news_ticker"], top_movements, config["short_eng"]
                     )))
 
                 results = []
                 for row, news_task in zip(sector_rows, sector_tasks):
-                    sector, config, top_movements, base_change = row
+                    sector, config, top_movements, base_change, base_date = row
                     fund_data = il_results.get(sector, {
                         "daily": None,
                         "mtd": None,
                         "ytd": None,
-                        "weekly": None,
-                        "days30": None,
                     })
                     year_data = year_results.get(sector, {})
                     results.append({
@@ -1821,6 +1865,7 @@ jobs:
                         "il_name_eng": config["il_name_eng"],
                         "local_market": bool(config.get("local_market")),
                         "avg_change": round(base_change, 2) if base_change is not None else None,
+                        "base_date": base_date,
                         "top_3_tickers": top_movements,
                         "score": calculate_sector_score(base_change),
                         "news": await news_task,
@@ -1867,7 +1912,6 @@ jobs:
         cat << 'EOF' > tests/test_bot.py
         import asyncio
         import unittest
-        from pathlib import Path
         from types import SimpleNamespace
         from unittest.mock import AsyncMock, patch
 
@@ -1875,7 +1919,7 @@ jobs:
         from modules.config import SECTORS_CONFIG
 
 
-        def page(fund_id="5133236", daily="2.2%", annual="26.46%", table=False):
+        def page(fund_id="5139183", daily="2.2%", annual="26.46%"):
             daily_html = f'<span class="num percent rise"><span>{daily}</span></span>' if daily is not None else ''
             body = (
                 f'<script>var stockID = {fund_id};</script><h1>Fund</h1>'
@@ -1885,12 +1929,6 @@ jobs:
                 f'<li><span class="label">% השנה:</span><span class="num">{annual}</span></li></ul>'
                 '<p>דמי ניהול 0.5%</p>'
             )
-            if table:
-                body += (
-                    '<table><thead><tr><th>תקופה</th><th>הקרן</th><th>ממוצע הענף</th></tr></thead><tbody>'
-                    '<tr><td>שבועי</td><td><span><span dir="ltr">4.37%</span></td><td>90%</td></tr>'
-                    '<tr><td>30 יום</td><td><span>11.43%</span></td><td>99%</td></tr></tbody></table>'
-                )
             return body
 
 
@@ -1916,7 +1954,7 @@ jobs:
                 self.calls.append(url)
                 if self.fail and self.fail in url:
                     raise asyncio.TimeoutError()
-                return Response(page(url.rsplit('/', 1)[-1], table='performance' in url), self.status)
+                return Response(page(url.rsplit('/', 1)[-1]), self.status)
 
 
         class ParserTests(unittest.TestCase):
@@ -1941,42 +1979,30 @@ jobs:
                 self.assertEqual(stats["observations_60"], 60)
                 self.assertTrue(stats["at_minimum_60"])
 
-            def test_real_captured_html(self):
-                fixture = Path(__file__).resolve().parents[1] / 'diagnostics/bank_performance.html'
-                if not fixture.exists():
-                    self.skipTest('Live capture is local-only, synthetic fixtures run in CI')
-                result = market.parse_bizportal_page(fixture.read_text(), '5133236')
-                self.assertEqual([result[k] for k in market.RETURN_KEYS], [2.2, 4.09, 26.46, 4.37, 11.43])
-
             def test_header(self):
-                result = market.parse_bizportal_page(page(), '5133236')
+                result = market.parse_bizportal_page(page(), '5139183')
                 self.assertEqual(result['daily'], 2.2)
                 self.assertEqual(result['mtd'], 4.09)
-
-            def test_table_fund_column_not_industry(self):
-                result = market.parse_bizportal_performance_page(page(table=True), '5133236')
-                self.assertEqual(result['weekly'], 4.37)
-                self.assertEqual(result['days30'], 11.43)
 
             def test_wrong_identity(self):
                 self.assertIsNone(market.parse_bizportal_page(page(), '5141841'))
 
             def test_missing_identity(self):
-                self.assertIsNone(market.parse_bizportal_page('<html>123.0% 1.0%</html>', '5133236'))
+                self.assertIsNone(market.parse_bizportal_page('<html>123.0% 1.0%</html>', '5139183'))
 
             def test_fee_not_used_as_daily(self):
-                self.assertIsNone(market.parse_bizportal_page(page(daily=None), '5133236')['daily'])
+                self.assertIsNone(market.parse_bizportal_page(page(daily=None), '5139183')['daily'])
 
             def test_high_annual_return_not_discarded(self):
-                result = market.parse_bizportal_page(page(annual='350.0%'), '5133236')
+                result = market.parse_bizportal_page(page(annual='350.0%'), '5139183')
                 self.assertEqual(result['ytd'], 350.0)
                 self.assertEqual(result['daily'], 2.2)
 
             def test_zero_not_missing(self):
-                self.assertEqual(market.parse_bizportal_page(page(daily='0%'), '5133236')['daily'], 0.0)
+                self.assertEqual(market.parse_bizportal_page(page(daily='0%'), '5139183')['daily'], 0.0)
 
             def test_source_placeholder_not_zero_and_not_retryable(self):
-                result=market.parse_bizportal_page(page(annual='--%'), '5133236')
+                result=market.parse_bizportal_page(page(annual='--%'), '5139183')
                 self.assertIsNone(result['ytd'])
                 self.assertIn('ytd',result['source_missing'])
 
@@ -1986,40 +2012,42 @@ jobs:
                 self.assertIsNone(market.parse_optional_float('error 403'))
 
             def test_merge_missing_only(self):
-                result = market.merge_returns({'daily':0.0, 'weekly':None}, {'daily':1.0, 'weekly':2.0})
+                result = market.merge_returns({'daily':0.0, 'mtd':None}, {'daily':1.0, 'mtd':2.0})
                 self.assertEqual(result['daily'], 0.0)
-                self.assertEqual(result['weekly'], 2.0)
+                self.assertEqual(result['mtd'], 2.0)
 
 
         class FetchTests(unittest.IsolatedAsyncioTestCase):
-            async def test_performance_timeout_preserves_general(self):
+            async def test_complete_general_skips_performance(self):
+                session = Session(fail='performance')
                 with patch.object(market.asyncio, 'sleep', new=AsyncMock()):
-                    _, result = await market.fetch_bizportal_page(Session(fail='performance'), '5133236')
+                    _, result = await market.fetch_bizportal_page(session, '5139183')
                 self.assertEqual(result['daily'], 2.2)
                 self.assertEqual(result['ytd'], 26.46)
-                self.assertIsNone(result['weekly'])
-                self.assertTrue(any('TimeoutError' in e for e in result['errors']))
+                self.assertEqual(len(session.calls), 1)
+                self.assertFalse(any('performance' in call for call in session.calls))
 
             async def test_general_timeout_performance_recovers_all(self):
                 with patch.object(market.asyncio, 'sleep', new=AsyncMock()):
-                    _, result = await market.fetch_bizportal_page(Session(fail='generalview'), '5133236')
+                    _, result = await market.fetch_bizportal_page(Session(fail='generalview'), '5139183')
                 self.assertEqual(result['daily'], 2.2)
-                self.assertEqual(result['weekly'], 4.37)
 
             async def test_both_fail(self):
                 with patch.object(market.asyncio, 'sleep', new=AsyncMock()):
-                    _, result = await market.fetch_bizportal_page(Session(fail='quote'), '5133236')
+                    _, result = await market.fetch_bizportal_page(Session(fail='quote'), '5139183')
                 self.assertTrue(all(result[k] is None for k in market.RETURN_KEYS))
 
             async def test_access_denied_no_retry(self):
                 session = Session(status=403)
-                _, result = await market.fetch_bizportal_page(session, '5133236')
+                _, result = await market.fetch_bizportal_page(session, '5139183')
                 self.assertTrue(result['access_denied'])
                 self.assertEqual(len(session.calls), 1)
 
-            async def test_browser_performance_timeout_preserves_general(self):
+            async def test_browser_skips_performance_when_general_is_complete(self):
+                calls = []
                 class Page:
                     async def goto(self, url, **kwargs):
+                        calls.append(url)
                         if 'performance' in url:
                             raise asyncio.TimeoutError()
                         return SimpleNamespace(status=200)
@@ -2031,19 +2059,55 @@ jobs:
                 manager = AsyncMock()
                 manager.__aenter__.return_value = engine
                 with patch.object(market, 'async_playwright', return_value=manager):
-                    result = await market.fetch_bizportal_playwright({'5133236'})
-                self.assertEqual(result['5133236']['daily'], 2.2)
-                self.assertIsNone(result['5133236']['weekly'])
+                    result = await market.fetch_bizportal_playwright({'5139183'})
+                self.assertEqual(result['5139183']['daily'], 2.2)
+                self.assertFalse(any('performance' in url for url in calls))
                 browser.close.assert_awaited_once()
 
             async def test_browser_unavailable_does_not_raise(self):
                 with patch.object(market, 'async_playwright', side_effect=RuntimeError('test missing browser')):
-                    result = await market.fetch_bizportal_playwright({'5133236'})
+                    result = await market.fetch_bizportal_playwright({'5139183'})
                 self.assertEqual(result, {})
 
             async def test_translation_error_never_returns_english(self):
                 translated = await news.translate_to_russian(Session(status=503), 'Snowflake jumps')
                 self.assertEqual(translated, 'перевод новости временно недоступен')
+
+            async def test_translation_uses_mymemory_fallback(self):
+                class JsonResponse(Response):
+                    def __init__(self, status, payload):
+                        super().__init__('', status)
+                        self.payload = payload
+                    async def json(self):
+                        return self.payload
+                class TranslationSession:
+                    def get(self, url, **kwargs):
+                        if 'googleapis' in url:
+                            return JsonResponse(503, {})
+                        return JsonResponse(200, {'responseData': {'translatedText': 'Акции выросли'}})
+                translated = await news.translate_to_russian(TranslationSession(), 'Stocks rose')
+                self.assertEqual(translated, 'Акции выросли')
+
+            async def test_open_daily_candle_is_excluded(self):
+                import time
+                now = int(time.time())
+                payload = {
+                    'chart': {'result': [{
+                        'timestamp': [now - 172800, now - 86400, now],
+                        'indicators': {'quote': [{'close': [100.0, 101.0, 150.0]}]},
+                        'meta': {
+                            'currentTradingPeriod': {'regular': {'start': now - 3600, 'end': now + 3600}},
+                            'exchangeTimezoneName': 'UTC',
+                        },
+                    }]}
+                }
+                class JsonResponse(Response):
+                    async def json(self): return payload
+                class MarketSession:
+                    def get(self, url, **kwargs): return JsonResponse('', 200)
+                _, result = await market.fetch_single_ticker(MarketSession(), 'TEST')
+                self.assertEqual(result['price'], 101.0)
+                self.assertEqual(result['change'], 1.0)
 
 
         class RadarTests(unittest.TestCase):
@@ -2090,7 +2154,7 @@ jobs:
             def rows(self, missing=False):
                 rows=[]
                 for config in SECTORS_CONFIG.values():
-                    fund = dict(market.EMPTY_RETURNS) if missing else {'daily':1.0,'mtd':2.0,'ytd':3.0,'weekly':0.5,'days30':-4.0}
+                    fund = dict(market.EMPTY_RETURNS) if missing else {'daily':1.0,'mtd':2.0,'ytd':3.0}
                     if not missing:
                         fund.update(RadarTests.fund())
                     year = {'proxy_ticker':config['proxy_ticker'], 'change_5d':1.0, 'change_20d':2.0,
@@ -2113,16 +2177,25 @@ jobs:
                 self.assertIn('ОЦЕНКА ВХОДА НЕДОСТУПНА',text)
                 self.assertNotIn('0/4',text)
 
+            def test_local_market_relation_uses_local_wording(self):
+                self.assertEqual(formatter.relation_text(1.0, 0.9, True), 'следует за локальным рынком')
+
+            def test_small_backtest_sample_is_not_presented_as_success_rate(self):
+                text = formatter.build_telegram_message(self.rows())
+                self.assertIn('История сигнала: мало примеров (3)', text)
+                self.assertNotIn('2/3 возвратов', text)
+
 
         if __name__ == '__main__':
             unittest.main()
         EOF
-    - name: Install Dependencies and Chromium
-      run: |
+    - name: Install Python Dependencies
+      run: |-
         set -euo pipefail
-        python -m pip install --upgrade pip
         pip install -r requirements.txt
-        playwright install --with-deps chromium
+    - name: Install Chromium Fallback
+      if: steps.report.outputs.mode == 'market'
+      run: playwright install --with-deps chromium
     - name: Validate Generated Python
       run: python -m compileall -q modules main.py
     - name: Run Regression Tests
