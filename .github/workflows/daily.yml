@@ -1,9 +1,9 @@
-name: Automated Market Analytics & IPO Digest
+name: Automated Market Analytics
 'on':
   schedule:
+  - cron: 15 9 * * 1-5
+    timezone: America/New_York
   - cron: 15 23 * * *
-    timezone: Asia/Jerusalem
-  - cron: 0 22 * * 6
     timezone: Asia/Jerusalem
   workflow_dispatch:
     inputs:
@@ -14,7 +14,7 @@ name: Automated Market Analytics & IPO Digest
         type: choice
         options:
         - market
-        - ipo
+        - premarket
 permissions:
   contents: read
 concurrency:
@@ -36,24 +36,23 @@ jobs:
         EVENT_NAME: ${{ github.event_name }}
         EVENT_SCHEDULE: ${{ github.event.schedule }}
         MANUAL_REPORT_TYPE: ${{ inputs.report_type }}
-      run: |
+      run: |-
         if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
           mode="${MANUAL_REPORT_TYPE:-market}"
-        elif [[ "$EVENT_SCHEDULE" == "0 22 * * 6" ]]; then
-          mode="ipo"
+        elif [[ "$EVENT_SCHEDULE" == "15 9 * * 1-5" ]]; then
+          mode="premarket"
         else
           mode="market"
         fi
         echo "mode=$mode" >> "$GITHUB_OUTPUT"
         echo "Selected report: $mode"
-    - name: Restore IPO Radar Snapshot
-      if: steps.report.outputs.mode == 'ipo'
+    - name: Restore Latest Market Snapshot
+      if: steps.report.outputs.mode == 'premarket'
       uses: actions/cache/restore@v5
       with:
-        path: ipo_radar_snapshot.json
-        key: ipo-radar-${{ github.run_id }}-${{ github.run_attempt }}
-        restore-keys: |
-          ipo-radar-
+        path: latest_market_snapshot.json
+        key: market-snapshot-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: market-snapshot-
     - name: Deploy Architecture Files
       shell: bash
       run: |
@@ -62,7 +61,6 @@ jobs:
         touch modules/__init__.py
         cat << 'EOF' > requirements.txt
         aiohttp==3.11.11
-        beautifulsoup4==4.12.3
         playwright==1.49.1
         EOF
 
@@ -72,21 +70,10 @@ jobs:
         BOT_TOKEN = os.getenv("BOT_TOKEN")
         CHAT_ID = os.getenv("CHAT_ID")
         FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
-        IPO_STATE_FILE = os.getenv("IPO_STATE_FILE", "ipo_radar_snapshot.json")
         BOT_NAME = "@oil_tracker_pavel_bot"
-        BOT_VERSION = "fund-radar-clean-20260908"
+        BOT_VERSION = "radar-icons-20260913"
+        MARKET_SNAPSHOT_FILE = os.getenv("MARKET_SNAPSHOT_FILE", "latest_market_snapshot.json")
         HTTP_TIMEOUT = 15
-
-
-        def get_env_int(name: str, default: int) -> int:
-            try:
-                return int(os.getenv(name, str(default)))
-            except (TypeError, ValueError):
-                return default
-
-
-        IPO_LOOKBACK_DAYS = get_env_int("IPO_LOOKBACK_DAYS", 7)
-        IPO_LOOKAHEAD_DAYS = get_env_int("IPO_LOOKAHEAD_DAYS", 120)
 
         HEADERS = {
             "User-Agent": (
@@ -103,49 +90,49 @@ jobs:
         SECTORS_CONFIG = {
             "Oil": {
                 "name": "Нефть и Энергетика", "icon": "🛢️", "short_eng": "Oil",
-                "news_ticker": "CL=F", "proxy_ticker": "CL=F", "history_news_ticker": "CL=F",
+                "news_ticker": "CL=F", "proxy_ticker": "CL=F", "preopen_ticker": "USO", "history_news_ticker": "CL=F",
                 "fund_id": "5141841", "il_name_eng": "Barak Ultra WTI",
                 "tickers": ["CL=F", "USO", "XLE", "XOP"],
             },
             "AI": {
                 "name": "Искусственный Интеллект", "icon": "🤖", "short_eng": "AI",
-                "news_ticker": "NVDA", "proxy_ticker": "BOTZ", "history_news_ticker": "NVDA",
+                "news_ticker": "NVDA", "proxy_ticker": "BOTZ", "preopen_ticker": "BOTZ", "history_news_ticker": "NVDA",
                 "fund_id": "5140744", "il_name_eng": "Migdal AI",
                 "tickers": ["GOOGL", "NVDA", "MSFT", "META", "AMD", "AMZN", "AVGO"],
             },
             "Cybersecurity": {
                 "name": "Кибербезопасность", "icon": "🛡️", "short_eng": "Cyber",
-                "news_ticker": "CIBR", "proxy_ticker": "CIBR", "history_news_ticker": "CRWD",
+                "news_ticker": "CIBR", "proxy_ticker": "CIBR", "preopen_ticker": "CIBR", "history_news_ticker": "CRWD",
                 "fund_id": "5131313", "il_name_eng": "Migdal Cyber Equity",
                 "tickers": ["FTNT", "PANW", "CRWD", "CSCO", "NET", "AVGO", "OKTA"],
             },
             "Gaming": {
                 "name": "Игровая Индустрия", "icon": "🎮", "short_eng": "Game",
-                "news_ticker": "SONY", "proxy_ticker": "HERO", "history_news_ticker": "TTWO",
+                "news_ticker": "SONY", "proxy_ticker": "HERO", "preopen_ticker": "HERO", "history_news_ticker": "TTWO",
                 "fund_id": "5128624", "il_name_eng": "MTF Bluestar E-Games",
                 "tickers": ["RBLX", "TTWO", "EA", "SONY", "NTDOY"],
             },
             "Gold": {
                 "name": "Золото и Металлы", "icon": "🥇", "short_eng": "Gold",
-                "news_ticker": "GLD", "proxy_ticker": "GLD", "history_news_ticker": "NEM",
+                "news_ticker": "GLD", "proxy_ticker": "GLD", "preopen_ticker": "GLD", "history_news_ticker": "NEM",
                 "fund_id": "5100961", "il_name_eng": "Meitav Gold",
                 "tickers": ["GC=F", "GLD", "GDX", "NEM", "SLV"],
             },
             "Clean Energy": {
                 "name": "Зеленая энергетика", "icon": "☀️", "short_eng": "Clean",
-                "news_ticker": "FSLR", "proxy_ticker": "ICLN", "history_news_ticker": "FSLR",
+                "news_ticker": "FSLR", "proxy_ticker": "ICLN", "preopen_ticker": "ICLN", "history_news_ticker": "FSLR",
                 "fund_id": "5105218", "il_name_eng": "Altshuler Shaham Global Green",
                 "tickers": ["NRG", "CEG", "TLN", "GEV", "FSLR", "NXT"],
             },
             "Aerospace": {
                 "name": "Авиация и Космос", "icon": "✈️", "short_eng": "Aero",
-                "news_ticker": "XAR", "proxy_ticker": "XAR", "history_news_ticker": "RTX",
+                "news_ticker": "XAR", "proxy_ticker": "XAR", "preopen_ticker": "XAR", "history_news_ticker": "RTX",
                 "fund_id": "5136635", "il_name_eng": "KSM Active US Space & Defense",
                 "tickers": ["HEI", "RTX", "PL", "RKLB", "HWM", "BA", "NOC", "GD", "LMT"],
             },
             "Biotech": {
                 "name": "Биотех и Медицина", "icon": "🧬", "short_eng": "Bio",
-                "news_ticker": "IBB", "proxy_ticker": "IBB", "history_news_ticker": "ABVX",
+                "news_ticker": "IBB", "proxy_ticker": "IBB", "preopen_ticker": "IBB", "history_news_ticker": "ABVX",
                 "fund_id": "5101183", "il_name_eng": "IBI Global Biotechnology",
                 "tickers": ["ABVX", "NKTR", "DRTS", "CYBN", "INSM", "CYTK", "AXSM"],
             },
@@ -154,17 +141,18 @@ jobs:
                 "news_ticker": "LUMI.TA", "proxy_ticker": "LUMI.TA", "history_news_ticker": "LUMI.TA",
                 "fund_id": "5139183", "il_name_eng": "Migdal Banks Equity",
                 "local_market": True,
+                "preopen_ticker": None,
                 "tickers": ["DSCT.TA", "MZTF.TA", "FIBI.TA", "LUMI.TA", "POLI.TA"],
             },
             "Cloud": {
                 "name": "Облачные технологии", "icon": "☁️", "short_eng": "Cloud",
-                "news_ticker": "CIBR", "proxy_ticker": "CIBR", "history_news_ticker": "PANW",
+                "news_ticker": "CIBR", "proxy_ticker": "CIBR", "preopen_ticker": "CIBR", "history_news_ticker": "PANW",
                 "fund_id": "5132220", "il_name_eng": "More Cloud Cyber",
                 "tickers": ["PANW", "FTNT", "CRWD", "DDOG", "NET", "OKTA", "ZS"],
             },
             "EV": {
                 "name": "Электромобили", "icon": "🚗", "short_eng": "EV",
-                "news_ticker": "TSLA", "proxy_ticker": "DRIV", "history_news_ticker": "TSLA",
+                "news_ticker": "TSLA", "proxy_ticker": "DRIV", "preopen_ticker": "DRIV", "history_news_ticker": "TSLA",
                 "fund_id": "5132709", "il_name_eng": "IBI Global Electric Vehicles",
                 "tickers": ["TSLA", "RIVN", "LI", "NIO", "XPEV", "LCID", "BYDDY"],
             },
@@ -349,6 +337,84 @@ jobs:
             async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
                 return dict(await asyncio.gather(*[
                     fetch_single_ticker(session, ticker) for ticker in tickers
+                ]))
+
+
+        def parse_premarket_chart(chart: dict, ticker: str, now_timestamp: Optional[int] = None) -> dict:
+            """Return a fresh US pre-market trade, never an estimated opening price."""
+            now_timestamp = now_timestamp or int(datetime.now(timezone.utc).timestamp())
+            meta = chart.get("meta") or {}
+            timezone_name = meta.get("exchangeTimezoneName") or "America/New_York"
+            try:
+                exchange_tz = ZoneInfo(timezone_name)
+            except Exception:
+                exchange_tz = ZoneInfo("America/New_York")
+
+            periods = meta.get("currentTradingPeriod") or {}
+            regular = periods.get("regular") or {}
+            pre = periods.get("pre") or {}
+            regular_start = int(regular.get("start") or 0)
+            pre_start = int(pre.get("start") or 0)
+            if not regular_start or now_timestamp >= regular_start or (pre_start and now_timestamp < pre_start):
+                return {"ticker": ticker, "available": False, "reason": "outside_premarket"}
+
+            previous_close = parse_optional_float(
+                meta.get("chartPreviousClose") or meta.get("regularMarketPreviousClose") or meta.get("previousClose")
+            )
+            timestamps = chart.get("timestamp") or []
+            quotes = chart.get("indicators", {}).get("quote") or []
+            closes = quotes[0].get("close") or [] if quotes else []
+            today = datetime.fromtimestamp(now_timestamp, exchange_tz).date()
+            points = []
+            for timestamp, close in zip(timestamps, closes):
+                price = parse_optional_float(close)
+                if timestamp is None or price is None or price <= 0:
+                    continue
+                timestamp = int(timestamp)
+                point_date = datetime.fromtimestamp(timestamp, exchange_tz).date()
+                if point_date == today and timestamp < regular_start and timestamp <= now_timestamp:
+                    points.append((timestamp, price))
+
+            if not points or previous_close in (None, 0.0):
+                return {"ticker": ticker, "available": False, "reason": "no_current_trade"}
+            timestamp, price = max(points, key=lambda point: point[0])
+            if now_timestamp - timestamp > 45 * 60:
+                return {"ticker": ticker, "available": False, "reason": "stale_trade"}
+            return {
+                "ticker": ticker,
+                "available": True,
+                "price": round(price, 2),
+                "previous_close": previous_close,
+                "change": round((price / previous_close - 1.0) * 100.0, 2),
+                "timestamp": timestamp,
+                "time_ny": datetime.fromtimestamp(timestamp, exchange_tz).strftime("%H:%M"),
+            }
+
+
+        async def fetch_premarket_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple[str, dict]:
+            api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
+            url = (
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{api_ticker}"
+                "?range=5d&interval=5m&includePrePost=true"
+            )
+            try:
+                async with session.get(url, headers=HEADERS) as response:
+                    if response.status == 200:
+                        results = (await response.json()).get("chart", {}).get("result") or []
+                        if results:
+                            return ticker, parse_premarket_chart(results[0], ticker)
+                    print(f"⚠️ Yahoo pre-market {ticker}: HTTP {response.status}")
+            except Exception as error:
+                print(f"⚠️ Yahoo pre-market {ticker}: {error}")
+            return ticker, {"ticker": ticker, "available": False, "reason": "request_failed"}
+
+
+        async def fetch_all_premarket_data(tickers: list[str]) -> dict:
+            timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT + 5)
+            connector = aiohttp.TCPConnector(limit=12, limit_per_host=8, ttl_dns_cache=300)
+            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+                return dict(await asyncio.gather(*[
+                    fetch_premarket_ticker(session, ticker) for ticker in sorted(set(tickers))
                 ]))
 
 
@@ -1105,279 +1171,6 @@ jobs:
                 return ""
         EOF
 
-        cat << 'EOF' > modules/ipo.py
-        import asyncio
-        import json
-        import os
-        import re
-        from datetime import date, datetime, timedelta, timezone
-        from typing import Any, Optional
-
-        import aiohttp
-        from bs4 import BeautifulSoup
-
-        from modules.config import (
-            FINNHUB_API_KEY, HEADERS, HTTP_TIMEOUT, IPO_LOOKAHEAD_DAYS,
-            IPO_LOOKBACK_DAYS, IPO_STATE_FILE,
-        )
-
-        FINNHUB_URL = "https://finnhub.io/api/v1/calendar/ipo"
-        YAHOO_URL = "https://finance.yahoo.com/calendar/ipo"
-        FINNHUB_SOURCE = "Finnhub IPO Calendar"
-        YAHOO_SOURCE = "Yahoo Finance IPO Calendar"
-        TRASH_TEXT = re.compile(
-            r"\b(spac|blank[- ]check|acquisition\s+corp(?:oration)?|warrants?|units?|"
-            r"rights?|etf|funds?|closed[- ]end|trust|notes?|bonds?|preferred)\b",
-            re.IGNORECASE,
-        )
-        TRASH_SYMBOL = re.compile(r"[.\-/](?:U|W|WS|WT|R|RT)$", re.IGNORECASE)
-
-
-        def text(value: Any) -> str:
-            return re.sub(r"\s+", " ", str(value or "")).strip()
-
-
-        def parse_date(value: Any) -> Optional[date]:
-            value = text(value)
-            match = re.search(r"\d{4}-\d{2}-\d{2}", value)
-            if match:
-                try:
-                    return datetime.strptime(match.group(0), "%Y-%m-%d").date()
-                except ValueError:
-                    return None
-            for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%b %d, %Y", "%B %d, %Y"):
-                try:
-                    return datetime.strptime(value, fmt).date()
-                except ValueError:
-                    continue
-            return None
-
-
-        def parse_int(value: Any) -> Optional[int]:
-            cleaned = re.sub(r"[^\d]", "", text(value))
-            return int(cleaned) if cleaned else None
-
-
-        def normalize_event(raw: dict, today: date) -> Optional[dict]:
-            event_date = parse_date(
-                raw.get("date") or raw.get("ipoDate") or raw.get("pricedDate")
-                or raw.get("expectedDate") or raw.get("expectedToTrade")
-            )
-            company = text(raw.get("name") or raw.get("companyName") or raw.get("company") or raw.get("Company"))
-            ticker = re.sub(r"\s+", "", text(raw.get("symbol") or raw.get("ticker") or raw.get("Symbol"))).upper()
-            if not company or not event_date or TRASH_TEXT.search(company) or TRASH_SYMBOL.search(ticker):
-                return None
-            status = text(raw.get("status") or raw.get("type") or raw.get("eventType"))
-            raw_price = text(raw.get("price") or raw.get("priceRange") or raw.get("offerPrice") or raw.get("Price Range"))
-            is_range = bool(re.search(r"\d\s*-\s*\$?\d", raw_price)) or "range" in status.lower()
-            is_priced = "priced" in status.lower() or "listed" in status.lower() or event_date <= today
-            return {
-                "company_name": company,
-                "ticker": ticker,
-                "exchange": text(raw.get("exchange") or raw.get("exchangeName") or raw.get("market") or raw.get("Market")),
-                "planned_ipo_date": event_date.isoformat(),
-                "first_trading_date": event_date.isoformat(),
-                "price_range": raw_price if is_range else "",
-                "offer_price": raw_price if raw_price and is_priced and not is_range else "",
-                "shares_offered": parse_int(raw.get("numberOfShares") or raw.get("sharesOffered") or raw.get("Shares")),
-                "total_shares_value": parse_int(raw.get("totalSharesValue") or raw.get("dealSize") or raw.get("Deal Size")),
-                "status": status,
-                "source": text(raw.get("_source")) or FINNHUB_SOURCE,
-            }
-
-
-        def event_key(event: dict) -> str:
-            if event.get("ticker"):
-                return f"ticker:{event['ticker']}"
-            company = re.sub(r"[^a-z0-9]+", "", event.get("company_name", "").lower())
-            exchange = re.sub(r"[^a-z0-9]+", "", event.get("exchange", "").lower())
-            return f"company:{company}:{exchange}"
-
-
-        def completeness(event: dict) -> int:
-            fields = ("company_name", "ticker", "exchange", "planned_ipo_date", "price_range", "offer_price", "shares_offered", "status")
-            return sum(bool(event.get(field)) for field in fields) + 2 * bool(event.get("total_shares_value"))
-
-
-        def dedupe(events: list[dict]) -> list[dict]:
-            result = {}
-            for event in events:
-                key = event_key(event)
-                if key and (key not in result or completeness(event) > completeness(result[key])):
-                    result[key] = event
-            return list(result.values())
-
-
-        def load_snapshot(path: str) -> dict:
-            if not path or not os.path.exists(path):
-                return {"items": {}, "generated_at": None}
-            try:
-                with open(path, "r", encoding="utf-8") as file:
-                    payload = json.load(file)
-                return payload if isinstance(payload.get("items"), dict) else {"items": {}}
-            except Exception as error:
-                print(f"⚠️ IPO snapshot load: {error}")
-                return {"items": {}}
-
-
-        def save_snapshot(events: list[dict], path: str) -> None:
-            payload = {
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-                "source": f"{FINNHUB_SOURCE} + {YAHOO_SOURCE}",
-                "items": {event_key(event): event for event in events if event_key(event)},
-            }
-            directory = os.path.dirname(path)
-            if directory:
-                os.makedirs(directory, exist_ok=True)
-            temporary = f"{path}.tmp"
-            with open(temporary, "w", encoding="utf-8") as file:
-                json.dump(payload, file, ensure_ascii=False, indent=2, sort_keys=True)
-            os.replace(temporary, path)
-
-
-        async def fetch_finnhub(session: aiohttp.ClientSession, start: date, end: date) -> Optional[list[dict]]:
-            if not FINNHUB_API_KEY:
-                return None
-            try:
-                async with session.get(
-                    FINNHUB_URL,
-                    params={"from": start.isoformat(), "to": end.isoformat()},
-                    headers={"X-Finnhub-Token": FINNHUB_API_KEY},
-                    timeout=HTTP_TIMEOUT,
-                ) as response:
-                    if response.status != 200:
-                        print(f"⚠️ Finnhub IPO: HTTP {response.status}")
-                        return None
-                    events = (await response.json()).get("ipoCalendar")
-                if not isinstance(events, list):
-                    return None
-                for event in events:
-                    if isinstance(event, dict):
-                        event["_source"] = FINNHUB_SOURCE
-                return events
-            except Exception as error:
-                print(f"⚠️ Finnhub IPO: {error}")
-                return None
-
-
-        def normalize_header(value: str) -> str:
-            return re.sub(r"[^a-z0-9]+", "", value.lower())
-
-
-        def parse_yahoo_html(html_text: str) -> list[dict]:
-            events = []
-            soup = BeautifulSoup(html_text, "html.parser")
-            for table in soup.find_all("table"):
-                headers = [cell.get_text(" ", strip=True) for cell in table.find_all("th")]
-                normalized = [normalize_header(header) for header in headers]
-                if not ({"symbol", "ticker"} & set(normalized)) and "company" not in normalized:
-                    continue
-                for row in table.find_all("tr"):
-                    cells = [cell.get_text(" ", strip=True) for cell in row.find_all("td")]
-                    if len(cells) < 2:
-                        continue
-                    item = {"_source": YAHOO_SOURCE, "status": "IPO calendar"}
-                    for key, value in zip(normalized, cells):
-                        mapping = {
-                            "company": "companyName", "companyname": "companyName", "name": "companyName",
-                            "symbol": "symbol", "ticker": "symbol", "market": "exchange", "exchange": "exchange",
-                            "pricerange": "priceRange", "price": "priceRange", "shares": "numberOfShares",
-                            "sharesoffered": "numberOfShares", "numberofshares": "numberOfShares",
-                            "date": "date", "ipodate": "date", "priceddate": "date", "expectedtotrade": "date",
-                            "dealsize": "dealSize", "estimateddealsize": "dealSize", "status": "status", "type": "status",
-                        }
-                        if key in mapping:
-                            item[mapping[key]] = value
-                    if item.get("companyName") or item.get("symbol"):
-                        events.append(item)
-            return events
-
-
-        async def fetch_yahoo(session: aiohttp.ClientSession, start: date, end: date) -> Optional[list[dict]]:
-            try:
-                async with session.get(
-                    YAHOO_URL,
-                    params={"from": start.isoformat(), "to": end.isoformat()},
-                    headers=HEADERS,
-                    timeout=HTTP_TIMEOUT,
-                ) as response:
-                    if response.status != 200:
-                        print(f"⚠️ Yahoo IPO: HTTP {response.status}")
-                        return None
-                    return parse_yahoo_html(await response.text(errors="ignore"))
-            except Exception as error:
-                print(f"⚠️ Yahoo IPO: {error}")
-                return None
-
-
-        def build_updates(current: list[dict], previous: dict) -> list[dict]:
-            previous_items = previous.get("items", {})
-            fields = ("planned_ipo_date", "price_range", "offer_price", "shares_offered", "status", "exchange")
-            updates = []
-            for event in current:
-                old = previous_items.get(event_key(event))
-                item = dict(event)
-                if old is None:
-                    item.update(change_type="New IPO date in calendar", changed_fields=["planned_ipo_date"])
-                    updates.append(item)
-                    continue
-                changed = [field for field in fields if (old.get(field) or "") != (event.get(field) or "")]
-                if changed:
-                    item["changed_fields"] = changed
-                    item["change_type"] = "IPO date updated" if "planned_ipo_date" in changed else "IPO terms/status updated"
-                    if "planned_ipo_date" in changed:
-                        item["previous_ipo_date"] = old.get("planned_ipo_date", "")
-                    updates.append(item)
-            return updates
-
-
-        async def fetch_weekly_ipo_radar(today: Optional[date] = None) -> dict:
-            today = today or datetime.now(timezone.utc).date()
-            window_start = today - timedelta(days=max(1, IPO_LOOKBACK_DAYS) - 1)
-            upcoming_start = today + timedelta(days=1)
-            upcoming_end = today + timedelta(days=max(14, IPO_LOOKAHEAD_DAYS))
-            timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT + 10)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                fr, fu, yr, yu = await asyncio.gather(
-                    fetch_finnhub(session, window_start, today),
-                    fetch_finnhub(session, upcoming_start, upcoming_end),
-                    fetch_yahoo(session, window_start, today),
-                    fetch_yahoo(session, upcoming_start, upcoming_end),
-                )
-            source_ok = any(payload is not None for payload in (fr, fu, yr, yu))
-            recent = dedupe([
-                event for raw in (fr or []) + (yr or [])
-                if (event := normalize_event(raw, today))
-            ])
-            upcoming = dedupe([
-                event for raw in (fu or []) + (yu or [])
-                if (event := normalize_event(raw, today))
-            ])
-            previous = load_snapshot(IPO_STATE_FILE)
-            previous_found = bool(previous.get("items"))
-            updates = build_updates(upcoming, previous) if previous_found else [
-                dict(event, change_type="Current IPO date on calendar", changed_fields=["planned_ipo_date"])
-                for event in upcoming
-            ]
-            listings = [
-                event for event in recent
-                if window_start <= parse_date(event.get("first_trading_date")) <= today
-            ]
-            rank = lambda event: int(event.get("total_shares_value") or 0) + int(event.get("shares_offered") or 0)
-            updates = sorted(updates, key=lambda event: (event.get("planned_ipo_date", "9999-12-31"), -rank(event)))[:5]
-            listings = sorted(listings, key=lambda event: (event.get("first_trading_date", ""), rank(event)), reverse=True)[:5]
-            if source_ok:
-                save_snapshot(dedupe(recent + upcoming), IPO_STATE_FILE)
-            return {
-                "source_ok": source_ok,
-                "window_start": window_start.isoformat(),
-                "window_end": today.isoformat(),
-                "previous_snapshot_found": previous_found,
-                "date_updates": updates,
-                "new_listings": listings,
-            }
-        EOF
-
         cat << 'EOF' > modules/formatter.py
         from datetime import datetime
         from typing import Optional
@@ -1442,54 +1235,104 @@ jobs:
             return "🟡", "Нейтрально"
 
 
-        def build_entry_radar_lines(sectors_data: list[dict]) -> list[str]:
+        def _premarket_verdict(row: dict) -> tuple[str, str, str]:
+            entry = row.get("entry_analysis") or {}
+            status = entry.get("status_key", "unavailable")
+            premarket = row.get("premarket") or {}
+            if status == "unavailable":
+                return "▫️—", "НЕТ ДАННЫХ", "сигнал не рассчитывается"
+            if row.get("local_market"):
+                return "▫️—", "НЕТ ДАННЫХ", "предторги США для локального рынка не применяются"
+            if not premarket.get("available"):
+                return "▫️—", "НЕТ ДАННЫХ", "свежие сделки предторгов не получены"
+            change = float(premarket.get("change") or 0.0)
+            total = int(row.get("breadth_total") or 0)
+            ratio = int(row.get("breadth_positive") or 0) / total if total else None
+            positive = change >= 0.25 and (ratio is None or ratio >= 0.5)
+            negative = change <= -0.25 and (ratio is None or ratio <= 0.5)
+            if status in {"optimal", "forming"} and positive:
+                return "✅▲", "ПОДТВЕРЖДЕНО", "база и акции сектора растут до открытия"
+            if status in {"optimal", "forming"} and negative:
+                return "🔻▼", "НЕ ПОДТВЕРЖДЕНО", "базовый рынок снова снижается"
+            if status == "falling" and positive:
+                return "⚠️→", "НАБЛЮДАТЬ", "предторги растут, но разворот фонда ещё не подтверждён"
+            if status == "falling" or negative:
+                return "🔻▼", "НЕ ПОДТВЕРЖДЕНО", "снижение продолжается, вход пока не подтверждён"
+            if status == "late":
+                return "⚠️→", "НАБЛЮДАТЬ", "цена фонда уже выше средней"
+            return "⚠️→", "НАБЛЮДАТЬ", "выраженного сигнала пока нет"
+
+
+        def build_combined_radar_message(rows: list[dict], snapshot_at: str = "") -> str:
+            now_str = datetime.now(ISRAEL_TZ).strftime("%d.%m.%Y | %H:%M")
             priority = {"optimal": 5, "forming": 4, "falling": 3, "wait": 2, "late": 1, "unavailable": 0}
             ranked = sorted(
-                sectors_data,
-                key=lambda item: (
-                    priority.get(item.get("entry_analysis", {}).get("status_key"), 0),
-                    item.get("entry_analysis", {}).get("score", 0),
+                rows,
+                key=lambda row: (
+                    priority.get((row.get("entry_analysis") or {}).get("status_key"), 0),
+                    (row.get("entry_analysis") or {}).get("score", 0),
                 ),
                 reverse=True,
             )
-            eligible = [row for row in ranked if row.get("entry_analysis", {}).get("status_key") != "unavailable"]
-            lines = ["<blockquote expandable>", "🎯 <b>РАДАР ТОЧЕК ВХОДА</b>", ""]
-            lines.append(f"История цены доступна: <b>{len(eligible)}/{len(ranked)}</b> фондов.")
-            if not eligible:
-                lines.append("⚪ <b>ОЦЕНКА ВХОДА НЕДОСТУПНА</b>")
-            for sector in ranked:
-                entry = sector.get("entry_analysis", {})
-                name = escape_html(sector.get("il_name_eng", "Фонд"))
+            available = sum(bool(row.get("premarket", {}).get("available")) for row in rows)
+            applicable = sum(not row.get("local_market") for row in rows)
+            lines = [
+                "🎯 <b>РАДАР ВХОДА + ПРЕДТОРГОВЫЙ ИМПУЛЬС</b>",
+                f"📅 {now_str} (Израиль) 🇮🇱",
+                f"<code>{BOT_VERSION}</code>",
+                "",
+                f"Свежие предторги: <b>{available}/{applicable}</b> рынков.",
+            ]
+            if snapshot_at:
+                lines.append(f"Вечерний снимок: {escape_html(snapshot_at)}")
+            lines.append("")
+
+            for row in ranked:
+                entry = row.get("entry_analysis") or {}
+                premarket = row.get("premarket") or {}
+                marker, verdict, explanation = _premarket_verdict(row)
                 lines.append(
-                    f"{entry.get('icon', '⚪')} {sector.get('icon', '📊')} <b>{name}</b>"
+                    f"{marker} {row.get('icon', '📊')} "
+                    f"<b>{escape_html(row.get('il_name_eng', row.get('short_eng', 'Фонд')))}</b>"
                 )
-                if entry.get("status_key") == "unavailable":
-                    lines.append("└ Нет истории цены — сигнал не рассчитывается")
-                    continue
-                minimum_marker = " · мин.60д" if entry.get("at_minimum_60") else ""
-                lines.append(
-                    f"Цена {entry['current_price']:.2f} · ср.30д {entry['average_30']:.2f} · "
-                    f"ср.60д {entry['average_60']:.2f}{minimum_marker}"
-                )
-                lines.append(
-                    f"└ {escape_html(entry['label'])} · до ср.30д {format_percent(entry.get('to_average_30'), 1)} · "
-                    f"{escape_html(entry['action'])}"
-                )
+                if entry.get("current_price") is not None:
+                    lines.append(
+                        f"Цена {entry['current_price']:.2f} · ср.30д {entry['average_30']:.2f} · "
+                        f"до средней {format_percent(entry.get('to_average_30'), 1)}"
+                    )
+                if row.get("local_market"):
+                    market_line = "локальный рынок — предторги не применяются"
+                elif premarket.get("available"):
+                    breadth = int(row.get("breadth_total") or 0)
+                    breadth_text = (
+                        f" · акции + {row.get('breadth_positive', 0)}/{breadth}"
+                        if breadth else ""
+                    )
+                    market_line = (
+                        f"{row.get('preopen_ticker', 'База')} до открытия "
+                        f"{format_percent(premarket.get('change'), 1)}{breadth_text} · "
+                        f"{premarket.get('time_ny', '')} NY"
+                    )
+                else:
+                    market_line = f"{row.get('preopen_ticker', 'База')} — свежих предторгов нет"
+                lines.append(f"└ {escape_html(verdict)} · {escape_html(market_line)}")
+                lines.append(f"   {escape_html(explanation)}")
                 if entry.get("backtest_total", 0) >= 5:
-                    lines.append(f"   История сигнала: {entry['backtest_wins']}/{entry['backtest_total']} возвратов к средней")
-                elif entry.get("backtest_total", 0):
-                    lines.append(f"   История сигнала: мало примеров ({entry['backtest_total']})")
+                    lines.append(
+                        f"   История: {entry['backtest_wins']}/{entry['backtest_total']} "
+                        "возвратов к средней"
+                    )
+                lines.append("")
 
             lines.extend([
-                "",
-                "<i>Мин.60д — минимум только за прошедшие 60 дней. Сигнал: цена не менее чем на 3% ниже "
-                "средней 30д; вход подтверждают рост фонда за день и базового рынка за 5 сессий. "
-                "История показывает возврат к прежней средней за следующие 10 сессий и не гарантирует результат.</i>",
-                "</blockquote>",
+                "<i>✅▲ подтверждено · 🔻▼ не подтверждено · "
+                "⚠️→ наблюдать · ▫️— нет данных. Предторги показывают фактические "
+                "сделки расширенной сессии, а не будущую цену открытия или NAV фонда. "
+                "Сигнал помогает оценить момент, но не является распоряжением купить или продать.</i>",
                 "",
                 BOT_NAME,
             ])
-            return lines
+            return "\n".join(lines)
 
 
         def build_telegram_message(sectors_data: list[dict]) -> str:
@@ -1544,7 +1387,6 @@ jobs:
                     "Подробности запросов и ошибок — в журнале GitHub Actions.",
                     "</blockquote>", "",
                 ])
-                lines.extend(build_entry_radar_lines(sectors_data))
                 return "\n".join(lines)
             sorted_funds = sorted(
                 sectors_data,
@@ -1594,79 +1436,7 @@ jobs:
                     if year.get("trend"):
                         parts.append(escape_html(year["trend"]))
                     lines.append("   " + " · ".join(parts))
-            lines.extend(["</blockquote>", ""])
-            lines.extend(build_entry_radar_lines(sectors_data))
-            return "\n".join(lines)
-
-
-        def format_int(value: object) -> str:
-            try:
-                return f"{int(value):,}".replace(",", " ")
-            except (TypeError, ValueError):
-                return ""
-
-
-        def format_ipo_item(event: dict, date_label: str) -> list[str]:
-            company = escape_html(event.get("company_name", "Unknown company"))
-            ticker = escape_html(event.get("ticker") or "N/A")
-            lines = [
-                f"• <b>{company}</b> (<code>{ticker}</code>)",
-                f"  🏛 {escape_html(event.get('exchange') or 'N/A')} · {date_label}: "
-                f"<b>{escape_html(event.get('planned_ipo_date') or event.get('first_trading_date') or 'N/A')}</b>",
-            ]
-            if event.get("previous_ipo_date"):
-                lines.append(f"  ↳ previous date: {escape_html(event['previous_ipo_date'])}")
-            prices = []
-            if event.get("price_range"):
-                prices.append(f"range {escape_html(event['price_range'])}")
-            if event.get("offer_price"):
-                prices.append(f"offer {escape_html(event['offer_price'])}")
-            if prices:
-                lines.append(f"  💵 Price: {', '.join(prices)}")
-            shares = format_int(event.get("shares_offered"))
-            if shares:
-                lines.append(f"  📦 Shares offered: {shares}")
-            if event.get("change_type"):
-                lines.append(f"  🔄 {escape_html(event['change_type'])}")
-            lines.append(f"  📌 Status: {escape_html(event.get('status') or 'N/A')}")
-            lines.append(f"  🔗 Source: {escape_html(event.get('source') or 'N/A')}")
-            return lines
-
-
-        def build_ipo_radar_message(radar: dict) -> str:
-            lines = [
-                "🔔 <b>Weekly IPO Radar</b>",
-                f"📅 {datetime.now(ISRAEL_TZ).strftime('%d.%m.%Y')} 🇮🇱",
-                f"🗓 Window: {escape_html(radar.get('window_start', 'N/A'))} → {escape_html(radar.get('window_end', 'N/A'))}",
-                "",
-            ]
-            updates = radar.get("date_updates", [])
-            listings = radar.get("new_listings", [])
-            if not updates and not listings:
-                lines.append("No notable IPO updates this week")
-                if not radar.get("source_ok", True):
-                    lines.append("IPO data sources unavailable; snapshot was not updated.")
-            else:
-                heading = "IPO dates announced/updated this week" if radar.get("previous_snapshot_found") else "Current notable IPO dates"
-                lines.append(f"<b>1. {heading}</b>")
-                if updates:
-                    lines.append("<blockquote expandable>")
-                    for event in updates:
-                        lines.extend(format_ipo_item(event, "planned IPO date"))
-                        lines.append("")
-                    lines.append("</blockquote>")
-                else:
-                    lines.append("No notable IPO date updates found.")
-                lines.append("<b>2. New public listings this week</b>")
-                if listings:
-                    lines.append("<blockquote expandable>")
-                    for event in listings:
-                        lines.extend(format_ipo_item(event, "first trading date"))
-                        lines.append("")
-                    lines.append("</blockquote>")
-                else:
-                    lines.append("No notable new listings found.")
-            lines.extend(["", "<i>Dates may change. Not financial advice.</i>", "", BOT_NAME])
+            lines.extend(["</blockquote>", "", BOT_NAME])
             return "\n".join(lines)
         EOF
 
@@ -1717,17 +1487,11 @@ jobs:
 
         def split_message(text: str, max_length: int = 3900) -> list[str]:
             il_marker = "<blockquote expandable>\n🇮🇱 <b>ДОХОДНОСТЬ И АНАЛИТИКА ИЗРАИЛЬСКИХ ФОНДОВ</b>"
-            entry_marker = "<blockquote expandable>\n🎯 <b>РАДАР ТОЧЕК ВХОДА</b>"
             il_position = text.find(il_marker)
-            entry_position = text.find(entry_marker)
-            if 0 < il_position < entry_position:
-                logical_parts = [
-                    text[:il_position].strip(),
-                    text[il_position:entry_position].strip(),
-                    text[entry_position:].strip(),
-                ]
+            if il_position > 0:
+                logical_parts = [text[:il_position].strip(), text[il_position:].strip()]
                 if all(part and len(part) <= max_length for part in logical_parts):
-                    print("✂️ Market digest split into 3 logical messages")
+                    print("✂️ Market digest split into 2 logical messages")
                     return logical_parts
             if len(text) <= max_length:
                 return [text]
@@ -1766,16 +1530,18 @@ jobs:
 
         cat << 'EOF' > main.py
         import asyncio
+        import json
         import os
+        from datetime import datetime, timezone
 
         import aiohttp
 
-        from modules.config import SECTORS_CONFIG, BOT_VERSION
-        from modules.formatter import build_ipo_radar_message, build_telegram_message
-        from modules.ipo import fetch_weekly_ipo_radar
+        from modules.config import BOT_VERSION, MARKET_SNAPSHOT_FILE, SECTORS_CONFIG
+        from modules.formatter import build_combined_radar_message, build_telegram_message
         from modules.market import (
             analyze_entry_zone,
             fetch_all_israeli_funds,
+            fetch_all_premarket_data,
             fetch_all_year_analytics,
             fetch_all_yahoo_data,
         )
@@ -1787,6 +1553,43 @@ jobs:
             if avg_change is None:
                 return None
             return max(0, min(100, int(50 + float(avg_change) * 15.0)))
+
+
+        def save_market_snapshot(rows: list[dict]) -> None:
+            payload = {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "version": BOT_VERSION,
+                "sectors": [{
+                    key: row.get(key)
+                    for key in (
+                        "short_eng", "name", "icon", "fund_id", "il_name_eng",
+                        "local_market", "avg_change", "base_date", "il_fund_data",
+                        "year_analysis", "entry_analysis",
+                    )
+                } for row in rows],
+            }
+            temporary = f"{MARKET_SNAPSHOT_FILE}.tmp"
+            with open(temporary, "w", encoding="utf-8") as file:
+                json.dump(payload, file, ensure_ascii=False, separators=(",", ":"))
+            os.replace(temporary, MARKET_SNAPSHOT_FILE)
+            print(f"💾 Saved latest market snapshot: {len(rows)} funds")
+
+
+        def load_market_snapshot() -> dict | None:
+            try:
+                with open(MARKET_SNAPSHOT_FILE, "r", encoding="utf-8") as file:
+                    payload = json.load(file)
+                generated = datetime.fromisoformat(str(payload["generated_at"]).replace("Z", "+00:00"))
+                if generated.tzinfo is None:
+                    generated = generated.replace(tzinfo=timezone.utc)
+                age_hours = (datetime.now(timezone.utc) - generated).total_seconds() / 3600.0
+                if age_hours < 0 or age_hours > 96 or not isinstance(payload.get("sectors"), list):
+                    print(f"⚠️ Market snapshot is stale or invalid: age={age_hours:.1f}h")
+                    return None
+                return payload
+            except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
+                print(f"⚠️ Market snapshot unavailable: {error}")
+                return None
 
 
         async def run_market_analytics() -> None:
@@ -1881,24 +1684,74 @@ jobs:
                 ),
                 reverse=True,
             )
+            has_il_data = any(row["il_fund_data"].get("daily") is not None for row in results)
+            if has_il_data:
+                save_market_snapshot(results)
             message = build_telegram_message(results)
             if os.getenv("DRY_RUN", "false").lower() == "true":
                 print(message)
             else:
                 await send_to_telegram(message)
-            if not any(row["il_fund_data"].get("daily") is not None for row in results):
+            if not has_il_data:
                 raise RuntimeError("IL data failure: no daily fund returns. Diagnostic report generated; inspect Bizportal logs.")
 
 
-        async def run_ipo_digest() -> None:
-            print("📊 Building Weekly IPO Radar...")
-            await send_to_telegram(build_ipo_radar_message(await fetch_weekly_ipo_radar()))
+        async def run_premarket_pulse() -> None:
+            print(f"Build: {BOT_VERSION}; pre-market pulse")
+            snapshot = load_market_snapshot()
+            if not snapshot:
+                message = build_combined_radar_message([], "снимок не найден или старше 96 часов")
+                if os.getenv("DRY_RUN", "false").lower() == "true":
+                    print(message)
+                else:
+                    await send_to_telegram(message)
+                raise RuntimeError("Fresh market snapshot is required for the combined radar")
+            tickers = {
+                ticker
+                for config in SECTORS_CONFIG.values()
+                if not config.get("local_market")
+                for ticker in ([config.get("preopen_ticker")] + config.get("tickers", []))
+                if ticker and not ticker.endswith(".TA") and "=" not in ticker
+            }
+            data = await fetch_all_premarket_data(sorted(tickers))
+            snapshot_rows = {
+                row.get("short_eng"): row
+                for row in snapshot["sectors"]
+                if isinstance(row, dict) and row.get("short_eng")
+            }
+            rows = []
+            for config in SECTORS_CONFIG.values():
+                saved = snapshot_rows.get(config["short_eng"], {})
+                preopen_ticker = config.get("preopen_ticker")
+                premarket = data.get(preopen_ticker, {}) if preopen_ticker else {}
+                drivers = [
+                    data[ticker]
+                    for ticker in config.get("tickers", [])
+                    if ticker in data and data[ticker].get("available")
+                ]
+                rows.append({**saved,
+                    "icon": config["icon"],
+                    "short_eng": config["short_eng"],
+                    "il_name_eng": config["il_name_eng"],
+                    "local_market": bool(config.get("local_market")),
+                    "preopen_ticker": preopen_ticker or "—",
+                    "premarket": premarket,
+                    "breadth_positive": sum(float(item["change"]) > 0 for item in drivers),
+                    "breadth_total": len(drivers),
+                })
+            generated = datetime.fromisoformat(str(snapshot["generated_at"]).replace("Z", "+00:00"))
+            snapshot_label = generated.astimezone().strftime("%d.%m.%Y %H:%M UTC")
+            message = build_combined_radar_message(rows, snapshot_label)
+            if os.getenv("DRY_RUN", "false").lower() == "true":
+                print(message)
+            else:
+                await send_to_telegram(message)
 
 
         async def main() -> None:
             mode = os.getenv("RUN_MODE", "market").strip().lower()
-            if mode == "ipo":
-                await run_ipo_digest()
+            if mode == "premarket":
+                await run_premarket_pulse()
             elif mode == "market":
                 await run_market_analytics()
             else:
@@ -2109,6 +1962,41 @@ jobs:
                 self.assertEqual(result['price'], 101.0)
                 self.assertEqual(result['change'], 1.0)
 
+            def test_premarket_parser_uses_current_extended_trade(self):
+                from datetime import datetime, timezone
+                now = int(datetime(2026, 9, 8, 13, 15, tzinfo=timezone.utc).timestamp())
+                chart = {
+                    'timestamp': [now - 600],
+                    'indicators': {'quote': [{'close': [102.0]}]},
+                    'meta': {
+                        'chartPreviousClose': 100.0,
+                        'exchangeTimezoneName': 'America/New_York',
+                        'currentTradingPeriod': {
+                            'pre': {'start': now - 5 * 3600, 'end': now + 900},
+                            'regular': {'start': now + 900, 'end': now + 7 * 3600},
+                        },
+                    },
+                }
+                result = market.parse_premarket_chart(chart, 'TEST', now)
+                self.assertTrue(result['available'])
+                self.assertEqual(result['change'], 2.0)
+
+            def test_stale_premarket_trade_is_rejected(self):
+                now = 2_000_000_000
+                chart = {
+                    'timestamp': [now - 3600],
+                    'indicators': {'quote': [{'close': [102.0]}]},
+                    'meta': {
+                        'chartPreviousClose': 100.0,
+                        'exchangeTimezoneName': 'America/New_York',
+                        'currentTradingPeriod': {
+                            'pre': {'start': now - 6 * 3600},
+                            'regular': {'start': now + 900},
+                        },
+                    },
+                }
+                self.assertFalse(market.parse_premarket_chart(chart, 'TEST', now)['available'])
+
 
         class RadarTests(unittest.TestCase):
             @staticmethod
@@ -2131,19 +2019,27 @@ jobs:
                 self.assertEqual(signal['status_key'], 'unavailable')
 
             def test_total_outage_not_no_entry(self):
-                row = {'entry_analysis':market.analyze_entry_zone({}, {}), 'il_fund_data':{}}
-                text = '\n'.join(formatter.build_entry_radar_lines([row]))
-                self.assertIn('ОЦЕНКА ВХОДА НЕДОСТУПНА', text)
-                self.assertNotIn('Ближе всего', text)
-                self.assertNotIn('0/4', text)
+                row = {
+                    'entry_analysis': market.analyze_entry_zone({}, {}),
+                    'il_fund_data': {}, 'icon': '☁️', 'il_name_eng': 'Test',
+                    'short_eng': 'Cloud', 'preopen_ticker': 'WCLD',
+                    'premarket': {}, 'local_market': False,
+                }
+                text = formatter.build_combined_radar_message([row])
+                self.assertIn('▫️—', text)
+                self.assertIn('НЕТ ДАННЫХ', text)
+                self.assertNotIn('покупать', text.lower())
 
             def test_eligible_fund_not_displaced_by_missing(self):
                 signal = market.analyze_entry_zone(self.fund(), {'change_5d':1,'change_20d':2})
                 row = {'entry_analysis':signal, 'il_fund_data':{'daily':1}, 'icon':'☁️', 'il_name_eng':'Test', 'short_eng':'Cloud', 'year_analysis':{}}
                 missing = dict(row, entry_analysis=market.analyze_entry_zone({}, {}))
-                text = '\n'.join(formatter.build_entry_radar_lines([missing,row]))
-                self.assertIn('Цена ниже средней, рост начался', text)
-                self.assertIn('1/2', text)
+                for item in (missing, row):
+                    item.update(preopen_ticker='WCLD', premarket={'available': True, 'change': 1.0, 'time_ny': '09:15'},
+                                breadth_positive=3, breadth_total=4, local_market=False)
+                text = formatter.build_combined_radar_message([missing,row])
+                self.assertIn('ПОДТВЕРЖДЕНО', text)
+                self.assertIn('✅▲', text)
 
             def test_low_price_without_turn_is_falling(self):
                 signal = market.analyze_entry_zone(self.fund(daily=-1.0), {'change_5d':-1.0})
@@ -2174,16 +2070,37 @@ jobs:
             def test_total_outage_short_report(self):
                 text=formatter.build_telegram_message(self.rows(missing=True))
                 self.assertIn('Израильские данные не получены',text)
-                self.assertIn('ОЦЕНКА ВХОДА НЕДОСТУПНА',text)
+                self.assertNotIn('РАДАР ТОЧЕК ВХОДА',text)
                 self.assertNotIn('0/4',text)
 
             def test_local_market_relation_uses_local_wording(self):
                 self.assertEqual(formatter.relation_text(1.0, 0.9, True), 'следует за локальным рынком')
 
             def test_small_backtest_sample_is_not_presented_as_success_rate(self):
-                text = formatter.build_telegram_message(self.rows())
-                self.assertIn('История сигнала: мало примеров (3)', text)
+                rows = self.rows()
+                for row in rows:
+                    row.update(preopen_ticker='TEST', premarket={'available':True, 'change':1.0, 'time_ny':'09:15'},
+                               breadth_positive=1, breadth_total=1)
+                text = formatter.build_combined_radar_message(rows)
+                self.assertNotIn('История:', text)
                 self.assertNotIn('2/3 возвратов', text)
+
+            def test_premarket_message_is_explicitly_non_predictive(self):
+                rows = [{
+                    'icon':'🛢️', 'short_eng':'Oil', 'local_market':False,
+                    'preopen_ticker':'USO',
+                    'premarket':{'available':True, 'change':1.2, 'time_ny':'09:15'},
+                    'breadth_positive':3, 'breadth_total':4,
+                }]
+                rows[0].update(
+                    il_name_eng='Barak Ultra WTI',
+                    entry_analysis=market.analyze_entry_zone(RadarTests.fund(), {'change_5d':1.0}),
+                )
+                text = formatter.build_combined_radar_message(rows, '08.09.2026 23:15')
+                self.assertIn('USO', text)
+                self.assertIn('не будущую цену открытия', text)
+                self.assertIn('✅▲', text)
+                self.assertNotIn('покупать', text.lower())
 
 
         if __name__ == '__main__':
@@ -2205,13 +2122,13 @@ jobs:
         BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         CHAT_ID: ${{ secrets.CHAT_ID }}
         FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
-        IPO_STATE_FILE: ipo_radar_snapshot.json
         RUN_MODE: ${{ steps.report.outputs.mode }}
         PYTHONUNBUFFERED: '1'
+        MARKET_SNAPSHOT_FILE: latest_market_snapshot.json
       run: python main.py
-    - name: Save IPO Radar Snapshot
-      if: success() && steps.report.outputs.mode == 'ipo' && hashFiles('ipo_radar_snapshot.json') != ''
+    - name: Save Latest Market Snapshot
+      if: success() && steps.report.outputs.mode == 'market' && hashFiles('latest_market_snapshot.json') != ''
       uses: actions/cache/save@v5
       with:
-        path: ipo_radar_snapshot.json
-        key: ipo-radar-${{ github.run_id }}-${{ github.run_attempt }}
+        path: latest_market_snapshot.json
+        key: market-snapshot-${{ github.run_id }}-${{ github.run_attempt }}
