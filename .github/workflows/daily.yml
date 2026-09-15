@@ -70,7 +70,7 @@ jobs:
         BOT_TOKEN = os.getenv("BOT_TOKEN")
         CHAT_ID = os.getenv("CHAT_ID")
         BOT_NAME = "@oil_tracker_pavel_bot"
-        BOT_VERSION = "hybrid-v2-20260914"
+        BOT_VERSION = "hybrid-v2.1-20260915"
         MARKET_SNAPSHOT_FILE = os.getenv("MARKET_SNAPSHOT_FILE", "latest_market_snapshot.json")
         HTTP_TIMEOUT = 15
 
@@ -89,7 +89,7 @@ jobs:
         SECTORS_CONFIG = {
             "Oil": {
                 "name": "Нефть и Энергетика", "icon": "🛢️", "short_eng": "Oil",
-                "news_ticker": "CL=F", "proxy_ticker": "CL=F", "preopen_ticker": "USO",
+                "news_ticker": "CL=F", "proxy_ticker": "USO", "preopen_ticker": "USO",
                 "fund_id": "5141841", "il_name_eng": "Barak Ultra WTI",
                 "tickers": ["CL=F", "USO", "XLE", "XOP"],
             },
@@ -144,9 +144,10 @@ jobs:
                 "tickers": ["DSCT.TA", "MZTF.TA", "FIBI.TA", "LUMI.TA", "POLI.TA"],
             },
             "Cloud": {
-                "name": "Облачные технологии", "icon": "☁️", "short_eng": "Cloud",
+                "name": "Облачная кибербезопасность", "icon": "☁️", "short_eng": "Cloud",
                 "news_ticker": "CIBR", "proxy_ticker": "CIBR", "preopen_ticker": "CIBR",
                 "fund_id": "5132220", "il_name_eng": "More Cloud Cyber",
+                "daily_base": "basket",
                 "tickers": ["PANW", "FTNT", "CRWD", "DDOG", "NET", "OKTA", "ZS"],
             },
             "EV": {
@@ -1270,7 +1271,11 @@ jobs:
             "Cyber": ["cyber", "security", "breach", "ransomware", "hack", "cloud security"],
             "Game": ["gaming", "game", "console", "playstation", "xbox", "release", "bookings"],
             "Gold": ["gold", "silver", "metal", "inflation", "fed", "yield", "dollar"],
-            "Clean": ["solar", "renewable", "clean energy", "wind", "tax credit", "tariff"],
+            "Clean": [
+                "solar", "renewable", "clean energy", "green energy", "wind", "power grid",
+                "ge vernova", "constellation energy", "talen energy", "first solar",
+                "nextracker", "nrg energy",
+            ],
             "Aero": ["aerospace", "defense", "aircraft", "contract", "pentagon", "missile"],
             "Bio": ["biotech", "drug", "fda", "trial", "approval", "pharma", "clinical"],
             "Bank": ["bank", "fed", "rate", "credit", "loan", "deposit", "net interest"],
@@ -1375,8 +1380,15 @@ jobs:
                 related = re.split(r"[,\s]+", related.upper())
             related_set = {str(value).upper() for value in related}
             ticker_set = {ticker.upper() for ticker in candidate_tickers}
+            keyword_hits = sum(
+                keyword in lower_title for keyword in SECTOR_KEYWORDS.get(sector_name, [])
+            )
+            # Clean-energy tickers often appear in broad market roundups. Require the
+            # headline itself to identify the industry or one of its tracked companies.
+            if sector_name == "Clean" and keyword_hits == 0:
+                return -50
             score = 35 if related_set & ticker_set else 0
-            score += 12 * sum(keyword in lower_title for keyword in SECTOR_KEYWORDS.get(sector_name, []))
+            score += 12 * keyword_hits
             if any(word in lower_title for word in ("earnings", "guidance", "forecast", "contract", "approval", "tariff")):
                 score += 8
             return score
@@ -1425,7 +1437,7 @@ jobs:
         EOF
 
         cat << 'EOF' > modules/formatter.py
-        from datetime import datetime
+        from datetime import date, datetime
         from typing import Optional
         from zoneinfo import ZoneInfo
 
@@ -1438,36 +1450,60 @@ jobs:
             return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-        def format_percent(value: Optional[float], digits: int = 2) -> str:
+        def format_percent(value: Optional[float], digits: int = 2, missing: str = "—") -> str:
             if value is None:
-                return "—"
+                return missing
             number = float(value)
             return f"+{number:.{digits}f}%" if number > 0 else f"{number:.{digits}f}%"
 
 
+        def _display_date(value: str, with_year: bool = False) -> str:
+            try:
+                parsed = date.fromisoformat(str(value))
+            except ValueError:
+                return str(value or "—")
+            return parsed.strftime("%d.%m.%Y" if with_year else "%d.%m")
+
+
         def _date_range(values: list[str]) -> str:
-            dates = sorted({value for value in values if value})
+            dates = sorted({str(value) for value in values if value})
             if not dates:
                 return "нет данных"
-            return dates[0] if len(dates) == 1 else f"{dates[0]}…{dates[-1]}"
+            if len(dates) == 1:
+                return _display_date(dates[0])
+            return f"{_display_date(dates[0])} – {_display_date(dates[-1])}"
 
 
         def _fund_date(row: dict) -> str:
             return str((row.get("il_fund_data", {}).get("price_stats") or {}).get("price_date") or "")
 
 
-        def _market_status(rows: list[dict]) -> str:
-            statuses = {row.get("market_status") for row in rows if not row.get("local_market")}
-            if "open" in statuses:
-                return "торги идут"
-            if statuses == {"closed"}:
-                return "торги закрыты"
-            return "статус не определён"
+        def _comparison_fund_date(rows: list[dict]) -> str:
+            dates = [_fund_date(row) for row in rows if _fund_date(row)]
+            return max(set(dates), key=lambda value: (dates.count(value), value)) if dates else ""
 
 
-        def _ranked_funds(rows: list[dict]) -> list[dict]:
+        def _market_status(now: Optional[datetime] = None) -> str:
+            current = (now or datetime.now(ZoneInfo("UTC"))).astimezone(ZoneInfo("America/New_York"))
+            minutes = current.hour * 60 + current.minute
+            if current.weekday() >= 5:
+                return "рынок закрыт"
+            if 4 * 60 <= minutes < 9 * 60 + 30:
+                return "идут предторги"
+            if 9 * 60 + 30 <= minutes < 16 * 60:
+                return "основная сессия идёт"
+            if 16 * 60 <= minutes < 20 * 60:
+                return "основная сессия закрыта · идут послеторги"
+            return "рынок закрыт"
+
+
+        def _ranked_funds(rows: list[dict], latest_only: bool = False) -> list[dict]:
+            available = [row for row in rows if row.get("il_fund_data", {}).get("daily") is not None]
+            comparison_date = _comparison_fund_date(available)
+            if latest_only and comparison_date:
+                available = [row for row in available if _fund_date(row) == comparison_date]
             return sorted(
-                [row for row in rows if row.get("il_fund_data", {}).get("daily") is not None],
+                available,
                 key=lambda row: float(row["il_fund_data"]["daily"]),
                 reverse=True,
             )
@@ -1493,22 +1529,25 @@ jobs:
 
         def build_telegram_message(sectors_data: list[dict]) -> str:
             now_str = datetime.now(ISRAEL_TZ).strftime("%d.%m.%Y | %H:%M")
-            base_dates = _date_range([str(row.get("base_date") or "") for row in sectors_data])
+            base_dates = _date_range([
+                str(row.get("base_date") or "")
+                for row in sectors_data if not row.get("local_market")
+            ])
             fund_dates = _date_range([_fund_date(row) for row in sectors_data])
             lines = [
                 "📈 <b>РЫНОК США И КЛЮЧЕВЫЕ СОБЫТИЯ</b>",
                 f"📅 {now_str} (Израиль) 🇮🇱",
-                f"🇺🇸 США: {_market_status(sectors_data)} · закрытие {escape_html(base_dates)}",
-                f"🇮🇱 Последняя цена фондов: {escape_html(fund_dates)}",
+                f"🇺🇸 США: {_market_status()} · данные {escape_html(base_dates)}",
+                f"🇮🇱 Даты NAV фондов: {escape_html(fund_dates)}",
                 "",
                 "<b>📊 БАЗОВЫЕ РЫНКИ</b>",
-                "<code>Сектор       День     Дата</code>",
+                "<code>Сектор   |   День | Дата</code>",
                 "<code>",
             ]
             for row in sectors_data:
                 base = "локал." if row.get("local_market") else format_percent(row.get("avg_change"), 1)
-                date_text = str(row.get("base_date") or "—")[-5:]
-                lines.append(f"{row['icon']}{row['short_eng'][:6]:<7} {base:>7}  {date_text:>5}")
+                date_text = _display_date(str(row.get("base_date") or ""))
+                lines.append(f"{row['icon']}{row['short_eng'][:6]:<7}| {base:>7} | {date_text:>5}")
             lines.extend(["</code>", "", "<b>🔍 ГЛАВНЫЕ ДВИЖЕНИЯ</b>", ""])
 
             notable = sorted(
@@ -1535,15 +1574,14 @@ jobs:
                 "<i>Показываются последние завершённые дневные данные. "
                 "Во время торгов незакрытая свеча США не используется.</i>",
                 "",
-                BOT_NAME,
-                "",
                 "<blockquote expandable>",
                 "🇮🇱 <b>ФОНДЫ И РАСХОЖДЕНИЯ С БАЗОЙ</b>",
                 "",
             ])
 
-            ranked = _ranked_funds(sectors_data)
-            if not ranked:
+            all_ranked = _ranked_funds(sectors_data)
+            ranked = _ranked_funds(sectors_data, latest_only=True)
+            if not all_ranked:
                 lines.extend([
                     "⚠️ Израильские данные не получены.",
                     "Котировки базовых рынков не заменяют цену израильского фонда.",
@@ -1553,16 +1591,20 @@ jobs:
                 ])
                 return "\n".join(lines)
 
-            leaders = ranked[:3]
-            laggards = list(reversed(ranked[-3:]))
-            lines.append("<b>Лидеры:</b> " + " · ".join(
+            comparison_date = _comparison_fund_date(all_ranked)
+            leaders = [row for row in ranked if float(row["il_fund_data"]["daily"]) > 0][:3]
+            laggards = sorted(
+                [row for row in ranked if float(row["il_fund_data"]["daily"]) < 0],
+                key=lambda row: float(row["il_fund_data"]["daily"]),
+            )[:3]
+            lines.append(f"<b>Лидеры за {_display_date(comparison_date)}:</b> " + (" · ".join(
                 f"{row['icon']} {format_percent(row['il_fund_data']['daily'], 1)}"
                 for row in leaders
-            ))
-            lines.append("<b>Снижение:</b> " + " · ".join(
+            ) or "нет"))
+            lines.append("<b>Снижение:</b> " + (" · ".join(
                 f"{row['icon']} {format_percent(row['il_fund_data']['daily'], 1)}"
                 for row in laggards
-            ))
+            ) or "нет"))
 
             gaps = _directional_gaps(sectors_data)
             if gaps:
@@ -1580,21 +1622,28 @@ jobs:
                     "⚡ Сопоставимых расхождений от 1,5 п.п. не найдено.",
                 ])
 
+            stale_count = sum(
+                _fund_date(row) and _fund_date(row) != comparison_date for row in all_ranked
+            )
+            if stale_count:
+                lines.append(f"<i>Не включены в рейтинг из-за другой даты NAV: {stale_count}</i>")
+
             lines.extend(["", "<b>📋 ВСЕ ФОНДЫ</b>", "<code>"])
-            for row in ranked:
+            for row in all_ranked:
                 fund = row["il_fund_data"]
                 lines.append(
-                    f"{row['icon']}{row['short_eng'][:6]:<7} "
-                    f"D {format_percent(fund.get('daily'), 1):>6} "
-                    f"M {format_percent(fund.get('mtd'), 1):>6} "
-                    f"Y {format_percent(fund.get('ytd'), 1):>7}"
+                    f"{row['icon']}{row['short_eng'][:6]:<6} | "
+                    f"D {format_percent(fund.get('daily'), 1):>7} | "
+                    f"M {format_percent(fund.get('mtd'), 1):>7} | "
+                    f"Y {format_percent(fund.get('ytd'), 1, 'N/A'):>7} | "
+                    f"{_display_date(_fund_date(row)):>5}"
                 )
             unavailable = [
                 row for row in sectors_data
                 if row.get("il_fund_data", {}).get("daily") is None
             ]
             for row in unavailable:
-                lines.append(f"{row['icon']}{row['short_eng'][:6]:<7} D      — M      — Y       —")
+                lines.append(f"{row['icon']}{row['short_eng'][:6]:<6} | D       — | M       — | Y     N/A |     —")
             lines.extend([
                 "</code>",
                 "",
@@ -1926,25 +1975,33 @@ jobs:
                 sector_tasks = []
                 sector_rows = []
                 for sector, config in SECTORS_CONFIG.items():
-                    ticker_details = [
-                        (ticker, market_data[ticker]["change"])
+                    ticker_rows = [
+                        (ticker, market_data[ticker]["change"], market_data[ticker].get("market_date"))
                         for ticker in config["tickers"]
                         if ticker in market_data and market_data[ticker].get("change") is not None
                     ]
-                    top_movements = sorted(ticker_details, key=lambda item: abs(item[1]), reverse=True)[:3]
-                    driver_changes = [change for _, change in ticker_details]
+                    dated = [row for row in ticker_rows if row[2]]
+                    basket_date = max(
+                        {row[2] for row in dated},
+                        key=lambda value: (sum(row[2] == value for row in dated), value),
+                    ) if dated else None
+                    basket_rows = [row for row in ticker_rows if not basket_date or row[2] == basket_date]
+                    driver_changes = [change for _, change, _ in basket_rows]
                     driver_average = sum(driver_changes) / len(driver_changes) if driver_changes else None
                     proxy_row = market_data.get(config.get("proxy_ticker"), {}) or {}
                     proxy_change = proxy_row.get("change")
-                    base_change = driver_average if config.get("local_market") else proxy_change
-                    base_date = proxy_row.get("market_date")
-                    if config.get("local_market") and ticker_details:
-                        dates = [market_data[ticker].get("market_date") for ticker, _ in ticker_details]
-                        dates = [date for date in dates if date]
-                        base_date = max(set(dates), key=dates.count) if dates else None
+                    basket_base = config.get("local_market") or config.get("daily_base") == "basket"
+                    base_change = driver_average if basket_base else proxy_change
+                    base_date = basket_date if basket_base else proxy_row.get("market_date")
                     if base_change is None:
                         base_change = driver_average
+                        base_date = basket_date
                         print(f"⚠️ Base proxy unavailable for {sector}; using driver basket average")
+                    same_date_rows = [row for row in ticker_rows if not base_date or row[2] == base_date]
+                    top_movements = sorted(
+                        [(ticker, change) for ticker, change, _ in same_date_rows],
+                        key=lambda item: abs(item[1]), reverse=True,
+                    )[:3]
                     market_status = proxy_row.get("session_status", "unknown")
                     sector_rows.append((sector, config, top_movements, base_change, base_date, market_status))
                     sector_tasks.append(asyncio.create_task(fetch_sector_news(
@@ -1976,6 +2033,28 @@ jobs:
                         "year_analysis": year_data,
                         "entry_analysis": analyze_entry_zone(fund_data, year_data),
                     })
+
+            fund_dates = [
+                (row.get("il_fund_data", {}).get("price_stats") or {}).get("price_date")
+                for row in results
+            ]
+            dated_funds = [value for value in fund_dates if value]
+            comparison_fund_date = max(
+                set(dated_funds), key=lambda value: (dated_funds.count(value), value)
+            ) if dated_funds else None
+            if comparison_fund_date:
+                for row in results:
+                    price_date = (row.get("il_fund_data", {}).get("price_stats") or {}).get("price_date")
+                    if price_date and price_date != comparison_fund_date:
+                        row["entry_analysis"] = {
+                            "status_key": "unavailable",
+                            "label": "Данные фонда устарели",
+                            "score": 0,
+                            "candidate": False,
+                            "reasons": [
+                                f"NAV фонда от {price_date}; сопоставимая дата {comparison_fund_date}"
+                            ],
+                        }
 
             results.sort(
                 key=lambda item: (
@@ -2480,7 +2559,39 @@ jobs:
 
             def test_version_marker_not_published(self):
                 text = formatter.build_telegram_message(self.rows())
-                self.assertNotIn('hybrid-v2-20260914', text)
+                self.assertNotIn('hybrid-v2.1-20260915', text)
+
+            def test_compact_dates_and_single_footer(self):
+                rows = self.rows()
+                rows[0]['base_date'] = '2026-09-11'
+                rows[0]['il_fund_data']['price_stats']['price_date'] = '2026-09-09'
+                text = formatter.build_telegram_message(rows)
+                self.assertIn('05.09 – 11.09', text)
+                self.assertIn('05.09 – 09.09', text)
+                self.assertEqual(text.count('@oil_tracker_pavel_bot'), 1)
+
+            def test_ytd_missing_is_na_and_columns_have_separators(self):
+                rows = self.rows()
+                rows[1]['il_fund_data']['ytd'] = None
+                text = formatter.build_telegram_message(rows)
+                self.assertIn('Y     N/A', text)
+                self.assertIn('| D', text)
+
+            def test_leaders_use_only_latest_nav_date(self):
+                rows = self.rows()
+                rows[0]['il_fund_data']['daily'] = 99.0
+                rows[0]['il_fund_data']['price_stats']['price_date'] = '2026-09-04'
+                ranked = formatter._ranked_funds(rows, latest_only=True)
+                self.assertNotIn(rows[0], ranked)
+
+            def test_afterhours_status_is_not_regular_session(self):
+                from datetime import datetime, timezone
+                value = formatter._market_status(datetime(2026, 9, 14, 23, 9, tzinfo=timezone.utc))
+                self.assertEqual(value, 'основная сессия закрыта · идут послеторги')
+
+            def test_oil_and_cloud_use_distinct_daily_bases(self):
+                self.assertEqual(SECTORS_CONFIG['Oil']['proxy_ticker'], 'USO')
+                self.assertEqual(SECTORS_CONFIG['Cloud']['daily_base'], 'basket')
 
             def test_only_five_news_sectors_are_rendered(self):
                 text = telegram_sender.split_message(formatter.build_telegram_message(self.rows()))[0]
@@ -2547,6 +2658,20 @@ jobs:
 
             def test_currency_spacing_is_cleaned(self):
                 self.assertEqual(news.normalize_title('Contract worth $ 729 million'), 'Contract worth $729 million')
+
+            def test_clean_energy_rejects_macro_roundup(self):
+                item = {
+                    'title': "Kevin Warsh hawkishness distracts markets as inflation rises",
+                    'relatedTickers': ['CEG'],
+                }
+                self.assertLess(news.news_score(item, ['CEG'], 'Clean'), 35)
+
+            def test_clean_energy_accepts_sector_company(self):
+                item = {
+                    'title': "Constellation Energy expands clean power capacity",
+                    'relatedTickers': ['CEG'],
+                }
+                self.assertGreaterEqual(news.news_score(item, ['CEG'], 'Clean'), 35)
 
 
         if __name__ == '__main__':
