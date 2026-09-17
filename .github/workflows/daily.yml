@@ -70,7 +70,7 @@ jobs:
         BOT_TOKEN = os.getenv("BOT_TOKEN")
         CHAT_ID = os.getenv("CHAT_ID")
         BOT_NAME = "@oil_tracker_pavel_bot"
-        BOT_VERSION = "hybrid-v2.2-20260917"
+        BOT_VERSION = "hybrid-v2.3-20260917"
         MARKET_SNAPSHOT_FILE = os.getenv("MARKET_SNAPSHOT_FILE", "latest_market_snapshot.json")
         HTTP_TIMEOUT = 15
 
@@ -1626,14 +1626,14 @@ jobs:
             return sorted(gaps, key=lambda item: abs(item[0]), reverse=True)
 
 
-        def _day_strength(score: Optional[int]) -> str:
-            if score is None:
+        def _day_strength(change: Optional[float]) -> str:
+            if change is None:
                 return "⚪"
-            if int(score) >= 65:
+            if float(change) > 0.0:
                 return "🟢"
-            if int(score) >= 40:
-                return "🟡"
-            return "🔴"
+            if float(change) < 0.0:
+                return "🔴"
+            return "🟡"
 
 
         def _fund_marker(fund_data: dict, base_change: Optional[float]) -> str:
@@ -1677,9 +1677,15 @@ jobs:
                 fund = format_percent(row.get("il_fund_data", {}).get("daily"), 1)
                 lines.append(
                     f"{row['icon']}{row['short_eng'][:6]:<6} "
-                    f"{base:>7} {fund:>7}    {_day_strength(row.get('score'))}"
+                    f"{base:>7} {fund:>7}    {_day_strength(row.get('avg_change'))}"
                 )
-            lines.extend(["</code>", "", "<b>🔍 ГЛАВНЫЕ ДВИЖЕНИЯ</b>", ""])
+            lines.extend([
+                "</code>",
+                "",
+                "<blockquote expandable>",
+                "<b>🔍 ГЛАВНЫЕ ДВИЖЕНИЯ</b>",
+                "",
+            ])
 
             for row in sectors_data:
                 base_date = _display_date(str(row.get("base_date") or ""))
@@ -1707,6 +1713,7 @@ jobs:
             lines.extend([
                 "<i>Показываются последние завершённые дневные данные. "
                 "Во время торгов незакрытая свеча США не используется.</i>",
+                "</blockquote>",
                 "",
                 "<blockquote expandable>",
                 "🇮🇱 <b>АНАЛИТИКА ИЗРАИЛЬСКИХ ФОНДОВ</b>",
@@ -2842,8 +2849,8 @@ jobs:
 
             def test_day_strength_shows_only_color_without_score(self):
                 rows = self.rows()
-                for row, score in zip(rows[:4], (80, 50, 20, None)):
-                    row['score'] = score
+                for row, change in zip(rows[:4], (1.0, 0.0, -1.0, None)):
+                    row['avg_change'] = change
                 first_message = telegram_sender.split_message(
                     formatter.build_telegram_message(rows)
                 )[0]
@@ -2852,6 +2859,22 @@ jobs:
                 self.assertIn('🔴', first_message)
                 self.assertIn('⚪', first_message)
                 self.assertNotIn('/100', first_message)
+
+            def test_day_strength_uses_market_change_thresholds(self):
+                self.assertEqual(formatter._day_strength(0.01), '🟢')
+                self.assertEqual(formatter._day_strength(-0.01), '🔴')
+                self.assertEqual(formatter._day_strength(0.0), '🟡')
+                self.assertEqual(formatter._day_strength(None), '⚪')
+
+            def test_main_movements_are_inside_expandable_quote(self):
+                first_message = telegram_sender.split_message(
+                    formatter.build_telegram_message(self.rows())
+                )[0]
+                heading = '<b>🔍 ГЛАВНЫЕ ДВИЖЕНИЯ</b>'
+                start = first_message.index('<blockquote expandable>')
+                end = first_message.index('</blockquote>', start)
+                self.assertLess(start, first_message.index(heading))
+                self.assertLess(first_message.index(heading), end)
 
             def test_requested_compact_headings_and_dates(self):
                 text = formatter.build_telegram_message(self.rows())
