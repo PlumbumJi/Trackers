@@ -69,9 +69,8 @@ jobs:
 
         BOT_TOKEN = os.getenv("BOT_TOKEN")
         CHAT_ID = os.getenv("CHAT_ID")
-        FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
         BOT_NAME = "@oil_tracker_pavel_bot"
-        BOT_VERSION = "combined-radar-20260913"
+        BOT_VERSION = "hybrid-v2.1-20260915"
         MARKET_SNAPSHOT_FILE = os.getenv("MARKET_SNAPSHOT_FILE", "latest_market_snapshot.json")
         HTTP_TIMEOUT = 15
 
@@ -90,69 +89,70 @@ jobs:
         SECTORS_CONFIG = {
             "Oil": {
                 "name": "Нефть и Энергетика", "icon": "🛢️", "short_eng": "Oil",
-                "news_ticker": "CL=F", "proxy_ticker": "CL=F", "preopen_ticker": "USO", "history_news_ticker": "CL=F",
+                "news_ticker": "CL=F", "proxy_ticker": "USO", "preopen_ticker": "USO",
                 "fund_id": "5141841", "il_name_eng": "Barak Ultra WTI",
                 "tickers": ["CL=F", "USO", "XLE", "XOP"],
             },
             "AI": {
                 "name": "Искусственный Интеллект", "icon": "🤖", "short_eng": "AI",
-                "news_ticker": "NVDA", "proxy_ticker": "BOTZ", "preopen_ticker": "BOTZ", "history_news_ticker": "NVDA",
+                "news_ticker": "NVDA", "proxy_ticker": "BOTZ", "preopen_ticker": "BOTZ",
                 "fund_id": "5140744", "il_name_eng": "Migdal AI",
                 "tickers": ["GOOGL", "NVDA", "MSFT", "META", "AMD", "AMZN", "AVGO"],
             },
             "Cybersecurity": {
                 "name": "Кибербезопасность", "icon": "🛡️", "short_eng": "Cyber",
-                "news_ticker": "CIBR", "proxy_ticker": "CIBR", "preopen_ticker": "CIBR", "history_news_ticker": "CRWD",
+                "news_ticker": "CIBR", "proxy_ticker": "CIBR", "preopen_ticker": "CIBR",
                 "fund_id": "5131313", "il_name_eng": "Migdal Cyber Equity",
                 "tickers": ["FTNT", "PANW", "CRWD", "CSCO", "NET", "AVGO", "OKTA"],
             },
             "Gaming": {
                 "name": "Игровая Индустрия", "icon": "🎮", "short_eng": "Game",
-                "news_ticker": "SONY", "proxy_ticker": "HERO", "preopen_ticker": "HERO", "history_news_ticker": "TTWO",
+                "news_ticker": "SONY", "proxy_ticker": "HERO", "preopen_ticker": "HERO",
                 "fund_id": "5128624", "il_name_eng": "MTF Bluestar E-Games",
                 "tickers": ["RBLX", "TTWO", "EA", "SONY", "NTDOY"],
             },
             "Gold": {
                 "name": "Золото и Металлы", "icon": "🥇", "short_eng": "Gold",
-                "news_ticker": "GLD", "proxy_ticker": "GLD", "preopen_ticker": "GLD", "history_news_ticker": "NEM",
+                "news_ticker": "GLD", "proxy_ticker": "GLD", "preopen_ticker": "GLD",
                 "fund_id": "5100961", "il_name_eng": "Meitav Gold",
                 "tickers": ["GC=F", "GLD", "GDX", "NEM", "SLV"],
             },
             "Clean Energy": {
                 "name": "Зеленая энергетика", "icon": "☀️", "short_eng": "Clean",
-                "news_ticker": "FSLR", "proxy_ticker": "ICLN", "preopen_ticker": "ICLN", "history_news_ticker": "FSLR",
+                "news_ticker": "FSLR", "proxy_ticker": "ICLN", "preopen_ticker": "ICLN",
                 "fund_id": "5105218", "il_name_eng": "Altshuler Shaham Global Green",
                 "tickers": ["NRG", "CEG", "TLN", "GEV", "FSLR", "NXT"],
             },
             "Aerospace": {
                 "name": "Авиация и Космос", "icon": "✈️", "short_eng": "Aero",
-                "news_ticker": "XAR", "proxy_ticker": "XAR", "preopen_ticker": "XAR", "history_news_ticker": "RTX",
+                "news_ticker": "XAR", "proxy_ticker": "XAR", "preopen_ticker": "XAR",
                 "fund_id": "5136635", "il_name_eng": "KSM Active US Space & Defense",
                 "tickers": ["HEI", "RTX", "PL", "RKLB", "HWM", "BA", "NOC", "GD", "LMT"],
             },
             "Biotech": {
                 "name": "Биотех и Медицина", "icon": "🧬", "short_eng": "Bio",
-                "news_ticker": "IBB", "proxy_ticker": "IBB", "preopen_ticker": "IBB", "history_news_ticker": "ABVX",
+                "news_ticker": "IBB", "proxy_ticker": "IBB", "preopen_ticker": "IBB",
                 "fund_id": "5101183", "il_name_eng": "IBI Global Biotechnology",
                 "tickers": ["ABVX", "NKTR", "DRTS", "CYBN", "INSM", "CYTK", "AXSM"],
             },
             "Banking": {
                 "name": "Банковский сектор", "icon": "🏦", "short_eng": "Bank",
-                "news_ticker": "LUMI.TA", "proxy_ticker": "LUMI.TA", "history_news_ticker": "LUMI.TA",
+                "news_ticker": "LUMI.TA", "proxy_ticker": "LUMI.TA",
                 "fund_id": "5139183", "il_name_eng": "Migdal Banks Equity",
                 "local_market": True,
                 "preopen_ticker": None,
                 "tickers": ["DSCT.TA", "MZTF.TA", "FIBI.TA", "LUMI.TA", "POLI.TA"],
             },
             "Cloud": {
-                "name": "Облачные технологии", "icon": "☁️", "short_eng": "Cloud",
-                "news_ticker": "CIBR", "proxy_ticker": "CIBR", "preopen_ticker": "CIBR", "history_news_ticker": "PANW",
+                "name": "Облачная кибербезопасность", "icon": "☁️", "short_eng": "Cloud",
+                "news_ticker": "CIBR", "proxy_ticker": "CIBR", "preopen_ticker": "CIBR",
                 "fund_id": "5132220", "il_name_eng": "More Cloud Cyber",
+                "daily_base": "basket",
                 "tickers": ["PANW", "FTNT", "CRWD", "DDOG", "NET", "OKTA", "ZS"],
             },
             "EV": {
                 "name": "Электромобили", "icon": "🚗", "short_eng": "EV",
-                "news_ticker": "TSLA", "proxy_ticker": "DRIV", "preopen_ticker": "DRIV", "history_news_ticker": "TSLA",
+                "news_ticker": "TSLA", "proxy_ticker": "DRIV", "preopen_ticker": "DRIV",
                 "fund_id": "5132709", "il_name_eng": "IBI Global Electric Vehicles",
                 "tickers": ["TSLA", "RIVN", "LI", "NIO", "XPEV", "LCID", "BYDDY"],
             },
@@ -323,12 +323,13 @@ jobs:
                                     "price": round(price, 2),
                                     "change": round(change, 2),
                                     "market_date": market_date,
-                                    "completed_session": True,
                                 }
                     print(f"⚠️ Yahoo ticker {ticker}: HTTP {response.status}")
             except Exception as error:
                 print(f"⚠️ Yahoo ticker {ticker}: {error}")
-            return ticker, {"price": None, "change": None, "market_date": None, "completed_session": False}
+            return ticker, {
+                "price": None, "change": None, "market_date": None,
+            }
 
 
         async def fetch_all_yahoo_data(tickers: list[str]) -> dict:
@@ -554,8 +555,6 @@ jobs:
                             page = await context.new_page()
                             for fund_id in sorted(fund_ids):
                                 current = dict(existing.get(fund_id) or EMPTY_RETURNS)
-                                if current.get("access_denied"):
-                                    continue
                                 results[fund_id] = current
                                 for page_name in ("generalview", "performance"):
                                     keys = RETURN_KEYS
@@ -581,6 +580,7 @@ jobs:
                                         if data:
                                             data.update(source_url=url, fetched_at=datetime.now(timezone.utc).isoformat())
                                             current = merge_returns(current, data)
+                                            current["access_denied"] = False
                                             results[fund_id] = current  # Save BEFORE another navigation can fail.
                                     except Exception as error:
                                         current.setdefault("errors", []).append(f"browser {page_name}: {type(error).__name__}")
@@ -642,6 +642,17 @@ jobs:
             average60 = sum(price for _, price in window60) / len(window60)
             minimum60 = min(price for _, price in window60)
             maximum60 = max(price for _, price in window60)
+            period_start = max(points[0][0], last_day - timedelta(days=364))
+            period = [(day, price) for day, price in points if day >= period_start]
+            period_average = sum(price for _, price in period) / len(period)
+            period_minimum = min(price for _, price in period)
+            period_maximum = max(price for _, price in period)
+
+            def range_position(price: float, minimum: float, maximum: float) -> Optional[float]:
+                spread = maximum - minimum
+                if spread <= 0:
+                    return None
+                return round((price - minimum) / spread * 100.0, 2)
 
             # Historical check: after the first rising day at least 3% below the prior
             # 30-calendar-day average, did price revisit that frozen average in 10 sessions?
@@ -671,8 +682,23 @@ jobs:
                 "maximum_60": round(maximum60, 2),
                 "below_average_30": round((current / average30 - 1.0) * 100.0, 2),
                 "to_average_30": round((average30 / current - 1.0) * 100.0, 2),
+                "to_average_60": round((average60 / current - 1.0) * 100.0, 2),
+                "from_low_60": round((current / minimum60 - 1.0) * 100.0, 2),
+                "from_high_60": round((current / maximum60 - 1.0) * 100.0, 2),
+                "range_position_60": range_position(current, minimum60, maximum60),
                 "at_minimum_60": current <= minimum60 * 1.001,
                 "observations_60": len(window60),
+                "period_start": period[0][0].isoformat(),
+                "period_end": last_day.isoformat(),
+                "period_days": (last_day - period[0][0]).days + 1,
+                "period_observations": len(period),
+                "period_average": round(period_average, 2),
+                "period_minimum": round(period_minimum, 2),
+                "period_maximum": round(period_maximum, 2),
+                "from_period_low": round((current / period_minimum - 1.0) * 100.0, 2),
+                "from_period_high": round((current / period_maximum - 1.0) * 100.0, 2),
+                "to_period_average": round((period_average / current - 1.0) * 100.0, 2),
+                "period_range_position": range_position(current, period_minimum, period_maximum),
                 "backtest_wins": wins,
                 "backtest_total": total,
             }
@@ -694,12 +720,14 @@ jobs:
             )
             all_rows = []
             pages = 1
-            for page_number in range(1, 6):
+            for page_number in range(1, 13):
                 if page_number > pages:
                     break
                 params = {
                     "action": "get_paper_yearly_graph", "request_type": "2",
-                    "paper_id": fund_id, "period": "3", "page_number": str(page_number),
+                    # The fund graph page itself requests period=1 by default. We still
+                    # inspect the returned date span before calling it a 12-month history.
+                    "paper_id": fund_id, "period": "1", "page_number": str(page_number),
                 }
                 try:
                     async with limiter:
@@ -737,20 +765,24 @@ jobs:
                 ])
                 for fund_id, data in responses:
                     by_fund_id[fund_id] = data
-                if not denied.is_set():
-                    histories = await asyncio.gather(*[
-                        fetch_bizportal_price_history(session, fund_id, limiter, denied)
-                        for fund_id in sorted(fund_ids)
-                    ])
-                    for fund_id, history in zip(sorted(fund_ids), histories):
-                        if history:
-                            by_fund_id[fund_id]["price_stats"] = calculate_price_stats(history)
+                # The AJAX history endpoint is independent from the HTML pages. A 403
+                # on the page must not suppress this second source.
+                history_denied = asyncio.Event()
+                histories = await asyncio.gather(*[
+                    fetch_bizportal_price_history(session, fund_id, limiter, history_denied)
+                    for fund_id in sorted(fund_ids)
+                ])
+                for fund_id, history in zip(sorted(fund_ids), histories):
+                    if history:
+                        by_fund_id[fund_id]["price_stats"] = calculate_price_stats(history)
 
             fallback_ids = {
                 fund_id for fund_id in fund_ids
-                if not denied.is_set()
-                and any(by_fund_id.get(fund_id, {}).get(key) is None
-                        and key not in by_fund_id.get(fund_id, {}).get("source_missing", []) for key in RETURN_KEYS)
+                if any(
+                    by_fund_id.get(fund_id, {}).get(key) is None
+                    and key not in by_fund_id.get(fund_id, {}).get("source_missing", [])
+                    for key in RETURN_KEYS
+                )
             }
             if fallback_ids:
                 print(f"ℹ️ Playwright fallback: {len(fallback_ids)} funds")
@@ -773,28 +805,48 @@ jobs:
 
 
         async def fetch_ticker_year_history(session: aiohttp.ClientSession, ticker: str) -> list[dict]:
+            """Fetch three years of completed OHLCV candles for indicators and backtests."""
             api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{api_ticker}?range=1y&interval=1d"
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{api_ticker}?range=3y&interval=1d"
             try:
                 async with session.get(url, headers=HEADERS) as response:
                     if response.status != 200:
-                        print(f"⚠️ Yahoo 1Y {ticker}: HTTP {response.status}")
+                        print(f"⚠️ Yahoo 3Y {ticker}: HTTP {response.status}")
                         return []
                     results = (await response.json()).get("chart", {}).get("result") or []
                     if not results:
                         return []
-                    result = results[0]
-                    timestamps = result.get("timestamp") or []
-                    quotes = result.get("indicators", {}).get("quote") or []
-                    closes = quotes[0].get("close") or [] if quotes else []
+                    chart = results[0]
+                    timestamps = chart.get("timestamp") or []
+                    quotes = chart.get("indicators", {}).get("quote") or []
+                    if not quotes:
+                        return []
+                    quote = quotes[0]
+                    opens = quote.get("open") or []
+                    highs = quote.get("high") or []
+                    lows = quote.get("low") or []
+                    closes = quote.get("close") or []
+                    volumes = quote.get("volume") or []
+                    size = min(len(timestamps), len(opens), len(highs), len(lows), len(closes))
                     history = []
-                    for timestamp, close in zip(timestamps, closes):
-                        value = parse_optional_float(close)
-                        if timestamp is not None and value is not None and value > 0:
-                            history.append({"timestamp": int(timestamp), "close": value})
+                    for index in range(size):
+                        values = {
+                            "open": parse_optional_float(opens[index]),
+                            "high": parse_optional_float(highs[index]),
+                            "low": parse_optional_float(lows[index]),
+                            "close": parse_optional_float(closes[index]),
+                            "volume": parse_optional_float(volumes[index]) if index < len(volumes) else None,
+                        }
+                        if (
+                            timestamps[index] is None
+                            or any(values[key] is None for key in ("open", "high", "low", "close"))
+                            or min(values[key] for key in ("open", "high", "low", "close")) <= 0
+                        ):
+                            continue
+                        history.append({"timestamp": int(timestamps[index]), **values})
                     return sorted(history, key=lambda item: item["timestamp"])
             except Exception as error:
-                print(f"⚠️ Yahoo 1Y {ticker}: {error}")
+                print(f"⚠️ Yahoo 3Y {ticker}: {error}")
                 return []
 
 
@@ -802,31 +854,254 @@ jobs:
             return datetime.fromtimestamp(timestamp, tz=timezone.utc).date().isoformat()
 
 
+        def _ema_series(values: list[float], period: int) -> list[Optional[float]]:
+            result: list[Optional[float]] = [None] * len(values)
+            if len(values) < period:
+                return result
+            seed = sum(values[:period]) / period
+            result[period - 1] = seed
+            multiplier = 2.0 / (period + 1.0)
+            for index in range(period, len(values)):
+                seed = values[index] * multiplier + seed * (1.0 - multiplier)
+                result[index] = seed
+            return result
+
+
+        def _rsi_series(values: list[float], period: int = 14) -> list[Optional[float]]:
+            result: list[Optional[float]] = [None] * len(values)
+            if len(values) <= period:
+                return result
+            gains = [max(0.0, values[i] - values[i - 1]) for i in range(1, len(values))]
+            losses = [max(0.0, values[i - 1] - values[i]) for i in range(1, len(values))]
+            average_gain = sum(gains[:period]) / period
+            average_loss = sum(losses[:period]) / period
+
+            def value() -> float:
+                if average_loss == 0:
+                    return 100.0 if average_gain > 0 else 50.0
+                relative_strength = average_gain / average_loss
+                return 100.0 - 100.0 / (1.0 + relative_strength)
+
+            result[period] = value()
+            for index in range(period + 1, len(values)):
+                average_gain = (average_gain * (period - 1) + gains[index - 1]) / period
+                average_loss = (average_loss * (period - 1) + losses[index - 1]) / period
+                result[index] = value()
+            return result
+
+
+        def _atr_series(history: list[dict], period: int = 14) -> list[Optional[float]]:
+            result: list[Optional[float]] = [None] * len(history)
+            if len(history) <= period:
+                return result
+            ranges = []
+            for index, point in enumerate(history):
+                if index == 0:
+                    ranges.append(point["high"] - point["low"])
+                else:
+                    previous = history[index - 1]["close"]
+                    ranges.append(max(
+                        point["high"] - point["low"],
+                        abs(point["high"] - previous),
+                        abs(point["low"] - previous),
+                    ))
+            average = sum(ranges[1:period + 1]) / period
+            result[period] = average
+            for index in range(period + 1, len(history)):
+                average = (average * (period - 1) + ranges[index]) / period
+                result[index] = average
+            return result
+
+
+        def _rolling_mean(values: list[float], period: int) -> list[Optional[float]]:
+            result: list[Optional[float]] = [None] * len(values)
+            running = 0.0
+            for index, value in enumerate(values):
+                running += value
+                if index >= period:
+                    running -= values[index - period]
+                if index >= period - 1:
+                    result[index] = running / period
+            return result
+
+
+        def _rolling_std(values: list[float], means: list[Optional[float]], period: int) -> list[Optional[float]]:
+            result: list[Optional[float]] = [None] * len(values)
+            for index in range(period - 1, len(values)):
+                mean = means[index]
+                window = values[index - period + 1:index + 1]
+                result[index] = math.sqrt(sum((value - mean) ** 2 for value in window) / period)
+            return result
+
+
+        def calculate_technical_series(history: list[dict]) -> dict:
+            closes = [float(point["close"]) for point in history]
+            volumes = [max(0.0, float(point.get("volume") or 0.0)) for point in history]
+            ema20 = _ema_series(closes, 20)
+            ema50 = _ema_series(closes, 50)
+            ema200 = _ema_series(closes, 200)
+            rsi14 = _rsi_series(closes, 14)
+            atr14 = _atr_series(history, 14)
+            sma20 = _rolling_mean(closes, 20)
+            std20 = _rolling_std(closes, sma20, 20)
+            volume20 = _rolling_mean(volumes, 20)
+            return {
+                "closes": closes,
+                "ema20": ema20,
+                "ema50": ema50,
+                "ema200": ema200,
+                "rsi14": rsi14,
+                "atr14": atr14,
+                "sma20": sma20,
+                "std20": std20,
+                "volume20": volume20,
+                "volumes": volumes,
+            }
+
+
+        def _technical_snapshot(history: list[dict], series: dict, index: int) -> dict:
+            required = ("ema20", "ema50", "rsi14", "atr14", "sma20", "std20")
+            if index < 55 or any(series[key][index] is None for key in required):
+                return {}
+            close = series["closes"][index]
+            atr = series["atr14"][index]
+            ema20 = series["ema20"][index]
+            ema50 = series["ema50"][index]
+            ema200 = series["ema200"][index]
+            rsi = series["rsi14"][index]
+            middle = series["sma20"][index]
+            deviation = series["std20"][index]
+            lower = middle - 2.0 * deviation
+            upper = middle + 2.0 * deviation
+            ema50_prior = series["ema50"][index - 5]
+            change5 = (
+                (close / series["closes"][index - 5] - 1.0) * 100.0
+                if index >= 5 and series["closes"][index - 5] > 0 else None
+            )
+            long_term_ok = ema200 is None or ema50 >= ema200
+            trend_up = (
+                close > ema50 and ema20 >= ema50 and long_term_ok
+                and ema50_prior is not None and ema50 > ema50_prior
+            )
+            trend_down = (
+                close < ema50 and ema20 < ema50
+            ) or (
+                ema200 is not None and close < ema200 and ema50 < ema200
+            )
+            trend_key = "up" if trend_up else "down" if trend_down else "sideways"
+            reversal_candle = close > float(history[index]["open"]) and close >= series["closes"][index - 1]
+            pullback = trend_up and reversal_candle and 28.0 <= rsi <= 45.0 and (
+                close <= ema20 or close <= lower + 0.5 * atr
+            )
+            continuation = trend_up and 45.0 < rsi <= 62.0 and change5 is not None and change5 > 0 and (
+                abs(close - ema20) <= 0.75 * atr
+            )
+            setup_type = "pullback" if pullback else "continuation" if continuation else "none"
+            stop = close - 1.5 * atr
+            target = upper
+            risk = close - stop
+            reward = target - close
+            risk_reward = reward / risk if risk > 0 and reward > 0 else 0.0
+            volume_average = series["volume20"][index]
+            volume = series["volumes"][index]
+            volume_ratio = volume / volume_average if volume_average and volume_average > 0 else None
+            volume_ok = volume_ratio is None or 0.4 <= volume_ratio <= 2.5
+            if setup_type != "none" and not volume_ok:
+                setup_type = "none"
+            return {
+                "proxy_price": round(close, 2),
+                "ema20": round(ema20, 2),
+                "ema50": round(ema50, 2),
+                "ema200": round(ema200, 2) if ema200 is not None else None,
+                "rsi14": round(rsi, 1),
+                "atr14": round(atr, 2),
+                "atr_percent": round(atr / close * 100.0, 2),
+                "bb_lower": round(lower, 2),
+                "bb_upper": round(upper, 2),
+                "volume_ratio": round(volume_ratio, 2) if volume_ratio is not None else None,
+                "volume_ok": volume_ok,
+                "change_5d": round(change5, 2) if change5 is not None else None,
+                "trend_key": trend_key,
+                "setup_type": setup_type,
+                "target": round(target, 2),
+                "stop": round(stop, 2),
+                "risk_reward": round(risk_reward, 2),
+            }
+
+
+        def backtest_hybrid_model(history: list[dict], series: dict, horizon: int = 10) -> dict:
+            """Conservative proxy-only backtest; same-day target+stop counts as a loss."""
+            wins = losses = timeouts = 0
+            for index in range(55, len(history) - horizon):
+                snapshot = _technical_snapshot(history, series, index)
+                if (
+                    not snapshot
+                    or snapshot["trend_key"] != "up"
+                    or snapshot["setup_type"] == "none"
+                    or snapshot["risk_reward"] < 1.5
+                    or snapshot.get("change_5d") is None
+                    or snapshot["change_5d"] <= 0
+                ):
+                    continue
+                target, stop = snapshot["target"], snapshot["stop"]
+                outcome = "timeout"
+                for point in history[index + 1:index + horizon + 1]:
+                    hit_target = point["high"] >= target
+                    hit_stop = point["low"] <= stop
+                    if hit_stop:
+                        outcome = "loss"
+                        break
+                    if hit_target:
+                        outcome = "win"
+                        break
+                if outcome == "win":
+                    wins += 1
+                elif outcome == "loss":
+                    losses += 1
+                else:
+                    timeouts += 1
+            return {
+                "backtest_wins": wins,
+                "backtest_losses": losses,
+                "backtest_timeouts": timeouts,
+                "backtest_total": wins + losses + timeouts,
+                "backtest_horizon": horizon,
+                "backtest_scope": "proxy_only",
+            }
+
+
         def analyze_year_history(history: list[dict], ticker: str) -> dict:
-            if len(history) < 20:
+            if len(history) < 60:
                 return {}
-            first_close = history[0]["close"]
-            current_close = history[-1]["close"]
-            if first_close <= 0:
+            series = calculate_technical_series(history)
+            technical = _technical_snapshot(history, series, len(history) - 1)
+            if not technical:
                 return {}
 
-            peak_close = trough_close = history[0]["close"]
-            peak_time = trough_time = history[0]["timestamp"]
+            latest_timestamp = history[-1]["timestamp"]
+            year_start = latest_timestamp - 365 * 24 * 3600
+            year_points = [point for point in history if point["timestamp"] >= year_start]
+            if len(year_points) < 20:
+                year_points = history[-252:]
+            first_close = year_points[0]["close"]
+            current_close = year_points[-1]["close"]
+
+            peak_close = trough_close = year_points[0]["close"]
+            peak_time = trough_time = year_points[0]["timestamp"]
             max_drawdown = max_rally = 0.0
-            drawdown_start = rally_start = history[0]["timestamp"]
-
-            for point in history:
+            drawdown_start = rally_start = year_points[0]["timestamp"]
+            for point in year_points:
                 close, timestamp = point["close"], point["timestamp"]
                 if close > peak_close:
                     peak_close, peak_time = close, timestamp
                 else:
-                    change = ((close - peak_close) / peak_close) * 100.0
+                    change = (close / peak_close - 1.0) * 100.0
                     if change < max_drawdown:
                         max_drawdown, drawdown_start = change, peak_time
                 if close < trough_close:
                     trough_close, trough_time = close, timestamp
                 else:
-                    change = ((close - trough_close) / trough_close) * 100.0
+                    change = (close / trough_close - 1.0) * 100.0
                     if change > max_rally:
                         max_rally, rally_start = change, trough_time
 
@@ -835,110 +1110,186 @@ jobs:
             else:
                 event_direction, event_change, event_start = "up", max_rally, rally_start
 
-            closes = [point["close"] for point in history]
+            closes = [point["close"] for point in year_points]
             year_high, year_low = max(closes), min(closes)
-            close_60d = history[max(0, len(history) - 61)]["close"]
-            change_60d = ((current_close - close_60d) / close_60d) * 100.0 if close_60d > 0 else 0.0
-
-            def trailing_change(sessions: int) -> Optional[float]:
-                if len(history) <= sessions:
-                    return None
-                base = history[-(sessions + 1)]["close"]
-                if base <= 0:
-                    return None
-                return round(((current_close - base) / base) * 100.0, 2)
-
+            change60 = (
+                (current_close / year_points[-61]["close"] - 1.0) * 100.0
+                if len(year_points) > 60 else 0.0
+            )
             if current_close >= year_high * 0.95:
-                trend = "около годовых максимумов"
+                trend_text = "около годовых максимумов"
             elif current_close <= year_low * 1.05:
-                trend = "около годовых минимумов"
-            elif change_60d >= 10.0:
-                trend = "восходящий тренд"
-            elif change_60d <= -10.0:
-                trend = "нисходящий тренд"
-            elif max_drawdown <= -10.0 and change_60d > 5.0:
-                trend = "восстановление после коррекции"
+                trend_text = "около годовых минимумов"
+            elif technical["trend_key"] == "up":
+                trend_text = "восходящий тренд"
+            elif technical["trend_key"] == "down":
+                trend_text = "нисходящий тренд"
+            elif change60 > 5:
+                trend_text = "восстановление"
             else:
-                trend = "боковая динамика"
+                trend_text = "боковая динамика"
 
-            return {
+            result = {
                 "proxy_ticker": ticker,
-                "year_change": round(((current_close - first_close) / first_close) * 100.0, 2),
+                "market_date": timestamp_to_date(latest_timestamp),
+                "year_change": round((current_close / first_close - 1.0) * 100.0, 2),
                 "event_direction": event_direction,
                 "event_change": round(event_change, 2),
                 "event_date": timestamp_to_date(event_start),
-                "trend": trend,
-                "change_5d": trailing_change(5),
-                "change_20d": trailing_change(20),
+                "trend": trend_text,
+                "change_20d": round(
+                    (current_close / history[-21]["close"] - 1.0) * 100.0, 2
+                ) if len(history) > 20 else None,
+                **technical,
+                **backtest_hybrid_model(history, series),
             }
+            return result
 
 
-        def analyze_entry_zone(fund_data: dict, year_data: dict) -> dict:
+        def analyze_entry_zone(fund_data: dict, market_data: dict) -> dict:
             daily = parse_optional_float(fund_data.get("daily"))
-            base5 = parse_optional_float(year_data.get("change_5d"))
             stats = fund_data.get("price_stats") or {}
             current = parse_optional_float(stats.get("current_price"))
             average30 = parse_optional_float(stats.get("average_30"))
             average60 = parse_optional_float(stats.get("average_60"))
             minimum60 = parse_optional_float(stats.get("minimum_60"))
+            maximum60 = parse_optional_float(stats.get("maximum_60"))
             below_average = parse_optional_float(stats.get("below_average_30"))
-            to_average = parse_optional_float(stats.get("to_average_30"))
-            required = (daily, base5, current, average30, average60, minimum60, below_average, to_average)
-            if any(value is None for value in required):
+            from_high60 = parse_optional_float(stats.get("from_high_60"))
+            from_low60 = parse_optional_float(stats.get("from_low_60"))
+            range_position60 = parse_optional_float(stats.get("range_position_60"))
+            required_market = (
+                market_data.get("trend_key"), market_data.get("setup_type"),
+                market_data.get("rsi14"), market_data.get("atr14"),
+                market_data.get("risk_reward"), market_data.get("proxy_price"),
+            )
+            required_fund = (
+                daily, current, average30, average60, minimum60, maximum60,
+                below_average, from_high60, from_low60, range_position60,
+            )
+            if any(value is None for value in required_fund) or any(
+                value is None for value in required_market
+            ):
                 return {
                     "status_key": "unavailable",
-                    "icon": "⚪",
-                    "label": "Нет истории цены",
+                    "label": "Недостаточно данных",
                     "score": 0,
                     "daily": daily,
-                    "base5": base5,
-                    "reasons": ["не получена история цены фонда или базового рынка"],
+                    "reasons": ["не получена история фонда или технические данные базового рынка"],
                 }
 
-            low_price = below_average <= -3.0
-            fund_turn = daily > 0.0
-            base_turn = base5 > 0.0
-            at_minimum = bool(stats.get("at_minimum_60"))
-            if low_price and fund_turn and base_turn:
-                status_key, icon, label, action, score = (
-                    "optimal", "🟢", "Цена ниже средней, рост начался", "изучить вход и риск", 90 + int(at_minimum) * 5,
-                )
-            elif low_price and (fund_turn or base_turn):
-                status_key, icon, label, action, score = (
-                    "forming", "🟡", "Цена ниже средней", "ждать роста фонда и базы", 70 + int(at_minimum) * 5,
-                )
-            elif low_price:
-                status_key, icon, label, action, score = (
-                    "falling", "🔴", "Цена низкая, падение продолжается", "ждать первого роста фонда", 45 + int(at_minimum) * 5,
-                )
-            elif below_average >= 3.0 and fund_turn:
-                status_key, icon, label, action, score = "late", "🟠", "Цена выше средней", "ждать снижения цены", 25
+            trend_key = market_data["trend_key"]
+            setup_type = market_data["setup_type"]
+            base5 = parse_optional_float(market_data.get("change_5d"))
+            risk_reward = float(market_data["risk_reward"])
+            fund_turn = daily > 0
+            base_turn = base5 is not None and base5 > 0
+            valid_setup = setup_type != "none" and risk_reward >= 1.5
+            deep_discount = below_average <= -3.0
+            near_recent_low = range_position60 <= 30.0
+            meaningful_pullback = from_high60 <= -3.0
+            attractive_fund_zone = near_recent_low or (deep_discount and meaningful_pullback)
+            if range_position60 <= 20.0:
+                fund_zone = "около минимума 60д"
+            elif range_position60 <= 40.0:
+                fund_zone = "нижняя часть диапазона 60д"
+            elif range_position60 >= 80.0:
+                fund_zone = "около максимума 60д"
             else:
-                status_key, icon, label, action, score = "wait", "⚪", "Цена около средней", "наблюдать", 50
+                fund_zone = "середина диапазона 60д"
+            if trend_key == "down":
+                status_key, label = "blocked", "Вход запрещён трендом"
+                reasons = ["базовый рынок ниже EMA50", "нисходящий тренд ещё не завершён"]
+            elif trend_key == "up" and valid_setup and fund_turn and base_turn:
+                status_key, label = "ready", "Базовый сигнал готов"
+                reasons = ["глобальный тренд восходящий", "откат или продолжение тренда подтверждены", "фонд и база растут"]
+            elif trend_key == "up" and valid_setup:
+                status_key, label = "forming", "Сигнал формируется"
+                reasons = ["глобальный тренд восходящий", "найдена допустимая зона по волатильности"]
+                if not fund_turn:
+                    reasons.append("фонд ещё не подтвердил рост")
+                if not base_turn:
+                    reasons.append("пятидневный импульс базы ещё слабый")
+            else:
+                status_key, label = "watch", "Условий для входа нет"
+                reasons = ["нет сочетания тренда, импульса и достаточного отношения доходности к риску"]
 
+            score = min(100, sum((
+                25 if trend_key == "up" else 0,
+                20 if setup_type != "none" else 0,
+                15 if 30 <= float(market_data["rsi14"]) <= 62 else 0,
+                15 if risk_reward >= 1.5 else 0,
+                10 if base_turn else 0,
+                10 if fund_turn else 0,
+                5 if (market_data.get("volume_ratio") or 0) >= 0.8 else 0,
+                10 if meaningful_pullback else 0,
+                10 if near_recent_low else 0,
+            )))
             return {
                 "status_key": status_key,
-                "icon": icon,
                 "label": label,
                 "score": score,
+                "candidate": (
+                    status_key in {"ready", "forming"} and attractive_fund_zone
+                ) or (
+                    status_key == "blocked" and deep_discount and near_recent_low
+                ),
                 "daily": daily,
-                "base5": base5,
                 "current_price": current,
                 "average_30": average30,
                 "average_60": average60,
                 "minimum_60": minimum60,
+                "maximum_60": maximum60,
                 "below_average_30": below_average,
-                "to_average_30": to_average,
-                "at_minimum_60": at_minimum,
+                "to_average_30": parse_optional_float(stats.get("to_average_30")),
+                "to_average_60": parse_optional_float(stats.get("to_average_60")),
+                "from_low_60": from_low60,
+                "from_high_60": from_high60,
+                "range_position_60": range_position60,
+                "fund_zone": fund_zone,
                 "price_date": stats.get("price_date", ""),
-                "backtest_wins": int(stats.get("backtest_wins") or 0),
-                "backtest_total": int(stats.get("backtest_total") or 0),
-                "action": action,
+                "trend_key": trend_key,
+                "setup_type": setup_type,
+                "proxy_ticker": market_data.get("proxy_ticker", ""),
+                "proxy_price": market_data.get("proxy_price"),
+                "rsi14": market_data.get("rsi14"),
+                "atr_percent": market_data.get("atr_percent"),
+                "volume_ratio": market_data.get("volume_ratio"),
+                "risk_reward": market_data.get("risk_reward"),
+                "target": market_data.get("target"),
+                "stop": market_data.get("stop"),
+                "base5": base5,
+                "backtest_wins": int(market_data.get("backtest_wins") or 0),
+                "backtest_losses": int(market_data.get("backtest_losses") or 0),
+                "backtest_timeouts": int(market_data.get("backtest_timeouts") or 0),
+                "backtest_total": int(market_data.get("backtest_total") or 0),
+                "reasons": reasons,
+            }
+
+
+        def us_session_state(now: Optional[datetime] = None) -> dict:
+            now_ny = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo("America/New_York"))
+            minutes = now_ny.hour * 60 + now_ny.minute
+            if now_ny.weekday() >= 5:
+                state = "closed"
+            elif 4 * 60 <= minutes < 9 * 60 + 30:
+                state = "premarket"
+            elif 9 * 60 + 30 <= minutes < 16 * 60:
+                state = "regular"
+            elif 16 * 60 <= minutes < 20 * 60:
+                state = "afterhours"
+            else:
+                state = "closed"
+            return {
+                "state": state,
+                "time_ny": now_ny.strftime("%d.%m.%Y %H:%M"),
+                "weekday": now_ny.weekday(),
+                "radar_window": now_ny.weekday() < 5 and 9 * 60 + 5 <= minutes < 9 * 60 + 30,
             }
 
 
         async def fetch_all_year_analytics(sectors_config: dict) -> dict:
-            timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT + 10)
+            timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT + 20)
             connector = aiohttp.TCPConnector(limit=8, limit_per_host=6, ttl_dns_cache=300)
             async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
                 tasks = {
@@ -952,7 +1303,9 @@ jobs:
                     analysis = analyze_year_history(await task, ticker)
                     if analysis:
                         results[sector] = analysis
-            print(f"📊 US proxy 1Y analytics: {len(results)}/{len(sectors_config)}")
+                    else:
+                        print(f"⚠️ Hybrid analytics unavailable: {sector} ({ticker})")
+            print(f"📊 Hybrid proxy analytics: {len(results)}/{len(sectors_config)}")
             return results
         EOF
 
@@ -960,15 +1313,14 @@ jobs:
         import asyncio
         import html
         import re
+        import textwrap
         import urllib.parse
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timezone
 
         import aiohttp
 
-        from modules.config import FINNHUB_API_KEY, HEADERS, HTTP_TIMEOUT
-
-        FINNHUB_COMPANY_NEWS_URL = "https://finnhub.io/api/v1/company-news"
-        MAX_NEWS_AGE_HOURS = 96
+        from modules.config import HEADERS, HTTP_TIMEOUT
+        MAX_NEWS_AGE_HOURS = 48
 
         SECTOR_KEYWORDS = {
             "Oil": ["oil", "crude", "wti", "brent", "opec", "energy", "refinery", "inventory"],
@@ -976,12 +1328,51 @@ jobs:
             "Cyber": ["cyber", "security", "breach", "ransomware", "hack", "cloud security"],
             "Game": ["gaming", "game", "console", "playstation", "xbox", "release", "bookings"],
             "Gold": ["gold", "silver", "metal", "inflation", "fed", "yield", "dollar"],
-            "Clean": ["solar", "renewable", "clean energy", "wind", "tax credit", "tariff"],
+            "Clean": [
+                "solar", "renewable", "clean energy", "green energy", "wind", "power grid",
+                "ge vernova", "constellation energy", "talen energy", "first solar",
+                "nextracker", "nrg energy",
+            ],
             "Aero": ["aerospace", "defense", "aircraft", "contract", "pentagon", "missile"],
             "Bio": ["biotech", "drug", "fda", "trial", "approval", "pharma", "clinical"],
             "Bank": ["bank", "fed", "rate", "credit", "loan", "deposit", "net interest"],
             "Cloud": ["cloud", "software", "saas", "data center", "enterprise", "guidance"],
             "EV": ["ev", "electric vehicle", "battery", "delivery", "tesla", "tariff", "sales"],
+        }
+
+        SECTOR_COMPANY_ANCHORS = {
+            "Oil": ["exxon", "chevron", "valero", "shell", "conocophillips"],
+            "AI": [
+                "nvidia", "amd", "broadcom", "microsoft", "alphabet", "google",
+                "amazon", "meta platforms", "palantir",
+            ],
+            "Cyber": [
+                "crowdstrike", "palo alto", "fortinet", "cloudflare", "okta", "cisco",
+                "zscaler",
+            ],
+            "Game": ["roblox", "take-two", "electronic arts", "sony", "nintendo"],
+            "Gold": ["newmont", "barrick", "gold miners"],
+            "Clean": [
+                "ge vernova", "constellation energy", "talen energy", "first solar",
+                "nextracker", "nrg energy", "enphase", "solaredge",
+            ],
+            "Aero": [
+                "boeing", "lockheed martin", "northrop grumman", "raytheon", "rtx",
+                "rocket lab", "general dynamics", "heico",
+            ],
+            "Bio": [
+                "abivax", "nektar", "alpha tau", "cybin", "insmed", "cytokinetics",
+                "axsome",
+            ],
+            "Bank": [
+                "bank leumi", "leumi", "hapoalim", "mizrahi", "discount bank",
+                "first international bank",
+            ],
+            "Cloud": [
+                "datadog", "cloudflare", "zscaler", "okta", "palo alto", "crowdstrike",
+                "fortinet",
+            ],
+            "EV": ["tesla", "rivian", "lucid", "nio", "xpeng", "li auto", "byd"],
         }
 
         LOW_VALUE_PHRASES = (
@@ -992,7 +1383,21 @@ jobs:
 
 
         def normalize_title(title: str) -> str:
-            return re.sub(r"\s+", " ", html.unescape(str(title or ""))).strip()
+            value = re.sub(r"\s+", " ", html.unescape(str(title or ""))).strip()
+            return re.sub(r"\$\s+(?=\d)", "$", value)
+
+
+        def shorten_title(title: str, width: int = 120) -> str:
+            normalized = normalize_title(title)
+            if len(normalized) <= width:
+                return normalized
+            return textwrap.shorten(
+                normalized,
+                width=width,
+                placeholder="...",
+                break_long_words=False,
+                break_on_hyphens=False,
+            )
 
 
         def unique(values: list[str]) -> list[str]:
@@ -1042,7 +1447,7 @@ jobs:
                 except Exception as error:
                     print(f"⚠️ MyMemory Translate: {type(error).__name__}")
 
-            return "перевод новости временно недоступен"
+            return ""
 
 
         def news_score(item: dict, candidate_tickers: list[str], sector_name: str) -> int:
@@ -1067,8 +1472,24 @@ jobs:
                 related = re.split(r"[,\s]+", related.upper())
             related_set = {str(value).upper() for value in related}
             ticker_set = {ticker.upper() for ticker in candidate_tickers}
+            keyword_hits = sum(
+                keyword in lower_title for keyword in SECTOR_KEYWORDS.get(sector_name, [])
+            )
+            company_hits = sum(
+                company in lower_title
+                for company in SECTOR_COMPANY_ANCHORS.get(sector_name, [])
+            )
+            ticker_hits = sum(
+                bool(re.search(rf"(?<![A-Z0-9]){re.escape(ticker)}(?![A-Z0-9])", title, re.IGNORECASE))
+                for ticker in ticker_set
+                if len(ticker) >= 2 and ticker.replace(".", "").isalnum()
+            )
+            # A ticker relation alone can attach a broad market roundup to the wrong
+            # sector. The headline must name the industry, a tracked company or ticker.
+            if keyword_hits + company_hits + ticker_hits == 0:
+                return -50
             score = 35 if related_set & ticker_set else 0
-            score += 12 * sum(keyword in lower_title for keyword in SECTOR_KEYWORDS.get(sector_name, []))
+            score += 12 * keyword_hits + 10 * company_hits + 8 * ticker_hits
             if any(word in lower_title for word in ("earnings", "guidance", "forecast", "contract", "approval", "tariff")):
                 score += 8
             return score
@@ -1109,74 +1530,20 @@ jobs:
                 if score >= 35:
                     scored.append((score, int(item.get("providerPublishTime") or 0), title))
             if not scored:
-                return ["• 📰 Явной релевантной новости за последние 96 часов не найдено."]
+                return []
             scored.sort(key=lambda value: (value[0], value[1]), reverse=True)
             translated = await translate_to_russian(session, scored[0][2])
-            if len(translated) > 150:
-                translated = translated[:147].rstrip() + "..."
-            return [f"• 📰 {translated}"]
-
-
-        def historical_news_score(item: dict, ticker: str, sector_name: str) -> int:
-            headline = normalize_title(item.get("headline"))
-            summary = normalize_title(item.get("summary"))
-            if not headline:
-                return -100
-            combined = f"{headline} {summary}".lower()
-            related = str(item.get("related", "")).upper()
-            score = 25 if ticker.upper() in related else 0
-            score += 12 * sum(keyword in combined for keyword in SECTOR_KEYWORDS.get(sector_name, []))
-            return score
-
-
-        async def fetch_historical_trigger(
-            session: aiohttp.ClientSession, ticker: str, event_date: str, sector_name: str
-        ) -> str:
-            if not FINNHUB_API_KEY or not ticker or not event_date:
-                return ""
-            try:
-                center = datetime.strptime(event_date, "%Y-%m-%d").date()
-            except ValueError:
-                return ""
-            params = {
-                "symbol": ticker,
-                "from": (center - timedelta(days=3)).isoformat(),
-                "to": (center + timedelta(days=3)).isoformat(),
-            }
-            try:
-                async with session.get(
-                    FINNHUB_COMPANY_NEWS_URL,
-                    params=params,
-                    headers={"X-Finnhub-Token": FINNHUB_API_KEY},
-                    timeout=HTTP_TIMEOUT,
-                ) as response:
-                    if response.status != 200:
-                        print(f"⚠️ Finnhub History {ticker}: HTTP {response.status}")
-                        return ""
-                    payload = await response.json()
-                scored = [
-                    (historical_news_score(item, ticker, sector_name), item)
-                    for item in payload if isinstance(item, dict)
-                ]
-                scored = [item for item in scored if item[0] > 0]
-                if not scored:
-                    return ""
-                scored.sort(key=lambda item: item[0], reverse=True)
-                translated = await translate_to_russian(
-                    session, normalize_title(scored[0][1].get("headline"))
-                )
-                return translated[:92].rstrip() + "..." if len(translated) > 95 else translated
-            except Exception as error:
-                print(f"⚠️ Finnhub History {ticker}: {error}")
-                return ""
+            translated = shorten_title(translated)
+            return [f"• 📰 {translated}"] if translated else []
         EOF
 
         cat << 'EOF' > modules/formatter.py
-        from datetime import datetime
+        from datetime import date, datetime
+        import textwrap
         from typing import Optional
         from zoneinfo import ZoneInfo
 
-        from modules.config import BOT_NAME, BOT_VERSION
+        from modules.config import BOT_NAME
 
         ISRAEL_TZ = ZoneInfo("Asia/Jerusalem")
 
@@ -1185,54 +1552,260 @@ jobs:
             return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-        def format_percent(value: Optional[float], digits: int = 2) -> str:
+        def format_percent(value: Optional[float], digits: int = 2, missing: str = "—") -> str:
             if value is None:
-                return "—"
+                return missing
             number = float(value)
             return f"+{number:.{digits}f}%" if number > 0 else f"{number:.{digits}f}%"
 
 
-        def relation_text(us_change: Optional[float], il_change: Optional[float], local_market: bool = False) -> str:
-            if us_change is None or il_change is None:
-                return "недостаточно данных"
-            us, il = float(us_change), float(il_change)
-            stronger = "сильнее локального рынка" if local_market else "сильнее US-сектора"
-            follows = "следует за локальным рынком" if local_market else "следует за US-сектором"
-            lags = "отстаёт от локального рынка" if local_market else "отстаёт от US-сектора"
-            diverges = "расходится с локальным рынком" if local_market else "расходится с US-сектором"
-            if abs(us) < 0.15 and abs(il) < 0.15:
-                return "спокойное движение"
-            if us > 0 and il > 0:
-                if abs(il) >= abs(us) * 1.4:
-                    return stronger
-                if abs(il) <= abs(us) * 0.5:
-                    return lags
-                return follows
-            if us < 0 and il < 0:
-                if abs(il) >= abs(us) * 1.4:
-                    return "усиливает снижение"
-                if abs(il) <= abs(us) * 0.5:
-                    return "снижается мягче US-сектора"
-                return follows
-            if us > 0 and il < 0:
-                return diverges
-            if us < 0 and il > 0:
-                return stronger
-            return "смешанная связь"
+        def _display_date(value: str, with_year: bool = False) -> str:
+            try:
+                parsed = date.fromisoformat(str(value))
+            except ValueError:
+                return str(value or "—")
+            return parsed.strftime("%d.%m.%Y" if with_year else "%d.%m")
 
 
-        def fund_signal(fund_data: dict, us_change: Optional[float]) -> tuple[str, str]:
-            values = [fund_data.get("daily"), fund_data.get("mtd"), fund_data.get("ytd"), us_change]
+        def _date_range(values: list[str]) -> str:
+            dates = sorted({str(value) for value in values if value})
+            if not dates:
+                return "нет данных"
+            if len(dates) == 1:
+                return _display_date(dates[0])
+            return f"{_display_date(dates[0])} – {_display_date(dates[-1])}"
+
+
+        def _fund_date(row: dict) -> str:
+            return str((row.get("il_fund_data", {}).get("price_stats") or {}).get("price_date") or "")
+
+
+        def _comparison_fund_date(rows: list[dict]) -> str:
+            dates = [_fund_date(row) for row in rows if _fund_date(row)]
+            return max(set(dates), key=lambda value: (dates.count(value), value)) if dates else ""
+
+
+        def _market_status(now: Optional[datetime] = None) -> str:
+            current = (now or datetime.now(ZoneInfo("UTC"))).astimezone(ZoneInfo("America/New_York"))
+            minutes = current.hour * 60 + current.minute
+            if current.weekday() >= 5:
+                return "рынок закрыт"
+            if 4 * 60 <= minutes < 9 * 60 + 30:
+                return "идут предторги"
+            if 9 * 60 + 30 <= minutes < 16 * 60:
+                return "основная сессия идёт"
+            if 16 * 60 <= minutes < 20 * 60:
+                return "основная сессия закрыта · идут послеторги"
+            return "рынок закрыт"
+
+
+        def _ranked_funds(rows: list[dict]) -> list[dict]:
+            available = [row for row in rows if row.get("il_fund_data", {}).get("daily") is not None]
+            return sorted(
+                available,
+                key=lambda row: float(row["il_fund_data"]["daily"]),
+                reverse=True,
+            )
+
+
+        def _directional_gaps(rows: list[dict], threshold: float = 1.5) -> list[tuple[float, dict]]:
+            gaps = []
+            for row in rows:
+                fund_change = row.get("il_fund_data", {}).get("daily")
+                base_change = row.get("avg_change")
+                base_date = row.get("base_date")
+                fund_date = _fund_date(row)
+                if (
+                    fund_change is None or base_change is None
+                    or not base_date or not fund_date or base_date != fund_date
+                ):
+                    continue
+                gap = float(fund_change) - float(base_change)
+                if abs(gap) >= threshold:
+                    gaps.append((gap, row))
+            return sorted(gaps, key=lambda item: abs(item[0]), reverse=True)
+
+
+        def _day_strength(score: Optional[int]) -> str:
+            if score is None:
+                return "⚪"
+            if int(score) >= 65:
+                return "🟢"
+            if int(score) >= 40:
+                return "🟡"
+            return "🔴"
+
+
+        def _fund_marker(fund_data: dict, base_change: Optional[float]) -> str:
+            values = [
+                fund_data.get("daily"),
+                fund_data.get("mtd"),
+                fund_data.get("ytd"),
+                base_change,
+            ]
             available = [float(value) for value in values if value is not None]
             if len(available) < 3:
-                return "⚪", "Нет данных"
+                return "⬜•"
             positive = sum(value > 0 for value in available)
             negative = sum(value < 0 for value in available)
             if positive >= 3 and negative <= 1:
-                return "🟢", "Позитивно"
+                return "🟩▲"
             if negative >= 3:
-                return "🔴", "Осторожно"
-            return "🟡", "Нейтрально"
+                return "🟥▼"
+            return "🟨→"
+
+
+        def build_telegram_message(sectors_data: list[dict]) -> str:
+            now_str = datetime.now(ISRAEL_TZ).strftime("%d.%m.%Y | %H:%M")
+            base_dates = _date_range([
+                str(row.get("base_date") or "")
+                for row in sectors_data if not row.get("local_market")
+            ])
+            fund_dates = _date_range([_fund_date(row) for row in sectors_data])
+            lines = [
+                "📈 <b>Рыночный Дайджест</b>",
+                f"📅 {now_str} (Израиль) 🇮🇱",
+                f"США: {_market_status()} · данные {escape_html(base_dates)}",
+                f"Фонды: даты NAV {escape_html(fund_dates)}",
+                "",
+                "<b>📊 БАЗОВЫЙ РЫНОК И ФОНДЫ ИЗРАИЛЯ</b>",
+                "<code>Сектор     База    Фонд  Сила</code>",
+                "<code>",
+            ]
+            for row in sectors_data:
+                base = "локал." if row.get("local_market") else format_percent(row.get("avg_change"), 1)
+                fund = format_percent(row.get("il_fund_data", {}).get("daily"), 1)
+                lines.append(
+                    f"{row['icon']}{row['short_eng'][:6]:<6} "
+                    f"{base:>7} {fund:>7}    {_day_strength(row.get('score'))}"
+                )
+            lines.extend(["</code>", "", "<b>🔍 ГЛАВНЫЕ ДВИЖЕНИЯ</b>", ""])
+
+            for row in sectors_data:
+                base_date = _display_date(str(row.get("base_date") or ""))
+                lines.append(
+                    f"<b>{row['icon']} {escape_html(row['name'])}</b> "
+                    f"({format_percent(row.get('avg_change'))} · {escape_html(base_date)})"
+                )
+                if row.get("top_3_tickers"):
+                    details = ", ".join(
+                        f"{ticker}: {format_percent(change)}"
+                        for ticker, change in row["top_3_tickers"]
+                    )
+                    lines.append(f"  📊 Топ-3: [{escape_html(details)}]")
+                for item in row.get("news", []):
+                    compact = textwrap.shorten(
+                        str(item),
+                        width=125,
+                        placeholder="...",
+                        break_long_words=False,
+                        break_on_hyphens=False,
+                    )
+                    if compact:
+                        lines.append(f"  {escape_html(compact)}")
+                lines.append("")
+            lines.extend([
+                "<i>Показываются последние завершённые дневные данные. "
+                "Во время торгов незакрытая свеча США не используется.</i>",
+                "",
+                "<blockquote expandable>",
+                "🇮🇱 <b>АНАЛИТИКА ИЗРАИЛЬСКИХ ФОНДОВ</b>",
+                "",
+            ])
+
+            all_ranked = _ranked_funds(sectors_data)
+            if not all_ranked:
+                lines.extend([
+                    "⚠️ Израильские данные не получены.",
+                    "Котировки базовых рынков не заменяют цену израильского фонда.",
+                    "</blockquote>",
+                    "",
+                    BOT_NAME,
+                ])
+                return "\n".join(lines)
+
+            comparison_date = _comparison_fund_date(all_ranked)
+            stale_count = sum(
+                _fund_date(row) and _fund_date(row) != comparison_date for row in all_ranked
+            )
+            if stale_count:
+                lines.append(
+                    f"<i>Фондов с другой датой NAV: {stale_count}. "
+                    "Для них сравнительный сигнал не рассчитывается.</i>"
+                )
+                lines.append("")
+
+            for row in all_ranked:
+                fund = row["il_fund_data"]
+                daily = fund.get("daily")
+                signal_marker = _fund_marker(fund, row.get("avg_change"))
+                lines.append(
+                    f"{signal_marker} <b>{escape_html(row['il_name_eng'])}</b> "
+                    f"({row['icon']} {escape_html(row['short_eng'])})"
+                )
+                lines.append(
+                    f"└ <code>{escape_html(row['fund_id'])}</code> · "
+                    f"D {format_percent(daily)} | "
+                    f"M {format_percent(fund.get('mtd'))} | "
+                    f"Y {format_percent(fund.get('ytd'), missing='N/A')} · "
+                    f"NAV {_display_date(_fund_date(row))}"
+                )
+                stats = fund.get("price_stats") or {}
+                period_values = (
+                    stats.get("current_price"), stats.get("period_minimum"),
+                    stats.get("period_average"), stats.get("period_maximum"),
+                )
+                if all(value is not None for value in period_values):
+                    period_days = int(stats.get("period_days") or 0)
+                    period_label = "12м" if period_days >= 330 else f"{period_days}д"
+                    lines.append(
+                        f"   {period_label}: мин {stats['period_minimum']:.2f} · "
+                        f"сред. {stats['period_average']:.2f} · "
+                        f"макс. {stats['period_maximum']:.2f} · "
+                        f"сейчас {stats['current_price']:.2f}"
+                    )
+                    lines.append(
+                        f"   От мин {format_percent(stats.get('from_period_low'), 1)} · "
+                        f"до средней {format_percent(stats.get('to_period_average'), 1)} · "
+                        f"от максимума {format_percent(stats.get('from_period_high'), 1)}"
+                    )
+                else:
+                    lines.append("   История стоимости фонда недоступна.")
+                lines.append("")
+
+            unavailable = [
+                row for row in sectors_data
+                if row.get("il_fund_data", {}).get("daily") is None
+            ]
+            for row in unavailable:
+                lines.extend([
+                    f"⬜• <b>{escape_html(row['il_name_eng'])}</b> "
+                    f"({row['icon']} {escape_html(row['short_eng'])})",
+                    f"└ <code>{escape_html(row['fund_id'])}</code> · D — | M — | Y N/A",
+                    "   Данные фонда не получены.",
+                    "",
+                ])
+
+            gaps = _directional_gaps(sectors_data)
+            if gaps:
+                lines.append("<b>⚡ Расхождения при совпадающей дате данных</b>")
+                for gap, row in gaps[:5]:
+                    lines.append(
+                        f"{row['icon']} {escape_html(row['short_eng'])}: "
+                        f"база {format_percent(row.get('avg_change'), 1)} · "
+                        f"фонд {format_percent(row['il_fund_data'].get('daily'), 1)} · "
+                        f"разрыв {format_percent(gap, 1)} п.п."
+                    )
+                lines.append("")
+
+            lines.extend([
+                "<i>Расхождение рассчитывается только при совпадающей дате данных. "
+                "Это не арбитраж и не сигнал входа.</i>",
+                "</blockquote>",
+                "",
+                BOT_NAME,
+            ])
+            return "\n".join(lines)
 
 
         def _premarket_verdict(row: dict) -> tuple[str, str, str]:
@@ -1240,203 +1813,171 @@ jobs:
             status = entry.get("status_key", "unavailable")
             premarket = row.get("premarket") or {}
             if status == "unavailable":
-                return "⬜•", "НЕДОСТАТОЧНО ДАННЫХ", "сигнал не рассчитывается"
+                return "▫️—", "НЕТ ДАННЫХ", "основной технический сигнал не рассчитан"
             if row.get("local_market"):
-                return "⬜•", "БЕЗ ПРЕДТОРГОВ", "оценка только по последним данным фонда"
+                return "⚠️→", "НАБЛЮДАТЬ", "предторги США для локального рынка не применяются"
             if not premarket.get("available"):
-                return "⬜•", "НЕТ СВЕЖИХ ПРЕДТОРГОВ", "решение отложить до появления данных"
+                return "⚠️→", "НАБЛЮДАТЬ", "нет свежего предторгового подтверждения"
             change = float(premarket.get("change") or 0.0)
             total = int(row.get("breadth_total") or 0)
             ratio = int(row.get("breadth_positive") or 0) / total if total else None
             positive = change >= 0.25 and (ratio is None or ratio >= 0.5)
             negative = change <= -0.25 and (ratio is None or ratio <= 0.5)
-            if status in {"optimal", "forming"} and positive:
-                return "🟩▲", "СИГНАЛ УСИЛИЛСЯ", "база и акции сектора растут до открытия"
-            if status in {"optimal", "forming"} and negative:
-                return "🟥▼", "СИГНАЛ НЕ ПОДТВЕРЖДЁН", "базовый рынок снова снижается"
-            if status == "falling" and positive:
-                return "🟨→", "ПОЯВИЛСЯ ПЕРВЫЙ ПРИЗНАК", "предторги растут, но разворот фонда ещё не подтверждён"
-            if status == "falling" or negative:
-                return "🟥▼", "СНИЖЕНИЕ ПРОДОЛЖАЕТСЯ", "вход пока не подтверждён"
-            if status == "late":
-                return "🟨→", "ВХОД ЗАПОЗДАЛ", "цена фонда уже выше средней"
-            return "🟨→", "НАБЛЮДАТЬ", "выраженного сигнала пока нет"
+            if status == "ready" and positive:
+                return "✅▲", "ПОДТВЕРЖДЕНО", "техническая зона и предторговый импульс совпали"
+            if status == "blocked" or negative:
+                return "🔻▼", "НЕ ПОДТВЕРЖДЕНО", "тренд или предторговый импульс остаётся отрицательным"
+            return "⚠️→", "НАБЛЮДАТЬ", "для подтверждения выполнены не все условия"
+
+
+        def build_premarket_unavailable_message(session: dict, reason: str) -> str:
+            reason_text = {
+                "regular": "Регулярная торговая сессия США уже открыта.",
+                "afterhours": "Регулярная сессия США завершена.",
+                "closed": "Американский рынок сейчас закрыт.",
+                "window": "Предторговая сессия идёт, но запуск выполнен вне рабочего окна радара.",
+                "no_fresh_trades": "Свежие предторговые сделки по базовым инструментам не получены.",
+                "snapshot": "Нет актуального вечернего снимка фондов.",
+            }.get(reason, "Предторговый радар сейчас недоступен.")
+            return "\n".join([
+                "🎯 <b>РАДАР ВХОДА + ПРЕДТОРГОВОЕ ПОДТВЕРЖДЕНИЕ</b>",
+                "",
+                "▫️— <b>РАДАР НЕ СФОРМИРОВАН</b>",
+                reason_text,
+                f"Время проверки: {escape_html(session.get('time_ny', '—'))} NY",
+                "Рабочее окно: 09:05–09:29 NY.",
+                "",
+                BOT_NAME,
+            ])
 
 
         def build_combined_radar_message(rows: list[dict], snapshot_at: str = "") -> str:
             now_str = datetime.now(ISRAEL_TZ).strftime("%d.%m.%Y | %H:%M")
-            priority = {"optimal": 5, "forming": 4, "falling": 3, "wait": 2, "late": 1, "unavailable": 0}
-            ranked = sorted(
-                rows,
-                key=lambda row: (
-                    priority.get((row.get("entry_analysis") or {}).get("status_key"), 0),
-                    (row.get("entry_analysis") or {}).get("score", 0),
-                ),
-                reverse=True,
+            available = sum(
+                not row.get("local_market") and bool(row.get("premarket", {}).get("available"))
+                for row in rows
             )
-            available = sum(bool(row.get("premarket", {}).get("available")) for row in rows)
             applicable = sum(not row.get("local_market") for row in rows)
+            candidates = [
+                row for row in rows if (row.get("entry_analysis") or {}).get("candidate")
+            ]
+            ranked = sorted(
+                [
+                    row for row in rows
+                    if (row.get("entry_analysis") or {}).get("status_key") != "unavailable"
+                ],
+                key=lambda row: (
+                    -int(bool((row.get("entry_analysis") or {}).get("candidate"))),
+                    (row.get("entry_analysis") or {}).get("range_position_60", 101),
+                    -(row.get("entry_analysis") or {}).get("score", 0),
+                ),
+            )
             lines = [
-                "🎯 <b>РАДАР ВХОДА + ПРЕДТОРГОВЫЙ ИМПУЛЬС</b>",
+                "🎯 <b>РАДАР ВХОДА + ПРЕДТОРГОВОЕ ПОДТВЕРЖДЕНИЕ</b>",
                 f"📅 {now_str} (Израиль) 🇮🇱",
-                f"<code>{BOT_VERSION}</code>",
-                "",
-                f"Свежие предторги: <b>{available}/{applicable}</b> рынков.",
+                f"Свежие предторги: <b>{available}/{applicable}</b>",
             ]
             if snapshot_at:
                 lines.append(f"Вечерний снимок: {escape_html(snapshot_at)}")
             lines.append("")
 
-            for row in ranked:
-                entry = row.get("entry_analysis") or {}
+            usable = sum(
+                (row.get("entry_analysis") or {}).get("status_key") != "unavailable"
+                for row in rows
+            )
+            if not usable:
+                lines.extend([
+                    "▫️— <b>РАДАР НЕ СФОРМИРОВАН</b>",
+                    "Нет полного набора истории фонда и технических данных базового рынка.",
+                    "",
+                    BOT_NAME,
+                ])
+                return "\n".join(lines)
+
+            if not candidates:
+                lines.extend([
+                    "⚠️→ <b>ПОДТВЕРЖДЁННЫХ ТОЧЕК ВХОДА НЕТ</b>",
+                    "Ниже — фонды, которые ближе других к нижней части диапазона 60 дней.",
+                    "",
+                ])
+            else:
+                lines.extend([
+                    f"Кандидатов по полной модели: <b>{len(candidates)}</b>.",
+                    "Сначала показаны наиболее низкие зоны самого фонда.",
+                    "",
+                ])
+
+            shown = ranked[:5]
+            for row in shown:
+                entry = row["entry_analysis"]
                 premarket = row.get("premarket") or {}
                 marker, verdict, explanation = _premarket_verdict(row)
                 lines.append(
-                    f"{marker} {row.get('icon', '📊')} "
-                    f"<b>{escape_html(row.get('il_name_eng', row.get('short_eng', 'Фонд')))}</b>"
+                    f"{marker} {row['icon']} <b>{escape_html(row['il_name_eng'])}</b> · "
+                    f"{escape_html(verdict)}"
                 )
-                if entry.get("current_price") is not None:
-                    lines.append(
-                        f"Цена {entry['current_price']:.2f} · ср.30д {entry['average_30']:.2f} · "
-                        f"до средней {format_percent(entry.get('to_average_30'), 1)}"
-                    )
-                if row.get("local_market"):
-                    market_line = "локальный рынок — предторги не применяются"
-                elif premarket.get("available"):
+                lines.append(
+                    f"Цена {entry['current_price']:.2f} · 60д: "
+                    f"мин {entry['minimum_60']:.2f} · сред. {entry['average_60']:.2f} · "
+                    f"макс. {entry['maximum_60']:.2f}"
+                )
+                lines.append(
+                    f"От максимума {format_percent(entry.get('from_high_60'), 1)} · "
+                    f"от минимума {format_percent(entry.get('from_low_60'), 1)} · "
+                    f"позиция {entry.get('range_position_60', 0):.0f}% диапазона"
+                )
+                lines.append(
+                    f"До средней 60д {format_percent(entry.get('to_average_60'), 1)} · "
+                    f"{escape_html(entry.get('fund_zone', 'зона не определена'))}"
+                )
+                lines.append(
+                    f"База {escape_html(entry.get('proxy_ticker', '—'))}: "
+                    f"RSI {entry.get('rsi14', 0):.1f} · "
+                    f"ATR {format_percent(entry.get('atr_percent'), 1)} · "
+                    f"R:R {entry.get('risk_reward', 0):.1f}"
+                )
+                if premarket.get("available"):
                     breadth = int(row.get("breadth_total") or 0)
                     breadth_text = (
-                        f" · акции + {row.get('breadth_positive', 0)}/{breadth}"
+                        f" · растут {row.get('breadth_positive', 0)}/{breadth}"
                         if breadth else ""
                     )
-                    market_line = (
-                        f"{row.get('preopen_ticker', 'База')} до открытия "
-                        f"{format_percent(premarket.get('change'), 1)}{breadth_text} · "
-                        f"{premarket.get('time_ny', '')} NY"
+                    lines.append(
+                        f"До открытия {format_percent(premarket.get('change'), 1)}"
+                        f"{breadth_text} · {escape_html(premarket.get('time_ny', ''))} NY"
                     )
                 else:
-                    market_line = f"{row.get('preopen_ticker', 'База')} — свежих предторгов нет"
-                lines.append(f"└ {escape_html(verdict)} · {escape_html(market_line)}")
-                lines.append(f"   {escape_html(explanation)}")
-                if entry.get("backtest_total", 0) >= 5:
+                    lines.append("Предторговое подтверждение отсутствует")
+                if entry.get("candidate"):
                     lines.append(
-                        f"   История: {entry['backtest_wins']}/{entry['backtest_total']} "
-                        "возвратов к средней"
+                        f"План базы: цель {entry.get('target', 0):.2f} · "
+                        f"граница риска {entry.get('stop', 0):.2f}"
+                    )
+                lines.append(f"└ {escape_html(explanation)}")
+                total = int(entry.get("backtest_total") or 0)
+                if total >= 10:
+                    lines.append(
+                        f"История базы: цель достигнута в {entry.get('backtest_wins', 0)}/{total} "
+                        f"сигналов за {entry.get('backtest_horizon', 10)} сессий"
                     )
                 lines.append("")
 
+            hidden = max(0, len(ranked) - len(shown))
+            if hidden:
+                lines.append(f"Остальные без приоритетной позиции: <b>{hidden}</b> фондов.")
             lines.extend([
-                "<i>🟩▲ подтверждение усилилось · 🟥▼ подтверждения нет · "
-                "🟨→ ждать · ⬜• данных недостаточно. Предторги показывают фактические "
-                "сделки расширенной сессии, а не будущую цену открытия или NAV фонда. "
-                "Сигнал помогает оценить момент, но не является распоряжением купить или продать.</i>",
+                "",
+                "<i>Положение 60д показывает, где текущая цена находится между минимумом "
+                "и максимумом последних 60 календарных дней. Низкая позиция сама по себе "
+                "не означает дно: EMA50, RSI, ATR, объём и предторги подтверждают или "
+                "отменяют вход. "
+                "Предторги — фактические сделки расширенной сессии, а не прогноз цены открытия. "
+                "Цель и граница риска относятся к базовому инструменту, а не к заранее "
+                "неизвестной цене исполнения взаимного фонда. Историческая проверка не "
+                "гарантирует будущий результат.</i>",
                 "",
                 BOT_NAME,
             ])
-            return "\n".join(lines)
-
-
-        def build_telegram_message(sectors_data: list[dict]) -> str:
-            now_str = datetime.now(ISRAEL_TZ).strftime("%d.%m.%Y | %H:%M")
-            lines = [
-                "📈 <b>Рыночный Дайджест</b>",
-                f"📅 {now_str} (Израиль) 🇮🇱",
-                f"<code>{BOT_VERSION}</code>",
-                "",
-                "<b>📊 БАЗОВЫЙ РЫНОК И ФОНДЫ ИЗРАИЛЯ</b>",
-                "<code>Сектор     База    Фонд  Сила дня</code>",
-                "<code>",
-            ]
-            for sector in sectors_data:
-                us_change = sector.get("avg_change")
-                il_change = sector["il_fund_data"].get("daily")
-                score = sector.get("score")
-                score_text = " N/A" if score is None else f"{score:>3}/100"
-                score_icon = "⚪" if score is None else "🟢" if score >= 65 else "🟡" if score >= 40 else "🔴"
-                base_text = "локал." if sector.get("local_market") else format_percent(us_change, 1)
-                lines.append(
-                    f"{sector['icon']}{sector['short_eng'][:6]:<6} "
-                    f"{base_text:>6} {format_percent(il_change, 1):>6}  "
-                    f"{score_icon}{score_text}"
-                )
-            lines.extend(["</code>", "", "<blockquote expandable>"])
-            lines.append("🔍 <b>ДВИЖЕНИЕ И РЕЛЕВАНТНЫЕ НОВОСТИ</b>")
-            lines.append("")
-            for sector in sectors_data:
-                base_label = "локальный рынок" if sector.get("local_market") else "базовый рынок"
-                lines.append(
-                    f"<b>{sector['icon']} {escape_html(sector['name'])}</b> "
-                    f"({base_label} {format_percent(sector.get('avg_change'))}"
-                    f"{(' · ' + escape_html(sector['base_date'])) if sector.get('base_date') else ''})"
-                )
-                if sector.get("top_3_tickers"):
-                    details = ", ".join(
-                        f"{ticker}: {format_percent(change)}"
-                        for ticker, change in sector["top_3_tickers"]
-                    )
-                    lines.append(f"  📊 <i>Топ-3 движения: [{escape_html(details)}]</i>")
-                for item in sector.get("news", []):
-                    lines.append(f"  {escape_html(item)}")
-                lines.append("")
-            lines.extend(["</blockquote>", ""])
-
-            lines.extend(["<blockquote expandable>", "🇮🇱 <b>ДОХОДНОСТЬ И АНАЛИТИКА ИЗРАИЛЬСКИХ ФОНДОВ</b>", ""])
-            if not any(any(row["il_fund_data"].get(key) is not None for key in ("daily", "mtd", "ytd")) for row in sectors_data):
-                lines.extend([
-                    "⚠️ Израильские данные не получены. Аналитика фондов недоступна.",
-                    "Котировки США не заменяют цену израильского фонда.",
-                    "Подробности запросов и ошибок — в журнале GitHub Actions.",
-                    "</blockquote>", "",
-                ])
-                return "\n".join(lines)
-            sorted_funds = sorted(
-                sectors_data,
-                key=lambda item: (
-                    item["il_fund_data"].get("daily") is not None,
-                    item["il_fund_data"].get("daily")
-                    if item["il_fund_data"].get("daily") is not None
-                    else float("-inf"),
-                ),
-                reverse=True,
-            )
-            for sector in sorted_funds:
-                fund = sector["il_fund_data"]
-                daily = fund.get("daily")
-                movement_icon = "⚪" if daily is None else "🟢" if daily > 0 else "🔴" if daily < 0 else "⚪"
-                signal_icon, signal = fund_signal(fund, sector.get("avg_change"))
-                lines.append(
-                    f"{movement_icon} <b>{escape_html(sector['il_name_eng'])}</b> "
-                    f"({sector['icon']} {escape_html(sector['short_eng'])})"
-                )
-                lines.append(
-                    f"└ <code>{sector['fund_id']}</code> · "
-                    f"D {format_percent(daily)} | M {format_percent(fund.get('mtd'))} | Y {format_percent(fund.get('ytd'))}"
-                )
-                market_icon = "🇮🇱" if sector.get("local_market") else "🌐"
-                lines.append(
-                    f"   {market_icon} {format_percent(sector.get('avg_change'))} · {signal_icon} <b>{signal}</b> · "
-                    f"<i>{escape_html(relation_text(sector.get('avg_change'), daily, sector.get('local_market', False)))}</i>"
-                )
-                year = sector.get("year_analysis") or {}
-                if year:
-                    arrow = "↑" if year.get("event_direction") == "up" else "↓"
-                    event_date = year.get("event_date", "")
-                    try:
-                        event_date = datetime.strptime(event_date, "%Y-%m-%d").strftime("%d.%m")
-                    except ValueError:
-                        event_date = ""
-                    parts = [
-                        f"{market_icon} Ориентир {escape_html(year.get('proxy_ticker', ''))}",
-                        f"1Y {format_percent(year.get('year_change'), 1)}",
-                        f"max {arrow} {format_percent(year.get('event_change'), 1)}",
-                    ]
-                    if event_date:
-                        parts.append(event_date)
-                    if year.get("trigger"):
-                        parts.append(f"фон: {escape_html(year['trigger'])}")
-                    if year.get("trend"):
-                        parts.append(escape_html(year["trend"]))
-                    lines.append("   " + " · ".join(parts))
-            lines.extend(["</blockquote>", "", BOT_NAME])
             return "\n".join(lines)
         EOF
 
@@ -1486,7 +2027,10 @@ jobs:
 
 
         def split_message(text: str, max_length: int = 3900) -> list[str]:
-            il_marker = "<blockquote expandable>\n🇮🇱 <b>ДОХОДНОСТЬ И АНАЛИТИКА ИЗРАИЛЬСКИХ ФОНДОВ</b>"
+            il_marker = (
+                "<blockquote expandable>\n"
+                "🇮🇱 <b>АНАЛИТИКА ИЗРАИЛЬСКИХ ФОНДОВ</b>"
+            )
             il_position = text.find(il_marker)
             if il_position > 0:
                 logical_parts = [text[:il_position].strip(), text[il_position:].strip()]
@@ -1533,26 +2077,26 @@ jobs:
         import json
         import os
         from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
 
         import aiohttp
 
         from modules.config import BOT_VERSION, MARKET_SNAPSHOT_FILE, SECTORS_CONFIG
-        from modules.formatter import build_combined_radar_message, build_telegram_message
+        from modules.formatter import (
+            build_combined_radar_message,
+            build_premarket_unavailable_message,
+            build_telegram_message,
+        )
         from modules.market import (
             analyze_entry_zone,
             fetch_all_israeli_funds,
             fetch_all_premarket_data,
             fetch_all_year_analytics,
             fetch_all_yahoo_data,
+            us_session_state,
         )
-        from modules.news import fetch_historical_trigger, fetch_sector_news
+        from modules.news import fetch_sector_news
         from modules.telegram_sender import send_to_telegram
-
-
-        def calculate_sector_score(avg_change):
-            if avg_change is None:
-                return None
-            return max(0, min(100, int(50 + float(avg_change) * 15.0)))
 
 
         def save_market_snapshot(rows: list[dict]) -> None:
@@ -1562,9 +2106,9 @@ jobs:
                 "sectors": [{
                     key: row.get(key)
                     for key in (
-                        "short_eng", "name", "icon", "fund_id", "il_name_eng",
-                        "local_market", "avg_change", "base_date", "il_fund_data",
-                        "year_analysis", "entry_analysis",
+                                "short_eng", "name", "icon", "fund_id", "il_name_eng",
+                                "local_market", "avg_change", "base_date", "il_fund_data",
+                                "year_analysis", "entry_analysis",
                     )
                 } for row in rows],
             }
@@ -1602,50 +2146,40 @@ jobs:
             market_data = await fetch_all_yahoo_data(all_tickers)
             print("🌐 Collecting Israeli fund returns...")
             il_results = await fetch_all_israeli_funds(SECTORS_CONFIG)
-            print("📈 Analyzing 1Y US proxy history...")
+            print("📈 Calculating 3Y hybrid proxy analytics...")
             year_results = await fetch_all_year_analytics(SECTORS_CONFIG)
 
             async with aiohttp.ClientSession() as session:
-                history_tasks = {}
-                for sector, config in SECTORS_CONFIG.items():
-                    year = year_results.get(sector, {})
-                    if year.get("event_date") and config.get("history_news_ticker"):
-                        history_tasks[sector] = asyncio.create_task(fetch_historical_trigger(
-                            session,
-                            config["history_news_ticker"],
-                            year["event_date"],
-                            config["short_eng"],
-                        ))
-                for sector, task in history_tasks.items():
-                    try:
-                        trigger = await task
-                        if trigger:
-                            year_results[sector]["trigger"] = trigger
-                    except Exception as error:
-                        print(f"⚠️ Historical context {sector}: {error}")
-
                 sector_tasks = []
                 sector_rows = []
                 for sector, config in SECTORS_CONFIG.items():
-                    ticker_details = [
-                        (ticker, market_data[ticker]["change"])
+                    ticker_rows = [
+                        (ticker, market_data[ticker]["change"], market_data[ticker].get("market_date"))
                         for ticker in config["tickers"]
                         if ticker in market_data and market_data[ticker].get("change") is not None
                     ]
-                    top_movements = sorted(ticker_details, key=lambda item: abs(item[1]), reverse=True)[:3]
-                    driver_changes = [change for _, change in ticker_details]
+                    dated = [row for row in ticker_rows if row[2]]
+                    basket_date = max(
+                        {row[2] for row in dated},
+                        key=lambda value: (sum(row[2] == value for row in dated), value),
+                    ) if dated else None
+                    basket_rows = [row for row in ticker_rows if not basket_date or row[2] == basket_date]
+                    driver_changes = [change for _, change, _ in basket_rows]
                     driver_average = sum(driver_changes) / len(driver_changes) if driver_changes else None
                     proxy_row = market_data.get(config.get("proxy_ticker"), {}) or {}
                     proxy_change = proxy_row.get("change")
-                    base_change = driver_average if config.get("local_market") else proxy_change
-                    base_date = proxy_row.get("market_date")
-                    if config.get("local_market") and ticker_details:
-                        dates = [market_data[ticker].get("market_date") for ticker, _ in ticker_details]
-                        dates = [date for date in dates if date]
-                        base_date = max(set(dates), key=dates.count) if dates else None
+                    basket_base = config.get("local_market") or config.get("daily_base") == "basket"
+                    base_change = driver_average if basket_base else proxy_change
+                    base_date = basket_date if basket_base else proxy_row.get("market_date")
                     if base_change is None:
                         base_change = driver_average
+                        base_date = basket_date
                         print(f"⚠️ Base proxy unavailable for {sector}; using driver basket average")
+                    same_date_rows = [row for row in ticker_rows if not base_date or row[2] == base_date]
+                    top_movements = sorted(
+                        [(ticker, change) for ticker, change, _ in same_date_rows],
+                        key=lambda item: abs(item[1]), reverse=True,
+                    )[:3]
                     sector_rows.append((sector, config, top_movements, base_change, base_date))
                     sector_tasks.append(asyncio.create_task(fetch_sector_news(
                         session, config["news_ticker"], top_movements, config["short_eng"]
@@ -1670,12 +2204,33 @@ jobs:
                         "avg_change": round(base_change, 2) if base_change is not None else None,
                         "base_date": base_date,
                         "top_3_tickers": top_movements,
-                        "score": calculate_sector_score(base_change),
                         "news": await news_task,
                         "il_fund_data": fund_data,
                         "year_analysis": year_data,
                         "entry_analysis": analyze_entry_zone(fund_data, year_data),
                     })
+
+            fund_dates = [
+                (row.get("il_fund_data", {}).get("price_stats") or {}).get("price_date")
+                for row in results
+            ]
+            dated_funds = [value for value in fund_dates if value]
+            comparison_fund_date = max(
+                set(dated_funds), key=lambda value: (dated_funds.count(value), value)
+            ) if dated_funds else None
+            if comparison_fund_date:
+                for row in results:
+                    price_date = (row.get("il_fund_data", {}).get("price_stats") or {}).get("price_date")
+                    if price_date and price_date != comparison_fund_date:
+                        row["entry_analysis"] = {
+                            "status_key": "unavailable",
+                            "label": "Данные фонда устарели",
+                            "score": 0,
+                            "candidate": False,
+                            "reasons": [
+                                f"NAV фонда от {price_date}; сопоставимая дата {comparison_fund_date}"
+                            ],
+                        }
 
             results.sort(
                 key=lambda item: (
@@ -1698,14 +2253,23 @@ jobs:
 
         async def run_premarket_pulse() -> None:
             print(f"Build: {BOT_VERSION}; pre-market pulse")
-            snapshot = load_market_snapshot()
-            if not snapshot:
-                message = build_combined_radar_message([], "снимок не найден или старше 96 часов")
+            session_state = us_session_state()
+            if not session_state["radar_window"]:
+                reason = session_state["state"] if session_state["state"] != "premarket" else "window"
+                message = build_premarket_unavailable_message(session_state, reason)
                 if os.getenv("DRY_RUN", "false").lower() == "true":
                     print(message)
                 else:
                     await send_to_telegram(message)
-                raise RuntimeError("Fresh market snapshot is required for the combined radar")
+                return
+            snapshot = load_market_snapshot()
+            if not snapshot:
+                message = build_premarket_unavailable_message(session_state, "snapshot")
+                if os.getenv("DRY_RUN", "false").lower() == "true":
+                    print(message)
+                else:
+                    await send_to_telegram(message)
+                return
             tickers = {
                 ticker
                 for config in SECTORS_CONFIG.values()
@@ -1714,6 +2278,13 @@ jobs:
                 if ticker and not ticker.endswith(".TA") and "=" not in ticker
             }
             data = await fetch_all_premarket_data(sorted(tickers))
+            if not any(item.get("available") for item in data.values()):
+                message = build_premarket_unavailable_message(session_state, "no_fresh_trades")
+                if os.getenv("DRY_RUN", "false").lower() == "true":
+                    print(message)
+                else:
+                    await send_to_telegram(message)
+                return
             snapshot_rows = {
                 row.get("short_eng"): row
                 for row in snapshot["sectors"]
@@ -1740,7 +2311,7 @@ jobs:
                     "breadth_total": len(drivers),
                 })
             generated = datetime.fromisoformat(str(snapshot["generated_at"]).replace("Z", "+00:00"))
-            snapshot_label = generated.astimezone().strftime("%d.%m.%Y %H:%M UTC")
+            snapshot_label = generated.astimezone(ZoneInfo("Asia/Jerusalem")).strftime("%d.%m.%Y %H:%M Израиль")
             message = build_combined_radar_message(rows, snapshot_label)
             if os.getenv("DRY_RUN", "false").lower() == "true":
                 print(message)
@@ -1831,6 +2402,21 @@ jobs:
                 self.assertEqual(stats["current_price"], 86.2)
                 self.assertEqual(stats["observations_60"], 60)
                 self.assertTrue(stats["at_minimum_60"])
+                self.assertEqual(stats["period_days"], 70)
+                self.assertLess(stats["from_high_60"], 0)
+                self.assertEqual(stats["range_position_60"], 0.0)
+
+            def test_price_stats_identify_full_twelve_month_coverage(self):
+                from datetime import date, timedelta
+                start = date(2025, 1, 1)
+                history = [
+                    {"date": (start + timedelta(days=index)).isoformat(), "price": 100 + index * 0.1}
+                    for index in range(400)
+                ]
+                stats = market.calculate_price_stats(history)
+                self.assertEqual(stats["period_days"], 365)
+                self.assertEqual(stats["period_observations"], 365)
+                self.assertGreater(stats["period_maximum"], stats["period_minimum"])
 
             def test_header(self):
                 result = market.parse_bizportal_page(page(), '5139183')
@@ -1922,9 +2508,28 @@ jobs:
                     result = await market.fetch_bizportal_playwright({'5139183'})
                 self.assertEqual(result, {})
 
+            async def test_browser_retries_http_access_denied_result(self):
+                calls = []
+                class Page:
+                    async def goto(self, url, **kwargs):
+                        calls.append(url)
+                        return SimpleNamespace(status=200)
+                    async def content(self): return page()
+                    async def wait_for_selector(self, *args, **kwargs): pass
+                context = SimpleNamespace(new_page=AsyncMock(return_value=Page()))
+                browser = SimpleNamespace(new_context=AsyncMock(return_value=context), close=AsyncMock())
+                engine = SimpleNamespace(chromium=SimpleNamespace(launch=AsyncMock(return_value=browser)))
+                manager = AsyncMock()
+                manager.__aenter__.return_value = engine
+                existing = {'5139183': {**market.EMPTY_RETURNS, 'access_denied': True}}
+                with patch.object(market, 'async_playwright', return_value=manager):
+                    result = await market.fetch_bizportal_playwright({'5139183'}, existing)
+                self.assertTrue(calls)
+                self.assertEqual(result['5139183']['daily'], 2.2)
+
             async def test_translation_error_never_returns_english(self):
                 translated = await news.translate_to_russian(Session(status=503), 'Snowflake jumps')
-                self.assertEqual(translated, 'перевод новости временно недоступен')
+                self.assertEqual(translated, '')
 
             async def test_translation_uses_mymemory_fallback(self):
                 class JsonResponse(Response):
@@ -1998,20 +2603,85 @@ jobs:
                 self.assertFalse(market.parse_premarket_chart(chart, 'TEST', now)['available'])
 
 
+        class TechnicalTests(unittest.TestCase):
+            @staticmethod
+            def history(count=260):
+                from datetime import datetime, timezone
+                start = int(datetime(2025, 1, 1, tzinfo=timezone.utc).timestamp())
+                rows = []
+                for index in range(count):
+                    close = 100.0 + index * 0.08 + 2.0 * __import__('math').sin(index / 7)
+                    rows.append({
+                        'timestamp': start + index * 86400,
+                        'open': close - 0.3,
+                        'high': close + 1.0,
+                        'low': close - 1.0,
+                        'close': close,
+                        'volume': 1_000_000 + index * 100,
+                    })
+                return rows
+
+            def test_hybrid_indicators_are_calculated(self):
+                result = market.analyze_year_history(self.history(), 'TEST')
+                for key in ('ema20', 'ema50', 'ema200', 'rsi14', 'atr14', 'bb_lower', 'bb_upper'):
+                    self.assertIsNotNone(result[key])
+                self.assertEqual(result['backtest_scope'], 'proxy_only')
+
+            def test_backtest_outcomes_are_complete(self):
+                history = self.history(400)
+                result = market.backtest_hybrid_model(history, market.calculate_technical_series(history))
+                self.assertEqual(
+                    result['backtest_total'],
+                    result['backtest_wins'] + result['backtest_losses'] + result['backtest_timeouts'],
+                )
+
+            def test_session_window_uses_new_york_time(self):
+                from datetime import datetime, timezone
+                inside = market.us_session_state(datetime(2026, 9, 14, 13, 15, tzinfo=timezone.utc))
+                outside = market.us_session_state(datetime(2026, 9, 14, 14, 0, tzinfo=timezone.utc))
+                self.assertTrue(inside['radar_window'])
+                self.assertFalse(outside['radar_window'])
+                self.assertEqual(outside['state'], 'regular')
+
+
         class RadarTests(unittest.TestCase):
             @staticmethod
             def fund(daily=1.0, below=-10.0):
                 current = 90.0 if below < 0 else 104.0
                 average = current / (1.0 + below / 100.0)
+                minimum60, maximum60 = 88.0, 120.0
                 return {
                     "daily": daily,
                     "price_stats": {
                         "current_price": current, "average_30": average, "average_60": 102.0,
-                        "minimum_60": 88.0, "below_average_30": below,
+                        "minimum_60": minimum60, "maximum_60": maximum60,
+                        "below_average_30": below,
                         "to_average_30": (average / current - 1.0) * 100.0,
+                        "to_average_60": (102.0 / current - 1.0) * 100.0,
+                        "from_low_60": (current / minimum60 - 1.0) * 100.0,
+                        "from_high_60": (current / maximum60 - 1.0) * 100.0,
+                        "range_position_60": (current - minimum60) / (maximum60 - minimum60) * 100.0,
                         "at_minimum_60": False, "price_date": "2026-09-05",
+                        "period_days": 365, "period_minimum": 80.0,
+                        "period_average": 105.0, "period_maximum": 130.0,
+                        "from_period_low": (current / 80.0 - 1.0) * 100.0,
+                        "from_period_high": (current / 130.0 - 1.0) * 100.0,
+                        "to_period_average": (105.0 / current - 1.0) * 100.0,
                         "backtest_wins": 2, "backtest_total": 3,
                     },
+                }
+
+            @staticmethod
+            def technical(trend='up', setup='pullback', change5=1.0, rr=2.0, total=12):
+                return {
+                    'proxy_ticker': 'TEST', 'proxy_price': 100.0,
+                    'trend_key': trend, 'setup_type': setup,
+                    'rsi14': 39.0, 'atr14': 2.0, 'atr_percent': 2.0,
+                    'risk_reward': rr, 'target': 106.0, 'stop': 97.0,
+                    'change_5d': change5, 'change_20d': 3.0, 'volume_ratio': 1.1,
+                    'backtest_wins': 7, 'backtest_losses': 3,
+                    'backtest_timeouts': 2, 'backtest_total': total,
+                    'backtest_horizon': 10,
                 }
 
             def test_missing_data_not_wait_signal(self):
@@ -2026,23 +2696,35 @@ jobs:
                     'premarket': {}, 'local_market': False,
                 }
                 text = formatter.build_combined_radar_message([row])
-                self.assertIn('НЕДОСТАТОЧНО ДАННЫХ', text)
+                self.assertIn('▫️—', text)
+                self.assertIn('РАДАР НЕ СФОРМИРОВАН', text)
                 self.assertNotIn('покупать', text.lower())
 
             def test_eligible_fund_not_displaced_by_missing(self):
-                signal = market.analyze_entry_zone(self.fund(), {'change_5d':1,'change_20d':2})
+                signal = market.analyze_entry_zone(self.fund(), self.technical())
                 row = {'entry_analysis':signal, 'il_fund_data':{'daily':1}, 'icon':'☁️', 'il_name_eng':'Test', 'short_eng':'Cloud', 'year_analysis':{}}
                 missing = dict(row, entry_analysis=market.analyze_entry_zone({}, {}))
                 for item in (missing, row):
                     item.update(preopen_ticker='WCLD', premarket={'available': True, 'change': 1.0, 'time_ny': '09:15'},
                                 breadth_positive=3, breadth_total=4, local_market=False)
                 text = formatter.build_combined_radar_message([missing,row])
-                self.assertIn('СИГНАЛ УСИЛИЛСЯ', text)
-                self.assertIn('🟩▲', text)
+                self.assertIn('ПОДТВЕРЖДЕНО', text)
+                self.assertIn('✅▲', text)
 
-            def test_low_price_without_turn_is_falling(self):
-                signal = market.analyze_entry_zone(self.fund(daily=-1.0), {'change_5d':-1.0})
-                self.assertEqual(signal['status_key'], 'falling')
+            def test_downtrend_blocks_low_price(self):
+                signal = market.analyze_entry_zone(
+                    self.fund(daily=-1.0), self.technical(trend='down', setup='none', change5=-1.0)
+                )
+                self.assertEqual(signal['status_key'], 'blocked')
+                self.assertIn('запрещён', signal['label'])
+
+            def test_uptrend_pullback_can_be_ready(self):
+                signal = market.analyze_entry_zone(self.fund(), self.technical())
+                self.assertEqual(signal['status_key'], 'ready')
+
+            def test_risk_reward_filter_prevents_ready_signal(self):
+                signal = market.analyze_entry_zone(self.fund(), self.technical(rr=1.2))
+                self.assertEqual(signal['status_key'], 'watch')
 
 
         class MessageTests(unittest.TestCase):
@@ -2052,19 +2734,24 @@ jobs:
                     fund = dict(market.EMPTY_RETURNS) if missing else {'daily':1.0,'mtd':2.0,'ytd':3.0}
                     if not missing:
                         fund.update(RadarTests.fund())
-                    year = {'proxy_ticker':config['proxy_ticker'], 'change_5d':1.0, 'change_20d':2.0,
-                            'year_change':10.0,'event_change':20.0,'event_direction':'up','event_date':'2026-01-01','trend':'боковая динамика'}
-                    rows.append(dict(config, avg_change=1.0, score=65, top_3_tickers=[('TEST',1.0)],
+                    year = RadarTests.technical()
+                    year.update(proxy_ticker=config['proxy_ticker'], market_date='2026-09-05')
+                    if not missing:
+                        fund['price_stats']['price_date'] = '2026-09-05'
+                    rows.append(dict(config, avg_change=1.0, base_date='2026-09-05',
+                                     top_3_tickers=[('TEST',1.0)],
                                      news=['• 📰 ' + 'Тестовая новость. ' * 7], il_fund_data=fund, year_analysis=year,
                                      entry_analysis=market.analyze_entry_zone(fund,year)))
                 return rows
 
             def test_eleven_funds_format_and_chunk_size(self):
                 chunks=telegram_sender.split_message(formatter.build_telegram_message(self.rows()))
+                self.assertEqual(len(chunks), 2)
                 self.assertTrue(all(len(chunk)<=3900 for chunk in chunks))
                 for chunk in chunks:
                     self.assertEqual(chunk.count('<blockquote expandable>'),chunk.count('</blockquote>'))
-                self.assertIn('5139183', '\n'.join(chunks))
+                self.assertIn('Migdal Banks Equity', self.rows()[8]['il_name_eng'])
+                self.assertIn('🏦Bank', '\n'.join(chunks))
 
             def test_total_outage_short_report(self):
                 text=formatter.build_telegram_message(self.rows(missing=True))
@@ -2072,16 +2759,98 @@ jobs:
                 self.assertNotIn('РАДАР ТОЧЕК ВХОДА',text)
                 self.assertNotIn('0/4',text)
 
-            def test_local_market_relation_uses_local_wording(self):
-                self.assertEqual(formatter.relation_text(1.0, 0.9, True), 'следует за локальным рынком')
+            def test_version_marker_not_published(self):
+                text = formatter.build_telegram_message(self.rows())
+                self.assertNotIn('hybrid-v2.1-20260915', text)
+
+            def test_compact_dates_and_single_footer(self):
+                rows = self.rows()
+                rows[0]['base_date'] = '2026-09-11'
+                rows[0]['il_fund_data']['price_stats']['price_date'] = '2026-09-09'
+                text = formatter.build_telegram_message(rows)
+                self.assertIn('05.09 – 11.09', text)
+                self.assertIn('05.09 – 09.09', text)
+                self.assertEqual(text.count('@oil_tracker_pavel_bot'), 1)
+
+            def test_ytd_missing_is_na_and_columns_have_separators(self):
+                rows = self.rows()
+                rows[1]['il_fund_data']['ytd'] = None
+                text = formatter.build_telegram_message(rows)
+                self.assertIn('Y N/A', text)
+                self.assertIn('D +1.00% | M +2.00% | Y N/A', text)
+
+            def test_fund_analysis_uses_own_price_history_not_proxy_description(self):
+                text = formatter.build_telegram_message(self.rows())
+                self.assertIn('12м: мин 80.00 · сред. 105.00 · макс. 130.00 · сейчас 90.00', text)
+                self.assertIn('от максимума -30.8%', text)
+                self.assertNotIn('Ориентир', text)
+                self.assertNotIn('восходящий тренд', text)
+
+            def test_comparison_date_uses_modal_nav_date(self):
+                rows = self.rows()
+                rows[0]['il_fund_data']['price_stats']['price_date'] = '2026-09-04'
+                self.assertEqual(formatter._comparison_fund_date(rows), '2026-09-05')
+
+            def test_afterhours_status_is_not_regular_session(self):
+                from datetime import datetime, timezone
+                value = formatter._market_status(datetime(2026, 9, 14, 23, 9, tzinfo=timezone.utc))
+                self.assertEqual(value, 'основная сессия закрыта · идут послеторги')
+
+            def test_oil_and_cloud_use_distinct_daily_bases(self):
+                self.assertEqual(SECTORS_CONFIG['Oil']['proxy_ticker'], 'USO')
+                self.assertEqual(SECTORS_CONFIG['Cloud']['daily_base'], 'basket')
+
+            def test_all_eleven_news_sectors_are_rendered_compactly(self):
+                text = telegram_sender.split_message(formatter.build_telegram_message(self.rows()))[0]
+                self.assertEqual(text.count('• 📰'), 11)
+                self.assertLessEqual(len(text), 3900)
+
+            def test_day_strength_shows_only_color_without_score(self):
+                rows = self.rows()
+                for row, score in zip(rows[:4], (80, 50, 20, None)):
+                    row['score'] = score
+                first_message = telegram_sender.split_message(
+                    formatter.build_telegram_message(rows)
+                )[0]
+                self.assertIn('🟢', first_message)
+                self.assertIn('🟡', first_message)
+                self.assertIn('🔴', first_message)
+                self.assertIn('⚪', first_message)
+                self.assertNotIn('/100', first_message)
+
+            def test_requested_compact_headings_and_dates(self):
+                text = formatter.build_telegram_message(self.rows())
+                self.assertIn('🔍 ГЛАВНЫЕ ДВИЖЕНИЯ', text)
+                self.assertIn('📊 Топ-3:', text)
+                self.assertIn('🇮🇱 <b>АНАЛИТИКА ИЗРАИЛЬСКИХ ФОНДОВ</b>', text)
+                self.assertNotIn('ДВИЖЕНИЕ И РЕЛЕВАНТНЫЕ НОВОСТИ', text)
+                self.assertNotIn('ДОХОДНОСТЬ И АНАЛИТИКА', text)
+                self.assertNotIn('(базовый рынок ', text)
+                self.assertIn('(+1.00% · 05.09)', text)
+
+            def test_fund_cards_use_only_arrow_markers(self):
+                text = formatter.build_telegram_message(self.rows())
+                self.assertIn('🟩▲ <b>Barak Ultra WTI</b>', text)
+                for label in ('Позитивно', 'Нейтрально', 'Осторожно'):
+                    self.assertNotIn(label, text)
+                self.assertNotIn('следует за базовым рынком', text)
+
+            def test_gap_requires_matching_dates(self):
+                rows = self.rows()
+                rows[0]['base_date'] = '2026-09-04'
+                rows[0]['il_fund_data']['daily'] = 10.0
+                text = formatter.build_telegram_message(rows)
+                self.assertNotIn(f"<b>{rows[0]['short_eng']}</b> · база", text)
 
             def test_small_backtest_sample_is_not_presented_as_success_rate(self):
                 rows = self.rows()
                 for row in rows:
+                    row['entry_analysis']['backtest_total'] = 3
+                    row['entry_analysis']['backtest_wins'] = 2
                     row.update(preopen_ticker='TEST', premarket={'available':True, 'change':1.0, 'time_ny':'09:15'},
                                breadth_positive=1, breadth_total=1)
                 text = formatter.build_combined_radar_message(rows)
-                self.assertNotIn('История:', text)
+                self.assertNotIn('История базы:', text)
                 self.assertNotIn('2/3 возвратов', text)
 
             def test_premarket_message_is_explicitly_non_predictive(self):
@@ -2093,13 +2862,70 @@ jobs:
                 }]
                 rows[0].update(
                     il_name_eng='Barak Ultra WTI',
-                    entry_analysis=market.analyze_entry_zone(RadarTests.fund(), {'change_5d':1.0}),
+                    entry_analysis=market.analyze_entry_zone(RadarTests.fund(), RadarTests.technical()),
                 )
                 text = formatter.build_combined_radar_message(rows, '08.09.2026 23:15')
-                self.assertIn('USO', text)
-                self.assertIn('не будущую цену открытия', text)
-                self.assertIn('🟩▲', text)
+                self.assertIn('TEST', text)
+                self.assertIn('не прогноз цены открытия', text)
+                self.assertIn('✅▲', text)
                 self.assertNotIn('покупать', text.lower())
+
+            def test_radar_renders_at_most_five_candidates(self):
+                rows = self.rows()
+                for row in rows:
+                    row.update(
+                        premarket={'available': True, 'change': 1.0, 'time_ny': '09:15'},
+                        breadth_positive=2, breadth_total=3,
+                    )
+                text = formatter.build_combined_radar_message(rows)
+                self.assertEqual(text.count('План базы:'), 5)
+                self.assertEqual(text.count('60д: мин'), 5)
+                self.assertEqual(text.count('От максимума'), 5)
+                self.assertIn('Остальные без приоритетной позиции: <b>6</b>', text)
+
+            def test_unavailable_premarket_is_short(self):
+                session = {'time_ny': '14.09.2026 10:00'}
+                text = formatter.build_premarket_unavailable_message(session, 'regular')
+                self.assertLess(len(text), 500)
+                self.assertIn('РАДАР НЕ СФОРМИРОВАН', text)
+
+
+        class NewsFormattingTests(unittest.TestCase):
+            def test_shortening_keeps_whole_words(self):
+                result = news.shorten_title('Очень длинный заголовок новости про рынок и компании', 32)
+                self.assertTrue(result.endswith('...'))
+                self.assertNotIn('комп...', result)
+
+            def test_currency_spacing_is_cleaned(self):
+                self.assertEqual(news.normalize_title('Contract worth $ 729 million'), 'Contract worth $729 million')
+
+            def test_clean_energy_rejects_macro_roundup(self):
+                item = {
+                    'title': "Kevin Warsh hawkishness distracts markets as inflation rises",
+                    'relatedTickers': ['CEG'],
+                }
+                self.assertLess(news.news_score(item, ['CEG'], 'Clean'), 35)
+
+            def test_clean_energy_accepts_sector_company(self):
+                item = {
+                    'title': "Constellation Energy expands clean power capacity",
+                    'relatedTickers': ['CEG'],
+                }
+                self.assertGreaterEqual(news.news_score(item, ['CEG'], 'Clean'), 35)
+
+            def test_related_ticker_without_sector_context_is_rejected(self):
+                item = {
+                    'title': 'Markets rise as investors assess the economic outlook',
+                    'relatedTickers': ['TSLA'],
+                }
+                self.assertLess(news.news_score(item, ['TSLA'], 'EV'), 35)
+
+            def test_industry_company_headline_is_accepted(self):
+                item = {
+                    'title': 'CrowdStrike expands cloud security platform',
+                    'relatedTickers': ['CRWD'],
+                }
+                self.assertGreaterEqual(news.news_score(item, ['CRWD'], 'Cyber'), 35)
 
 
         if __name__ == '__main__':
@@ -2120,7 +2946,6 @@ jobs:
       env:
         BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         CHAT_ID: ${{ secrets.CHAT_ID }}
-        FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
         RUN_MODE: ${{ steps.report.outputs.mode }}
         PYTHONUNBUFFERED: '1'
         MARKET_SNAPSHOT_FILE: latest_market_snapshot.json
