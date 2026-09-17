@@ -70,7 +70,7 @@ jobs:
         BOT_TOKEN = os.getenv("BOT_TOKEN")
         CHAT_ID = os.getenv("CHAT_ID")
         BOT_NAME = "@oil_tracker_pavel_bot"
-        BOT_VERSION = "hybrid-v2.1-20260915"
+        BOT_VERSION = "hybrid-v2.2-20260917"
         MARKET_SNAPSHOT_FILE = os.getenv("MARKET_SNAPSHOT_FILE", "latest_market_snapshot.json")
         HTTP_TIMEOUT = 15
 
@@ -725,9 +725,9 @@ jobs:
                     break
                 params = {
                     "action": "get_paper_yearly_graph", "request_type": "2",
-                    # The fund graph page itself requests period=1 by default. We still
-                    # inspect the returned date span before calling it a 12-month history.
-                    "paper_id": fund_id, "period": "1", "page_number": str(page_number),
+                    # period=1 returns only the latest few observations. period=3 is
+                    # required for the 60-day and longer fund-price calculations.
+                    "paper_id": fund_id, "period": "3", "page_number": str(page_number),
                 }
                 try:
                     async with limiter:
@@ -1726,7 +1726,8 @@ jobs:
 
             comparison_date = _comparison_fund_date(all_ranked)
             stale_count = sum(
-                _fund_date(row) and _fund_date(row) != comparison_date for row in all_ranked
+                1 for row in all_ranked
+                if _fund_date(row) and _fund_date(row) != comparison_date
             )
             if stale_count:
                 lines.append(
@@ -2418,6 +2419,14 @@ jobs:
                 self.assertEqual(stats["period_observations"], 365)
                 self.assertGreater(stats["period_maximum"], stats["period_minimum"])
 
+            def test_price_stats_reject_too_short_history(self):
+                history = [
+                    {"date": "2026-09-14", "price": 100.0},
+                    {"date": "2026-09-15", "price": 101.0},
+                    {"date": "2026-09-16", "price": 102.0},
+                ]
+                self.assertEqual(market.calculate_price_stats(history), {})
+
             def test_header(self):
                 result = market.parse_bizportal_page(page(), '5139183')
                 self.assertEqual(result['daily'], 2.2)
@@ -2457,6 +2466,25 @@ jobs:
 
 
         class FetchTests(unittest.IsolatedAsyncioTestCase):
+            async def test_fund_history_requests_long_period(self):
+                import json
+                payload = "~1^" + json.dumps([
+                    {"DateObj": f"202608{day:02d}", "Rate": 100 + day}
+                    for day in range(1, 17)
+                ])
+                class HistorySession:
+                    def __init__(self):
+                        self.params = []
+                    def get(self, url, **kwargs):
+                        self.params.append(kwargs.get('params', {}))
+                        return Response(payload, 200)
+                session = HistorySession()
+                rows = await market.fetch_bizportal_price_history(
+                    session, '5139183', asyncio.Semaphore(1), asyncio.Event()
+                )
+                self.assertEqual(session.params[0]['period'], '3')
+                self.assertEqual(len(rows), 16)
+
             async def test_complete_general_skips_performance(self):
                 session = Session(fail='performance')
                 with patch.object(market.asyncio, 'sleep', new=AsyncMock()):
@@ -2790,6 +2818,13 @@ jobs:
                 rows = self.rows()
                 rows[0]['il_fund_data']['price_stats']['price_date'] = '2026-09-04'
                 self.assertEqual(formatter._comparison_fund_date(rows), '2026-09-05')
+
+            def test_missing_fund_history_date_does_not_break_report(self):
+                rows = self.rows()
+                rows[0]['il_fund_data']['price_stats'].pop('price_date')
+                text = formatter.build_telegram_message(rows)
+                self.assertIn('АНАЛИТИКА ИЗРАИЛЬСКИХ ФОНДОВ', text)
+                self.assertIn('Barak Ultra WTI', text)
 
             def test_afterhours_status_is_not_regular_session(self):
                 from datetime import datetime, timezone
