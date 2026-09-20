@@ -1363,8 +1363,21 @@ jobs:
             ))
 
 
+        def ordered_radar_rows(rows: list[dict]) -> list[dict]:
+            ranked = rank_radar_rows(rows)
+            candidates = [row for row in ranked if row['entry_analysis'].get('candidate')]
+            observation = [row for row in ranked if not row['entry_analysis'].get('candidate')]
+            return candidates + observation
+
+
+        def radar_chart_target(rows: list[dict]) -> int:
+            usable = rank_radar_rows(rows)
+            candidates = sum(row['entry_analysis'].get('candidate', False) for row in usable)
+            return min(len(usable), max(3, min(5, candidates)))
+
+
         def selected_radar_rows(rows: list[dict]) -> list[dict]:
-            return [row for row in rank_radar_rows(rows) if row['entry_analysis'].get('candidate')][:5]
+            return ordered_radar_rows(rows)[:radar_chart_target(rows)]
 
 
         def build_combined_radar_message(rows: list[dict], chart_count=None) -> str:
@@ -1383,11 +1396,19 @@ jobs:
             ]
             if rejected:
                 lines.append(f"Не подтверждено: {rejected}")
+            candidate_count = sum(row['entry_analysis'].get('candidate', False) for row in usable)
             if not selected:
                 lines.append("Сегодня условий для входа нет.")
             else:
+                if candidate_count == 0:
+                    lines.append("Сигналов входа нет · показаны ближайшие фонды для наблюдения.")
+                elif candidate_count < len(selected):
+                    lines.append(
+                        f"Сигналов: {candidate_count} · добавлено для наблюдения: "
+                        f"{len(selected) - candidate_count}."
+                    )
                 if chart_count is not None:
-                    lines.append(f"Графиков: {chart_count}/{len(selected)} отобранных фондов.")
+                    lines.append(f"Графиков: {chart_count}/{len(selected)} запланированных.")
                     if chart_count < len(selected):
                         lines.append("Часть графиков недоступна: недостаточно истории или ошибка построения.")
                 lines.extend([
@@ -1413,7 +1434,10 @@ jobs:
         import matplotlib.dates as mdates
         import matplotlib.pyplot as plt
 
-        from modules.formatter import _radar_verdict, _display_date, format_percent, selected_radar_rows
+        from modules.formatter import (
+            _radar_verdict, _display_date, format_percent,
+            ordered_radar_rows, radar_chart_target,
+        )
 
 
         def chart_window(history):
@@ -1509,7 +1533,10 @@ jobs:
 
         def build_radar_charts(rows, output_directory=None):
             charts = []
-            for row in selected_radar_rows(rows):
+            target = radar_chart_target(rows)
+            for row in ordered_radar_rows(rows):
+                if len(charts) >= target:
+                    break
                 try:
                     png = render_fund_chart(row)
                     if png:
@@ -2296,7 +2323,7 @@ jobs:
                 self.assertIn('подтверждено: 1', text)
                 self.assertNotIn('покупать', text.lower())
 
-            def test_radar_renders_at_most_five_candidates(self):
+            def test_radar_uses_three_to_five_charts(self):
                 rows = self.rows()
                 for row in rows:
                     row.update(
@@ -2310,8 +2337,10 @@ jobs:
                 self.assertEqual(len(formatter.selected_radar_rows(rows)), 5)
                 for row in rows:
                     row['entry_analysis']['candidate'] = False
-                self.assertEqual(formatter.selected_radar_rows(rows), [])
-                self.assertIn('Сегодня условий для входа нет', formatter.build_combined_radar_message(rows))
+                self.assertEqual(len(formatter.selected_radar_rows(rows)), 3)
+                no_signal = formatter.build_combined_radar_message(rows)
+                self.assertIn('Сигналов входа нет', no_signal)
+                self.assertIn('ближайшие фонды для наблюдения', no_signal)
 
 
 
