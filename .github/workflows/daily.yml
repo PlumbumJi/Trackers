@@ -1545,16 +1545,32 @@ jobs:
         cat << 'EOF' > modules/telegram_sender.py
         import json
         import re
+        from html.parser import HTMLParser
 
         import aiohttp
 
-        from modules.config import BOT_TOKEN, CHAT_ID, HTTP_TIMEOUT
+        from modules.config import BOT_TOKEN, CHAT_ID, HTTP_TIMEOUT, BOT_NAME
+
+
+        def message_length(text: str) -> int:
+            class VisibleText(HTMLParser):
+                def __init__(self):
+                    super().__init__(convert_charrefs=True)
+                    self.parts = []
+
+                def handle_data(self, data):
+                    self.parts.append(data)
+
+            parser = VisibleText()
+            parser.feed(text)
+            parser.close()
+            return len(''.join(parser.parts).encode('utf-16-le')) // 2
 
 
         def split_plain_text(text: str, max_length: int) -> list[str]:
             chunks, current = [], ""
             for line in text.splitlines(keepends=True):
-                if len(current) + len(line) > max_length and current.strip():
+                if message_length(current + line) > max_length and current.strip():
                     chunks.append(current.strip())
                     current = line
                 else:
@@ -1575,11 +1591,14 @@ jobs:
             body = block[match.end():body_end]
             suffix = block[body_end + len(close_tag):]
             chunks, current, current_prefix = [], "", prefix
-            for line in body.splitlines(keepends=True):
+            # Keep each fund/sector paragraph together, including its news link.
+            paragraphs = re.split(r'\n\s*\n', body.strip())
+            for paragraph in paragraphs:
+                line = paragraph + "\n\n"
                 candidate = f"{current_prefix}{open_tag}{current}{line}{close_tag}{suffix}"
-                if len(candidate) > max_length and current.strip():
+                if message_length(candidate) > max_length and current.strip():
                     chunks.append(f"{current_prefix}{open_tag}{current}{close_tag}".strip())
-                    current_prefix, current, suffix = "", line, ""
+                    current_prefix, current = "", line
                 else:
                     current += line
             final = f"{current_prefix}{open_tag}{current}{close_tag}{suffix}".strip()
@@ -1589,6 +1608,12 @@ jobs:
 
 
         def split_message(text: str, max_length: int = 3900) -> list[str]:
+            # A footer is part of the final text message, never its own chunk.
+            has_footer = any(line.strip() == BOT_NAME for line in text.splitlines())
+            text = '\n'.join(line for line in text.splitlines() if line.strip() != BOT_NAME)
+            text = re.sub(r'\n[ \t]*\n(?:[ \t]*\n)+', '\n\n', text).strip()
+            footer = f"\n\n{BOT_NAME}" if has_footer else ""
+            budget = max_length - message_length(footer)
             il_marker = (
                 "<blockquote expandable>\n"
                 "🇮🇱 <b>АНАЛИТИКА ИЗРАИЛЬСКИХ ФОНДОВ</b>"
@@ -1596,18 +1621,26 @@ jobs:
             il_position = text.find(il_marker)
             if il_position > 0:
                 logical_parts = [text[:il_position].strip(), text[il_position:].strip()]
-                if all(part and len(part) <= max_length for part in logical_parts):
-                    print("✂️ Market digest split into 2 logical messages")
-                    return logical_parts
-            if len(text) <= max_length:
-                return [text]
+            else:
+                logical_parts = [text]
             chunks = []
-            for raw in text.split("</blockquote>"):
-                if not raw.strip():
+            for part in logical_parts:
+                if not part:
                     continue
-                block = raw + "</blockquote>" if "<blockquote" in raw else raw
-                chunks.extend(split_blockquote(block, max_length) if len(block) > max_length else [block.strip()])
-            return [chunk for chunk in chunks if chunk]
+                if message_length(part) <= budget:
+                    chunks.append(part)
+                    continue
+                for raw in part.split("</blockquote>"):
+                    if not raw.strip():
+                        continue
+                    block = raw + "</blockquote>" if "<blockquote" in raw else raw
+                    chunks.extend(split_blockquote(block, budget) if message_length(block) > budget else [block.strip()])
+            chunks = [chunk for chunk in chunks if chunk]
+            if chunks:
+                chunks[-1] += footer
+            if any(message_length(chunk) > max_length for chunk in chunks):
+                raise ValueError("A single message paragraph exceeds Telegram limit")
+            return chunks
 
 
         async def send_to_telegram(text: str) -> None:
@@ -2215,6 +2248,33 @@ jobs:
 
 
         class MessageTests(unittest.TestCase):
+            def test_link_lengths_and_footer_do_not_create_extra_messages(self):
+                from modules.config import BOT_NAME
+                rows = self.rows()
+                headline = 'Акции CrowdStrike, HubSpot, Intuit, Cloudflare и Okta резко упали: что нужно знать'
+                for row in rows:
+                    row['news'] = [{'title': headline, 'published': 1789776000,
+                                    'url': 'https://example.com/news?tracking=' + 'x' * 900}]
+                text = formatter.build_telegram_message(rows)
+                chunks = telegram_sender.split_message(text)
+                self.assertEqual(len(chunks), 2)
+                self.assertEqual(chunks[0].count(headline), 11)
+                self.assertTrue(chunks[-1].endswith(BOT_NAME))
+                self.assertTrue(all(chunk.strip() != BOT_NAME for chunk in chunks))
+                self.assertTrue(all(telegram_sender.message_length(chunk) <= 3900 for chunk in chunks))
+                long_news = '<blockquote expandable>\n' + '\n\n'.join(
+                    f'<b>Сектор {i}</b>\nНовость {i}: ' + 'Текст новости. ' * 12 for i in range(30)
+                ) + '</blockquote>\n\n' + BOT_NAME
+                overflow = telegram_sender.split_message(long_news)
+                self.assertGreater(len(overflow), 1)
+                self.assertTrue(overflow[-1].endswith(BOT_NAME))
+                self.assertEqual(sum(chunk.count(BOT_NAME) for chunk in overflow), 1)
+                for i in range(30):
+                    self.assertTrue(any(f'<b>Сектор {i}</b>\nНовость {i}:' in chunk for chunk in overflow))
+                for chunk in overflow:
+                    self.assertLessEqual(telegram_sender.message_length(chunk), 3900)
+                    self.assertEqual(chunk.count('<blockquote expandable>'), chunk.count('</blockquote>'))
+
             def rows(self, missing=False):
                 rows=[]
                 for config in SECTORS_CONFIG.values():
