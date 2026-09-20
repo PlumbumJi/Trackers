@@ -836,28 +836,38 @@ jobs:
         import textwrap
         import urllib.parse
         from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
 
         import aiohttp
 
         from modules.config import HEADERS, HTTP_TIMEOUT
         MAX_NEWS_AGE_HOURS = 48
 
+        SECTOR_QUERIES = {
+            "Oil": "crude oil OPEC", "AI": "artificial intelligence semiconductor",
+            "Cyber": "cybersecurity CrowdStrike", "Game": "gaming Nintendo Roblox",
+            "Gold": "gold silver mining", "Clean": "solar renewable energy",
+            "Aero": "aerospace defense", "Bio": "biotechnology clinical trial",
+            "Bank": "Bank Leumi Hapoalim", "Cloud": "cloud security software",
+            "EV": "electric vehicles Tesla",
+        }
+
         SECTOR_KEYWORDS = {
-            "Oil": ["oil", "crude", "wti", "brent", "opec", "energy", "refinery", "inventory"],
+            "Oil": ["oil", "crude", "wti", "brent", "opec", "refinery"],
             "AI": ["ai", "artificial intelligence", "chip", "gpu", "semiconductor", "data center"],
             "Cyber": ["cyber", "security", "breach", "ransomware", "hack", "cloud security"],
-            "Game": ["gaming", "game", "console", "playstation", "xbox", "release", "bookings"],
-            "Gold": ["gold", "silver", "metal", "inflation", "fed", "yield", "dollar"],
+            "Game": ["gaming", "video game", "console", "playstation", "xbox"],
+            "Gold": ["gold", "silver", "precious metal", "bullion"],
             "Clean": [
                 "solar", "renewable", "clean energy", "green energy", "wind", "power grid",
                 "ge vernova", "constellation energy", "talen energy", "first solar",
                 "nextracker", "nrg energy",
             ],
-            "Aero": ["aerospace", "defense", "aircraft", "contract", "pentagon", "missile"],
-            "Bio": ["biotech", "drug", "fda", "trial", "approval", "pharma", "clinical"],
-            "Bank": ["bank", "fed", "rate", "credit", "loan", "deposit", "net interest"],
-            "Cloud": ["cloud", "software", "saas", "data center", "enterprise", "guidance"],
-            "EV": ["ev", "electric vehicle", "battery", "delivery", "tesla", "tariff", "sales"],
+            "Aero": ["aerospace", "defense", "aircraft", "pentagon", "missile", "satellite"],
+            "Bio": ["biotech", "biotechnology", "drug", "fda", "pharma", "clinical"],
+            "Bank": ["bank leumi", "hapoalim", "mizrahi", "israeli bank"],
+            "Cloud": ["cloud", "software", "saas", "data center", "cybersecurity"],
+            "EV": ["ev", "electric vehicle", "battery", "tesla"],
         }
 
         SECTOR_COMPANY_ANCHORS = {
@@ -904,7 +914,17 @@ jobs:
 
         def normalize_title(title: str) -> str:
             value = re.sub(r"\s+", " ", html.unescape(str(title or ""))).strip()
+            value = re.sub(r"\)(?=[A-Za-zА-Яа-яЁё])", ") ", value)
             return re.sub(r"\$\s+(?=\d)", "$", value)
+
+
+        def news_age_limit() -> int:
+            # Weekend editions may include Friday morning headlines; dates are shown.
+            return 96 if datetime.now(ZoneInfo("America/New_York")).weekday() >= 5 else MAX_NEWS_AGE_HOURS
+
+
+        def headline_matches(term: str, title: str) -> bool:
+            return bool(re.search(rf"(?<!\w){re.escape(term)}(?:s|ing)?(?!\w)", title, re.I))
 
 
         def shorten_title(title: str, width: int = 120) -> str:
@@ -936,7 +956,7 @@ jobs:
                     async with session.get(url, params=params, timeout=8) as response:
                         if response.status == 200:
                             data = await response.json()
-                            translated = "".join(
+                            translated = " ".join(
                                 str(segment[0]) for segment in data[0]
                                 if isinstance(segment, list) and segment and segment[0]
                             ).strip()
@@ -982,10 +1002,10 @@ jobs:
             if published:
                 try:
                     age = datetime.now(timezone.utc) - datetime.fromtimestamp(int(published), tz=timezone.utc)
-                    if age.total_seconds() > MAX_NEWS_AGE_HOURS * 3600:
+                    if age.total_seconds() < -300 or age.total_seconds() > news_age_limit() * 3600:
                         return -40
                 except (TypeError, ValueError, OSError):
-                    pass
+                    return -40
 
             related = item.get("relatedTickers") or item.get("related") or []
             if isinstance(related, str):
@@ -993,10 +1013,10 @@ jobs:
             related_set = {str(value).upper() for value in related}
             ticker_set = {ticker.upper() for ticker in candidate_tickers}
             keyword_hits = sum(
-                keyword in lower_title for keyword in SECTOR_KEYWORDS.get(sector_name, [])
+                headline_matches(keyword, lower_title) for keyword in SECTOR_KEYWORDS.get(sector_name, [])
             )
             company_hits = sum(
-                company in lower_title
+                headline_matches(company, lower_title)
                 for company in SECTOR_COMPANY_ANCHORS.get(sector_name, [])
             )
             ticker_hits = sum(
@@ -1009,6 +1029,9 @@ jobs:
             if keyword_hits + company_hits + ticker_hits == 0:
                 return -50
             score = 35 if related_set & ticker_set else 0
+            # Directly named companies/industries remain relevant without Yahoo tags.
+            if company_hits or keyword_hits:
+                score = max(score, 35)
             score += 12 * keyword_hits + 10 * company_hits + 8 * ticker_hits
             if any(word in lower_title for word in ("earnings", "guidance", "forecast", "contract", "approval", "tariff")):
                 score += 8
@@ -1016,7 +1039,7 @@ jobs:
 
 
         async def fetch_yahoo_news(session: aiohttp.ClientSession, ticker: str) -> list[dict]:
-            url = f"https://query1.finance.yahoo.com/v1/finance/search?q={urllib.parse.quote(ticker)}"
+            url = f"https://query1.finance.yahoo.com/v1/finance/search?q={urllib.parse.quote(ticker)}&newsCount=20&quotesCount=0"
             try:
                 async with session.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT) as response:
                     if response.status == 200:
@@ -1032,11 +1055,12 @@ jobs:
             query_ticker: str,
             top_tickers: list[tuple[str, float]] | None = None,
             sector_name: str = "",
-        ) -> list[str]:
+        ) -> list[dict]:
             movers = [ticker for ticker, _ in (top_tickers or [])]
             candidates = unique(movers + [query_ticker])[:4]
+            queries = unique(candidates + [SECTOR_QUERIES.get(sector_name, "")])
             batches = await asyncio.gather(*[
-                fetch_yahoo_news(session, ticker) for ticker in candidates
+                fetch_yahoo_news(session, ticker) for ticker in queries
             ])
             scored = []
             seen_titles = set()
@@ -1046,15 +1070,27 @@ jobs:
                 if not title or title_key in seen_titles:
                     continue
                 seen_titles.add(title_key)
+                try:
+                    published = int(item.get("providerPublishTime") or item.get("datetime") or 0)
+                except (ValueError, TypeError):
+                    continue
+                if published <= 0:
+                    continue
                 score = news_score(item, candidates, sector_name)
                 if score >= 35:
-                    scored.append((score, int(item.get("providerPublishTime") or 0), title))
+                    scored.append((score, published, title, item.get("link") or ""))
+            print(f"News {sector_name}: received={sum(len(batch) for batch in batches)}, relevant={len(scored)}, window={news_age_limit()}h")
             if not scored:
                 return []
             scored.sort(key=lambda value: (value[0], value[1]), reverse=True)
-            translated = await translate_to_russian(session, scored[0][2])
-            translated = shorten_title(translated)
-            return [f"• 📰 {translated}"] if translated else []
+            for _, published, title, link in scored[:3]:
+                translated = await translate_to_russian(session, title)
+                if translated:
+                    return [{"title": shorten_title(translated, 155), "published": published, "url": link}]
+            # Preserve a sourced headline when both translation services fail.
+            _, published, title, link = scored[0]
+            print(f"News {sector_name}: translation unavailable; displaying original")
+            return [{"title": shorten_title(title, 155), "published": published, "url": link, "original": True}]
         EOF
 
         cat << 'EOF' > modules/formatter.py
@@ -1208,6 +1244,16 @@ jobs:
                     )
                     lines.append(f"Топ-3: {escape_html(details)}")
                 for item in row.get("news", []):
+                    if isinstance(item, dict):
+                        title = escape_html(item.get("title", ""))
+                        link = str(item.get("url") or "")
+                        if link.startswith(("https://", "http://")):
+                            safe_link = escape_html(link).replace('"', '&quot;')
+                            title = f'<a href="{safe_link}">{title}</a>'
+                        published = datetime.fromtimestamp(item["published"], ISRAEL_TZ).strftime("%d.%m")
+                        original = " · оригинал" if item.get("original") else ""
+                        lines.append(f"📰 {title} · {published}{original}")
+                        continue
                     compact = textwrap.shorten(
                         str(item),
                         width=125,
@@ -1384,7 +1430,6 @@ jobs:
             usable = rank_radar_rows(rows)
             if not usable:
                 return ""
-            selected = selected_radar_rows(rows)
             verdicts = [_radar_verdict(row)[0] for row in usable if row['entry_analysis'].get('candidate')]
             confirmed = verdicts.count("✅▲")
             observing = verdicts.count("⚠️→")
@@ -1392,32 +1437,24 @@ jobs:
             lines = [
                 "🎯 <b>РАДАР ИЗРАИЛЬСКИХ ФОНДОВ</b>",
                 f"📅 {datetime.now(ISRAEL_TZ).strftime('%d.%m | %H:%M')} · Израиль",
-                f"Оценено: {len(usable)}/{len(rows)} · подтверждено: {confirmed} · наблюдать: {observing}",
+                "",
             ]
-            if rejected:
-                lines.append(f"Не подтверждено: {rejected}")
-            candidate_count = sum(row['entry_analysis'].get('candidate', False) for row in usable)
-            if not selected:
-                lines.append("Сегодня условий для входа нет.")
+            if confirmed:
+                lines.append(f"✅▲ <b>Вход по модели подтверждён: {confirmed}.</b>")
             else:
-                if candidate_count == 0:
-                    lines.append("Сигналов входа нет · показаны ближайшие фонды для наблюдения.")
-                elif candidate_count < len(selected):
-                    lines.append(
-                        f"Сигналов: {candidate_count} · добавлено для наблюдения: "
-                        f"{len(selected) - candidate_count}."
-                    )
-                if chart_count is not None:
-                    lines.append(f"Графиков: {chart_count}/{len(selected)} запланированных.")
-                    if chart_count < len(selected):
-                        lines.append("Часть графиков недоступна: недостаточно истории или ошибка построения.")
-                lines.extend([
-                    "",
-                    "<i>Отбор: ниже средней 30д минимум на 3%, в нижних 30% диапазона 60д и ниже максимума минимум на 3%. "
-                    "Подтверждение: два повышения цены фонда подряд; база растёт за день и 5 сессий, минимум половина из двух и более доступных акций растут за ту же дату. "
-                    "Графики — за 3 месяца; расстояние до средней не является прогнозом прибыли. "
-                    "США — последние завершённые дневные данные, не прогноз цены исполнения фонда.</i>",
-                ])
+                lines.append("<b>Подтверждённого входа пока нет.</b>")
+            if observing:
+                lines.append(f"Первые признаки восстановления: {observing}. Ждём подтверждения.")
+            if rejected:
+                lines.append(f"Цена низкая, но восстановление не подтверждено: {rejected}.")
+            if chart_count:
+                lines.extend(["", f"Ниже — графики для наблюдения: {chart_count}.",
+                              "Сначала фонды в зоне низких цен, затем ближайшие к ней."])
+            elif chart_count == 0:
+                lines.append("Графики недоступны: не удалось получить достаточную историю цен.")
+            if len(usable) < len(rows):
+                lines.append(f"Без оценки: {len(rows) - len(usable)} — недостаточно сопоставимых данных.")
+            lines.extend(["", "<i>На графиках — цена самого фонда за 3 месяца. Минимум периода не гарантирует дно.</i>"])
             lines.extend(["", BOT_NAME])
             return "\n".join(lines)
         EOF
@@ -2176,7 +2213,7 @@ jobs:
                     item.update(preopen_ticker='WCLD', premarket={'available': True, 'change': 1.0, 'time_ny': '09:15'},
                                 breadth_positive=3, breadth_total=4, local_market=False)
                 text = formatter.build_combined_radar_message([missing,row])
-                self.assertIn('подтверждено: 1', text)
+                self.assertIn('Вход по модели подтверждён: 1', text)
                 self.assertNotIn('Test', text)
 
             def test_fund_setup_is_independent_of_us_market(self):
@@ -2319,8 +2356,8 @@ jobs:
                 )
                 text = formatter.build_combined_radar_message(rows)
                 self.assertNotIn('TEST', text)
-                self.assertIn('не прогноз цены исполнения', text)
-                self.assertIn('подтверждено: 1', text)
+                self.assertIn('не гарантирует дно', text)
+                self.assertIn('Вход по модели подтверждён: 1', text)
                 self.assertNotIn('покупать', text.lower())
 
             def test_radar_uses_three_to_five_charts(self):
@@ -2339,8 +2376,9 @@ jobs:
                     row['entry_analysis']['candidate'] = False
                 self.assertEqual(len(formatter.selected_radar_rows(rows)), 3)
                 no_signal = formatter.build_combined_radar_message(rows)
-                self.assertIn('Сигналов входа нет', no_signal)
-                self.assertIn('ближайшие фонды для наблюдения', no_signal)
+                self.assertIn('Подтверждённого входа пока нет', no_signal)
+                self.assertNotIn('Сигналов:', no_signal)
+                self.assertNotIn('Отбор:', no_signal)
 
 
 
@@ -2415,6 +2453,27 @@ jobs:
                     session.post.assert_called_once()
                     self.assertTrue(session.post.call_args.args[0].endswith('/sendPhoto'))
                     self.assertTrue(session.post.call_args.kwargs['data'].is_multipart)
+
+
+        class NewsSelectionTests(unittest.IsolatedAsyncioTestCase):
+            async def test_sector_search_date_filter_and_translation_failure(self):
+                from datetime import datetime, timezone
+                now = int(datetime.now(timezone.utc).timestamp())
+                relevant = {'title': 'Solar manufacturers expand renewable power capacity',
+                            'providerPublishTime': now - 3600, 'link': 'https://example.com/solar'}
+                stale = dict(relevant, title='Solar manufacturers announced a new factory last year',
+                             providerPublishTime=now - 10 * 86400)
+                async def search(session, query):
+                    return [relevant, stale] if query == news.SECTOR_QUERIES['Clean'] else []
+                with patch.object(news, 'fetch_yahoo_news', side_effect=search), \
+                     patch.object(news, 'translate_to_russian', new=AsyncMock(return_value='')):
+                    result = await news.fetch_sector_news(None, 'FSLR', [], 'Clean')
+                self.assertEqual(len(result), 1)
+                self.assertEqual(result[0]['published'], relevant['providerPublishTime'])
+                self.assertTrue(result[0]['original'])
+                self.assertEqual(result[0]['url'], relevant['link'])
+                self.assertFalse(news.headline_matches('ai', 'retail sales rise'))
+                self.assertEqual(news.normalize_title('(TSLA)находится'), '(TSLA) находится')
 
 
         class NewsFormattingTests(unittest.TestCase):
