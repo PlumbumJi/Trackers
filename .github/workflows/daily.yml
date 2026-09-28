@@ -1,9 +1,17 @@
 name: Automated Market Analytics
 'on':
   schedule:
+  - cron: 20 8 * * *
+    timezone: Asia/Jerusalem
   - cron: 15 23 * * *
     timezone: Asia/Jerusalem
   workflow_dispatch:
+    inputs:
+      report_type:
+        description: Report to send
+        type: choice
+        default: market
+        options: [market, portfolio]
 permissions:
   contents: read
 concurrency:
@@ -14,6 +22,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+    - name: Select Report Type
+      id: report
+      env:
+        SCHEDULE: ${{ github.event.schedule }}
+        MANUAL_MODE: ${{ inputs.report_type }}
+      run: |
+        mode="${MANUAL_MODE:-market}"
+        if [[ "$SCHEDULE" == '20 8 * * *' ]]; then mode=portfolio; fi
+        echo "mode=$mode" >> "$GITHUB_OUTPUT"
+    - name: Restore Portfolio History
+      if: steps.report.outputs.mode == 'portfolio'
+      uses: actions/cache/restore@v5
+      with:
+        path: portfolio_snapshots.json
+        key: portfolio-v3-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: portfolio-v3-
     - name: Set up Python
       uses: actions/setup-python@v7
       with:
@@ -36,7 +60,7 @@ jobs:
         BOT_TOKEN = os.getenv("BOT_TOKEN")
         CHAT_ID = os.getenv("CHAT_ID")
         BOT_NAME = "@oil_tracker_pavel_bot"
-        BOT_VERSION = "evening-charts-v4-20260918"
+        BOT_VERSION = "v3"
         HTTP_TIMEOUT = 15
 
         HEADERS = {
@@ -1509,16 +1533,25 @@ jobs:
 
 
         def chart_caption(row):
-            marker, verdict, explanation = _radar_verdict(row)
+            marker, _, _ = _radar_verdict(row)
             entry = row["entry_analysis"]
-            lines = [f'{marker} {verdict}',
-                     f'Фонд: {entry["label"]} · день {format_percent(entry.get("daily"), 1)}']
+            if marker == "✅▲":
+                label = "вход подтверждён по модели"
+            elif entry.get("status_key") == "blocked":
+                label = "снижение продолжается"
+            elif marker == "🔻▼":
+                label = "база не подтверждает рост"
+            elif not entry.get("candidate"):
+                label = "вне зоны входа"
+            elif entry.get("status_key") == "forming":
+                label = "первое повышение цены"
+            else:
+                label = "ждём подтверждения"
+            lines = [f'{row.get("icon", "")} {row.get("short_eng", "")} · {row["fund_id"]}',
+                     f'{marker} Фонд {format_percent(entry.get("daily"), 1)} · {label}']
             market_label = "Израиль" if row.get("local_market") else "США"
-            lines.append(f'{market_label} {entry.get("proxy_ticker") or "—"}: день {format_percent(entry.get("base1"), 1)} · 5 сессий {format_percent(entry.get("base5"), 1)} · {_display_date(entry.get("base_date") or "")}')
-            total = int(row.get("breadth_total") or 0)
-            if total:
-                lines.append(f'Акции сектора: растут {row.get("breadth_positive", 0)}/{total} за ту же дату')
-            lines.append(f"Вывод: {explanation}")
+            lines.append(f'{market_label} {entry.get("proxy_ticker") or "—"}: день {format_percent(entry.get("base1"), 1)} · 5 сессий {format_percent(entry.get("base5"), 1)}')
+            lines.append(f'Даты: фонды {_display_date(entry.get("price_date") or "")} · {market_label} {_display_date(entry.get("base_date") or "")}.')
             return "\n".join(lines)
 
 
@@ -1643,8 +1676,9 @@ jobs:
             return chunks
 
 
-        async def send_to_telegram(text: str) -> None:
-            if not BOT_TOKEN or not CHAT_ID:
+        async def send_to_telegram(text: str, chat_id=None) -> None:
+            destination = chat_id or CHAT_ID
+            if not BOT_TOKEN or not destination:
                 raise RuntimeError("BOT_TOKEN or CHAT_ID is missing")
             url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
             chunks = split_message(text)
@@ -1653,7 +1687,7 @@ jobs:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 for index, chunk in enumerate(chunks, start=1):
                     payload = {
-                        "chat_id": CHAT_ID,
+                        "chat_id": destination,
                         "text": chunk,
                         "parse_mode": "HTML",
                         "disable_web_page_preview": True,
@@ -1673,22 +1707,33 @@ jobs:
             if not BOT_TOKEN or not CHAT_ID:
                 raise RuntimeError("BOT_TOKEN or CHAT_ID is missing")
             charts = charts[:3]
+            captions = [caption for _, caption in charts]
+            date_lines = [caption.splitlines()[-1] for caption in captions]
+            common_dates = len(set(date_lines)) == 1 and date_lines[0].startswith("Даты:")
+            if common_dates:
+                captions = [caption.rsplit("\n", 1)[0] for caption in captions]
+            album_caption = "✍️ К графикам\n\n" + "\n\n".join(captions)
+            if common_dates:
+                album_caption += "\n\n" + date_lines[0]
+            if len(album_caption.encode("utf-16-le")) // 2 > 1024:
+                raise ValueError("Album caption exceeds Telegram limit")
             payload = aiohttp.FormData()
             payload.add_field("chat_id", CHAT_ID)
             payload.add_field("disable_notification", "true")
             media = []
-            for index, (png, caption) in enumerate(charts):
-                if len(caption.encode("utf-16-le")) // 2 > 1024:
-                    raise ValueError("Chart caption exceeds Telegram limit")
+            for index, (png, _) in enumerate(charts):
                 attachment = f"chart{index}"
                 payload.add_field(attachment if len(charts) > 1 else "photo", png,
                                   filename=f"{attachment}.png", content_type="image/png")
-                media.append({"type": "photo", "media": f"attach://{attachment}", "caption": caption})
+                item = {"type": "photo", "media": f"attach://{attachment}"}
+                if index == 0:
+                    item["caption"] = album_caption
+                media.append(item)
             if len(charts) > 1:
                 payload.add_field("media", json.dumps(media, ensure_ascii=False))
                 method = "sendMediaGroup"
             else:
-                payload.add_field("caption", charts[0][1])
+                payload.add_field("caption", album_caption)
                 method = "sendPhoto"
             timeout = aiohttp.ClientTimeout(total=45)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -1862,7 +1907,163 @@ jobs:
 
 
         if __name__ == "__main__":
-            asyncio.run(run_market_analytics())
+            if os.getenv("RUN_MODE", "market") == "portfolio":
+                from modules.portfolio import run_portfolio
+                asyncio.run(run_portfolio())
+            else:
+                asyncio.run(run_market_analytics())
+        EOF
+
+        cat << 'EOF' > modules/portfolio.py
+        import asyncio
+        import json
+        import os
+        from datetime import datetime, date
+        from decimal import Decimal, ROUND_HALF_UP
+        from pathlib import Path
+        from zoneinfo import ZoneInfo
+        
+        import aiohttp
+        
+        from modules.market import fetch_bizportal_price_history, IL_CONCURRENCY, IL_REQUEST_TIMEOUT
+        from modules.telegram_sender import send_to_telegram
+        from modules.config import BOT_NAME
+        
+        # Quantities transcribed from the supplied portfolio screenshot; update after trades.
+        # Source quotes are in agorot: quantity * quote / 100 = value in ILS.
+        HOLDINGS = (
+            ('5103692', 'Meitav Sky · акции', '674'),
+            ('5132014', 'Ayalon · зелёная энергия Израиля', '754'),
+            ('5132303', 'Eylim · банки', '193'),
+            ('5134135', 'MTF · металлы и минералы', '1322'),
+            ('5137534', 'Eylim · AI', '442'),
+            ('5140983', 'Ayalon · страхование', '251'),
+        )
+        STATE = Path('portfolio_snapshots.json')
+        TZ = ZoneInfo('Asia/Jerusalem')
+        
+        
+        def money(value, signed=False):
+            value = Decimal(value).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            if value == 0:
+                value = abs(value)
+            return format(value, '+,.2f' if signed else ',.2f').replace(',', ' ')
+        
+        
+        def valid_points(history, today):
+            points = {}
+            for row in history:
+                try:
+                    day = date.fromisoformat(row['date'])
+                    price = Decimal(str(row['price']))
+                    if day <= today and price.is_finite() and price > 0:
+                        points[day.isoformat()] = str(price)
+                except (ValueError, KeyError, TypeError, ArithmeticError):
+                    continue
+            return sorted(points.items())
+        
+        
+        def build_report(histories, snapshots, now):
+            today = now.date()
+            previous_days = sorted(d for d in snapshots if d < today.isoformat())
+            previous_day = previous_days[-1] if previous_days else None
+            previous = snapshots.get(previous_day, {}) if previous_day else {}
+            lines = ['💼 <b>МОЙ ПОРТФЕЛЬ</b>', now.strftime('📅 %d.%m | %H:%M · Израиль')]
+            if previous_day:
+                lines.append('Сравнение с утром ' + date.fromisoformat(previous_day).strftime('%d.%m'))
+            else:
+                lines.append('Первый отчёт · изменение между последними публикациями')
+            current_snapshot = {}
+            total = change_total = base_total = Decimal(0)
+            valued = compared = 0
+            for fund_id, name, qty in HOLDINGS:
+                points = valid_points(histories.get(fund_id, []), today)
+                lines.extend(['', f'<b>{name}</b> · <code>{fund_id}</code>'])
+                if not points:
+                    lines.append('Цена недоступна · в итог не включён')
+                    continue
+                price_day, raw_price = points[-1]
+                old = previous.get(fund_id, {})
+                if old and price_day < old.get('date', ''):
+                    lines.append('Источник вернул более старую цену · расчёт пропущен')
+                    continue
+                price = Decimal(raw_price)
+                value = Decimal(qty) * price / 100
+                total += value
+                valued += 1
+                current_snapshot[fund_id] = {'date': price_day, 'price': raw_price, 'quantity': qty}
+                lines.append(f'{money(value)} ₪ · цена от {date.fromisoformat(price_day):%d.%m}')
+                baseline = None
+                if previous_day:
+                    if old.get('quantity') == qty:
+                        baseline = (old['date'], old['price'])
+                elif len(points) >= 2:
+                    baseline = points[-2]
+                if baseline:
+                    old_day, old_price = baseline
+                    old_value = Decimal(qty) * Decimal(old_price) / 100
+                    delta = value - old_value
+                    pct = delta / old_value * 100
+                    compared += 1
+                    base_total += old_value
+                    change_total += delta
+                    icon = '🟩▲' if delta > 0 else '🟥▼' if delta < 0 else '⬜•'
+                    lines.append(f'{icon} {money(delta, True)} ₪ ({money(pct, True)}%)')
+                    if price_day == old_day:
+                        lines.append('Новой даты цены нет' if delta == 0 else 'Цена пересмотрена источником')
+                    elif not previous_day:
+                        lines.append(f'К цене от {date.fromisoformat(old_day):%d.%m}')
+                else:
+                    lines.append('Нет сопоставимой прошлой оценки')
+            label = 'Итого' if valued == len(HOLDINGS) else f'Частичный итог ({valued}/{len(HOLDINGS)})'
+            lines.extend(['', f'<b>{label}: {money(total)} ₪</b>'])
+            if compared:
+                label = 'Изменение' if compared == len(HOLDINGS) else f'Изменение {compared}/{len(HOLDINGS)} позиций'
+                lines.append(f'{label}: {money(change_total, True)} ₪ ({money(change_total / base_total * 100, True)}%)')
+            lines.extend(['', 'Оценка по опубликованным ценам; количество паёв задано вручную.', BOT_NAME])
+            return '\n'.join(lines), current_snapshot
+        
+        
+        async def run_portfolio():
+            destination = os.getenv('PORTFOLIO_CHAT_ID')
+            dry_run = os.getenv('DRY_RUN', '').lower() == 'true'
+            if not destination and not dry_run:
+                raise RuntimeError('Set PORTFOLIO_CHAT_ID to your private Telegram chat ID')
+            now = datetime.now(TZ)
+            try:
+                snapshots = json.loads(STATE.read_text(encoding='utf-8'))
+                if not isinstance(snapshots, dict):
+                    raise ValueError('invalid portfolio snapshots')
+                # Validate cached baselines before using them for monetary comparisons.
+                for day, holdings in snapshots.items():
+                    date.fromisoformat(day)
+                    for row in holdings.values():
+                        date.fromisoformat(row['date'])
+                        p = Decimal(row['price'])
+                        if not p.is_finite() or p <= 0:
+                            raise ValueError('invalid baseline price')
+            except (OSError, ValueError, TypeError, KeyError, ArithmeticError, AttributeError):
+                snapshots = {}
+            limiter, denied = asyncio.Semaphore(IL_CONCURRENCY), asyncio.Event()
+            timeout = aiohttp.ClientTimeout(total=IL_REQUEST_TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                values = await asyncio.gather(*[
+                    fetch_bizportal_price_history(session, fid, limiter, denied)
+                    for fid, _, _ in HOLDINGS
+                ])
+            message, current = build_report(dict(zip((h[0] for h in HOLDINGS), values)), snapshots, now)
+            if dry_run:
+                print(message)
+                return
+            await send_to_telegram(message, chat_id=destination)
+            if not current:
+                raise RuntimeError('Portfolio prices unavailable; baseline was not updated')
+            # Repeated runs on the same date retain the previous morning as the baseline.
+            snapshots[now.date().isoformat()] = current
+            snapshots = {day: snapshots[day] for day in sorted(snapshots)[-14:]}
+            temporary = STATE.with_suffix('.tmp')
+            temporary.write_text(json.dumps(snapshots, ensure_ascii=False), encoding='utf-8')
+            temporary.replace(STATE)
         EOF
 
         cat << 'EOF' > tests/test_bot.py
@@ -2463,7 +2664,7 @@ jobs:
                 caption = chart_caption(row)
                 self.assertLess(len(caption.encode('utf-16-le'))//2, 1024)
                 self.assertNotIn(row['il_name_eng'], caption)
-                self.assertNotIn(row['fund_id'], caption)
+                self.assertIn(row['fund_id'], caption)
                 self.assertNotIn('Отбор', caption)
 
             async def test_photo_payload_and_window_guard(self):
@@ -2494,6 +2695,9 @@ jobs:
                     media = telegram_sender.json.loads(next(value for field, _, value in fields if field['name'] == 'media'))
                     self.assertEqual(len(media), 3)
                     self.assertEqual([item['media'] for item in media], ['attach://chart0', 'attach://chart1', 'attach://chart2'])
+                    self.assertEqual(sum('caption' in item for item in media), 1)
+                    for i in range(3):
+                        self.assertIn(f'Фонд {i}', media[0]['caption'])
 
 
         class NewsSelectionTests(unittest.IsolatedAsyncioTestCase):
@@ -2563,6 +2767,7 @@ jobs:
         set -euo pipefail
         pip install -r requirements.txt
     - name: Install Chromium Fallback
+      if: steps.report.outputs.mode == 'market'
       run: playwright install --with-deps chromium
     - name: Validate Generated Python
       run: python -m compileall -q modules main.py
@@ -2572,5 +2777,13 @@ jobs:
       env:
         BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         CHAT_ID: ${{ secrets.CHAT_ID }}
+        PORTFOLIO_CHAT_ID: ${{ secrets.PORTFOLIO_CHAT_ID }}
+        RUN_MODE: ${{ steps.report.outputs.mode }}
         PYTHONUNBUFFERED: '1'
       run: python main.py
+    - name: Save Portfolio History
+      if: success() && steps.report.outputs.mode == 'portfolio' && hashFiles('portfolio_snapshots.json') != ''
+      uses: actions/cache/save@v5
+      with:
+        path: portfolio_snapshots.json
+        key: portfolio-v3-${{ github.run_id }}-${{ github.run_attempt }}
