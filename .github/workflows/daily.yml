@@ -642,7 +642,12 @@ jobs:
                     if response.status in {401, 403, 429} or is_access_challenge(body):
                         print(f"⚠️ Bizportal history {fund_id}: access restricted (HTTP {response.status})")
                         return []
+                    if response.status != 200 or not body.strip():
+                        print(f"⚠️ Bizportal history {fund_id}: HTTP {response.status}, empty={not bool(body.strip())}")
+                        break
                     rows, pages = parse_bizportal_history_response(body)
+                    if pages == 0:
+                        print(f"⚠️ Bizportal history {fund_id}: unexpected response format, bytes={len(body)}")
                     print(f"📉 Bizportal history {fund_id}: page={page_number}/{pages}, rows={len(rows)}")
                     if not rows:
                         break
@@ -1925,9 +1930,12 @@ jobs:
         
         import aiohttp
         
-        from modules.market import fetch_bizportal_price_history, IL_CONCURRENCY, IL_REQUEST_TIMEOUT
+        from modules.market import (
+            fetch_bizportal_price_history, IL_CONCURRENCY, IL_REQUEST_TIMEOUT,
+            _FundHTML, _clean_text, parse_bizportal_page, is_access_challenge,
+        )
         from modules.telegram_sender import send_to_telegram
-        from modules.config import BOT_NAME
+        from modules.config import BOT_NAME, HEADERS
         
         # Quantities transcribed from the supplied portfolio screenshot; update after trades.
         # Source quotes are in agorot: quantity * quote / 100 = value in ILS.
@@ -1941,6 +1949,61 @@ jobs:
         )
         STATE = Path('portfolio_snapshots.json')
         TZ = ZoneInfo('Asia/Jerusalem')
+
+
+        def parse_portfolio_quote(html, fund_id):
+            # Reuse strict fund identity validation; never pick a fee or buy price.
+            general = parse_bizportal_page(html, fund_id)
+            if not general:
+                return {}
+            root = _FundHTML(html).root
+            for block in root.walk():
+                if block.attrs.get('id') != 'paper_change':
+                    continue
+                for cube in block.walk():
+                    if 'top-area-cube' not in cube.attrs.get('class', '').split():
+                        continue
+                    labels = [n for n in cube.walk() if 'label' in n.attrs.get('class', '').split()]
+                    nums = [n for n in cube.walk() if 'num' in n.attrs.get('class', '').split()]
+                    if not labels or not nums or _clean_text(labels[0].text()) != 'מחיר פדיון':
+                        continue
+                    try:
+                        price = Decimal(_clean_text(nums[0].text()).replace(',', '').replace(' ', ''))
+                        if not price.is_finite() or price <= 0:
+                            return {}
+                    except ArithmeticError:
+                        return {}
+                    day = None
+                    if general.get('update_date'):
+                        try:
+                            day = datetime.strptime(general['update_date'].replace('.', '/'), '%d/%m/%Y').date().isoformat()
+                        except ValueError:
+                            pass
+                    return {'price': str(price), 'date': day, 'daily': general.get('daily')}
+            return {}
+
+
+        async def fetch_portfolio_fund(session, fund_id, limiter, denied):
+            quote = {}
+            # Visiting the page also initializes the ordinary site's session before AJAX.
+            for page in ('generalview', 'performance'):
+                url = f'https://www.bizportal.co.il/mutualfunds/quote/{page}/{fund_id}'
+                try:
+                    async with limiter:
+                        async with session.get(url, headers=HEADERS) as response:
+                            body = await response.text(errors='ignore')
+                            status = response.status
+                    print(f'Portfolio page {fund_id} {page}: HTTP {status}, bytes={len(body)}')
+                    if status in {401, 403, 429} or is_access_challenge(body):
+                        return [], {}
+                    if status == 200:
+                        quote = parse_portfolio_quote(body, fund_id)
+                        if quote:
+                            break
+                except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+                    print(f'Portfolio page {fund_id}: {type(error).__name__}')
+            history = await fetch_bizportal_price_history(session, fund_id, limiter, denied)
+            return history, quote
         
         
         def money(value, signed=False):
@@ -1963,7 +2026,8 @@ jobs:
             return sorted(points.items())
         
         
-        def build_report(histories, snapshots, now):
+        def build_report(histories, snapshots, now, quotes=None):
+            quotes = quotes or {}
             today = now.date()
             previous_days = sorted(d for d in snapshots if d < today.isoformat())
             previous_day = previous_days[-1] if previous_days else None
@@ -1972,19 +2036,30 @@ jobs:
             if previous_day:
                 lines.append('Сравнение с утром ' + date.fromisoformat(previous_day).strftime('%d.%m'))
             else:
-                lines.append('Первый отчёт · изменение между последними публикациями')
+                lines.append('Первый отчёт · сохраняем начальную оценку')
             current_snapshot = {}
             total = change_total = base_total = Decimal(0)
             valued = compared = 0
             for fund_id, name, qty in HOLDINGS:
                 points = valid_points(histories.get(fund_id, []), today)
+                quote = quotes.get(fund_id) or {}
                 lines.extend(['', f'<b>{name}</b> · <code>{fund_id}</code>'])
-                if not points:
+                if not points and not quote:
                     lines.append('Цена недоступна · в итог не включён')
                     continue
-                price_day, raw_price = points[-1]
+                use_page = bool(quote) and (
+                    not points or (quote.get('date') and quote['date'] > points[-1][0])
+                    or (not quote.get('date') and Decimal(quote['price']) != Decimal(points[-1][1]))
+                )
+                if use_page:
+                    price_day, raw_price = quote.get('date'), quote['price']
+                else:
+                    price_day, raw_price = points[-1]
+                if price_day and price_day > today.isoformat():
+                    lines.append('Некорректная дата цены · расчёт пропущен')
+                    continue
                 old = previous.get(fund_id, {})
-                if old and price_day < old.get('date', ''):
+                if price_day and old.get('date') and price_day < old['date']:
                     lines.append('Источник вернул более старую цену · расчёт пропущен')
                     continue
                 price = Decimal(raw_price)
@@ -1992,12 +2067,13 @@ jobs:
                 total += value
                 valued += 1
                 current_snapshot[fund_id] = {'date': price_day, 'price': raw_price, 'quantity': qty}
-                lines.append(f'{money(value)} ₪ · цена от {date.fromisoformat(price_day):%d.%m}')
+                date_label = f'цена от {date.fromisoformat(price_day):%d.%m}' if price_day else 'дата цены не указана'
+                lines.append(f'{money(value)} ₪ · {date_label}')
                 baseline = None
                 if previous_day:
                     if old.get('quantity') == qty:
                         baseline = (old['date'], old['price'])
-                elif len(points) >= 2:
+                elif len(points) >= 2 and not use_page:
                     baseline = points[-2]
                 if baseline:
                     old_day, old_price = baseline
@@ -2009,12 +2085,20 @@ jobs:
                     change_total += delta
                     icon = '🟩▲' if delta > 0 else '🟥▼' if delta < 0 else '⬜•'
                     lines.append(f'{icon} {money(delta, True)} ₪ ({money(pct, True)}%)')
-                    if price_day == old_day:
+                    if price_day and price_day == old_day:
                         lines.append('Новой даты цены нет' if delta == 0 else 'Цена пересмотрена источником')
                     elif not previous_day:
                         lines.append(f'К цене от {date.fromisoformat(old_day):%d.%m}')
                 else:
-                    lines.append('Нет сопоставимой прошлой оценки')
+                    if quote.get('daily') is not None:
+                        lines.append(f"День по источнику: {money(Decimal(str(quote['daily'])), True)}%")
+                    lines.append('Сравнение в ₪ появится после сохранения следующего снимка')
+            if not valued:
+                return '\n'.join([
+                    '💼 <b>МОЙ ПОРТФЕЛЬ</b>', now.strftime('📅 %d.%m | %H:%M · Израиль'),
+                    '⚠️ Цены фондов временно недоступны.',
+                    'Стоимость не рассчитана. Предыдущий снимок сохранён.', BOT_NAME,
+                ]), {}
             label = 'Итого' if valued == len(HOLDINGS) else f'Частичный итог ({valued}/{len(HOLDINGS)})'
             lines.extend(['', f'<b>{label}: {money(total)} ₪</b>'])
             if compared:
@@ -2038,7 +2122,8 @@ jobs:
                 for day, holdings in snapshots.items():
                     date.fromisoformat(day)
                     for row in holdings.values():
-                        date.fromisoformat(row['date'])
+                        if row.get('date'):
+                            date.fromisoformat(row['date'])
                         p = Decimal(row['price'])
                         if not p.is_finite() or p <= 0:
                             raise ValueError('invalid baseline price')
@@ -2046,18 +2131,21 @@ jobs:
                 snapshots = {}
             limiter, denied = asyncio.Semaphore(IL_CONCURRENCY), asyncio.Event()
             timeout = aiohttp.ClientTimeout(total=IL_REQUEST_TIMEOUT)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
                 values = await asyncio.gather(*[
-                    fetch_bizportal_price_history(session, fid, limiter, denied)
+                    fetch_portfolio_fund(session, fid, limiter, denied)
                     for fid, _, _ in HOLDINGS
                 ])
-            message, current = build_report(dict(zip((h[0] for h in HOLDINGS), values)), snapshots, now)
+            histories = {holding[0]: result[0] for holding, result in zip(HOLDINGS, values)}
+            quotes = {holding[0]: result[1] for holding, result in zip(HOLDINGS, values)}
+            message, current = build_report(histories, snapshots, now, quotes)
             if dry_run:
                 print(message)
                 return
             await send_to_telegram(message, chat_id=destination)
             if not current:
-                raise RuntimeError('Portfolio prices unavailable; baseline was not updated')
+                print('::warning::Portfolio prices unavailable; baseline was not updated')
+                return
             # Repeated runs on the same date retain the previous morning as the baseline.
             snapshots[now.date().isoformat()] = current
             snapshots = {day: snapshots[day] for day in sorted(snapshots)[-14:]}
@@ -2757,6 +2845,55 @@ jobs:
                     'relatedTickers': ['CRWD'],
                 }
                 self.assertGreaterEqual(news.news_score(item, ['CRWD'], 'Cyber'), 35)
+
+
+        class PortfolioRegressionTests(unittest.IsolatedAsyncioTestCase):
+            def test_redemption_price_identity_and_missing_date(self):
+                from modules.portfolio import parse_portfolio_quote
+                html = page('5103692').replace(
+                    '<div id="paper_change">',
+                    '<div id="paper_change"><div class="top-area-cube">'
+                    '<div class="label">מחיר פדיון</div><div class="num">1,017.6</div></div>'
+                    '<div class="top-area-cube"><div class="label">מחיר קנייה</div>'
+                    '<div class="num">9999</div></div>')
+                quote = parse_portfolio_quote(html, '5103692')
+                self.assertEqual(quote['price'], '1017.6')
+                self.assertIsNone(quote['date'])
+                self.assertEqual(parse_portfolio_quote(html, '5132014'), {})
+
+            def test_missing_history_uses_quote_and_next_morning_comparison(self):
+                from modules.portfolio import build_report, HOLDINGS, TZ
+                from datetime import datetime
+                now = datetime(2026, 9, 28, 8, 20, tzinfo=TZ)
+                quotes = {h[0]: {'price': p, 'date': None} for h, p in zip(
+                    HOLDINGS, ['1017.6', '120.86', '383.27', '171.75', '207.5', '192.45'])}
+                text, saved = build_report({}, {}, now, quotes)
+                self.assertIn('12 180.35', text)
+                self.assertIn('дата цены не указана', text)
+                quotes['5103692']['price'] = '1018.6'
+                text, _ = build_report({}, {'2026-09-27': saved}, now, quotes)
+                self.assertIn('+6.74 ₪', text)
+                self.assertNotIn('Новой даты цены нет', text)
+                text, saved = build_report({}, {}, now)
+                self.assertEqual(saved, {})
+                self.assertNotIn('0.00', text)
+                self.assertNotIn('5103692', text)
+
+            async def test_outage_keeps_snapshot_without_raising(self):
+                from modules import portfolio
+                from pathlib import Path
+                import tempfile
+                with tempfile.TemporaryDirectory() as directory:
+                    state = Path(directory) / 'state.json'
+                    state.write_text('{}')
+                    with patch.object(portfolio, 'STATE', state), \
+                         patch.dict(portfolio.os.environ, {'PORTFOLIO_CHAT_ID': 'private', 'DRY_RUN': 'false'}), \
+                         patch.object(portfolio, 'fetch_portfolio_fund', new=AsyncMock(return_value=([], {}))), \
+                         patch.object(portfolio, 'send_to_telegram', new=AsyncMock()) as sender:
+                        await portfolio.run_portfolio()
+                        sender.assert_awaited_once()
+                        self.assertEqual(sender.call_args.kwargs['chat_id'], 'private')
+                        self.assertEqual(state.read_text(), '{}')
 
 
         if __name__ == '__main__':
