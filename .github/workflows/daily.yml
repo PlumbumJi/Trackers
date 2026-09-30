@@ -35,13 +35,22 @@ jobs:
       if: steps.report.outputs.mode == 'portfolio'
       uses: actions/cache/restore@v5
       with:
-        path: portfolio_snapshots.json
+        path: |
+          portfolio_snapshots.json
+          portfolio_signal_journal.json
         key: portfolio-v3-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: portfolio-v3-
     - name: Set up Python
       uses: actions/setup-python@v7
       with:
         python-version: '3.11'
+    - name: Restore Sector Analysis
+      if: steps.report.outputs.mode == 'portfolio'
+      uses: actions/cache/restore@v5
+      with:
+        path: portfolio_candidates.json
+        key: sector-analysis-v3-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: sector-analysis-v3-
     - name: Deploy Architecture Files
       shell: bash
       run: |
@@ -555,7 +564,6 @@ jobs:
             if len(window30) < 8 or len(window60) < 15:
                 return {}
             average30 = sum(price for _, price in window30) / len(window30)
-            average60 = sum(price for _, price in window60) / len(window60)
             minimum60 = min(price for _, price in window60)
             maximum60 = max(price for _, price in window60)
             prior_low = min(price for _, price in points[-6:-1])
@@ -578,34 +586,20 @@ jobs:
                 "chart_history": [{"date": day.isoformat(), "price": price} for day, price in points[-400:]],
                 "current_price": round(current, 2),
                 "price_date": last_day.isoformat(),
-                "average_30": round(average30, 2),
-                "average_60": round(average60, 2),
-                "minimum_60": round(minimum60, 2),
-                "maximum_60": round(maximum60, 2),
                 "below_average_30": round((current / average30 - 1.0) * 100.0, 2),
-                "to_average_30": round((average30 / current - 1.0) * 100.0, 2),
-                "to_average_60": round((average60 / current - 1.0) * 100.0, 2),
-                "from_low_60": round((current / minimum60 - 1.0) * 100.0, 2),
                 "from_high_60": round((current / maximum60 - 1.0) * 100.0, 2),
                 "range_position_60": range_position(current, minimum60, maximum60),
-                "at_minimum_60": current <= minimum60 * 1.001,
-                "observations_60": len(window60),
                 "coverage_60": covered60,
                 "history_daily": round(history_daily, 4),
                 "previous_daily": round(previous_daily, 4),
                 "new_low_5": current <= prior_low,
-                "history_change_5": round((current / points[-6][1] - 1.0) * 100.0, 2),
-                "period_start": period[0][0].isoformat(),
-                "period_end": last_day.isoformat(),
                 "period_days": (last_day - period[0][0]).days + 1,
-                "period_observations": len(period),
                 "period_average": round(period_average, 2),
                 "period_minimum": round(period_minimum, 2),
                 "period_maximum": round(period_maximum, 2),
                 "from_period_low": round((current / period_minimum - 1.0) * 100.0, 2),
                 "from_period_high": round((current / period_maximum - 1.0) * 100.0, 2),
                 "to_period_average": round((period_average / current - 1.0) * 100.0, 2),
-                "period_range_position": range_position(current, period_minimum, period_maximum),
             }
 
 
@@ -714,8 +708,8 @@ jobs:
             return results
 
 
-        async def fetch_ticker_year_history(session: aiohttp.ClientSession, ticker: str) -> list[dict]:
-            """Fetch three years of completed OHLCV candles for indicators and backtests."""
+        async def fetch_ticker_history(session: aiohttp.ClientSession, ticker: str) -> list[dict]:
+            """Fetch completed daily closes used for one- and five-session confirmation."""
             api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{api_ticker}?range=3mo&interval=1d"
             try:
@@ -726,34 +720,18 @@ jobs:
                     results = (await response.json()).get("chart", {}).get("result") or []
                     if not results:
                         return []
-                    chart = results[0]
-                    timestamps = chart.get("timestamp") or []
-                    quotes = chart.get("indicators", {}).get("quote") or []
-                    if not quotes:
-                        return []
-                    quote = quotes[0]
-                    opens = quote.get("open") or []
-                    highs = quote.get("high") or []
-                    lows = quote.get("low") or []
-                    closes = quote.get("close") or []
-                    volumes = quote.get("volume") or []
-                    size = min(len(timestamps), len(opens), len(highs), len(lows), len(closes))
-                    history = []
-                    for index in range(size):
-                        values = {
-                            "open": parse_optional_float(opens[index]),
-                            "high": parse_optional_float(highs[index]),
-                            "low": parse_optional_float(lows[index]),
-                            "close": parse_optional_float(closes[index]),
-                            "volume": parse_optional_float(volumes[index]) if index < len(volumes) else None,
-                        }
-                        if (
-                            timestamps[index] is None
-                            or any(values[key] is None for key in ("open", "high", "low", "close"))
-                            or min(values[key] for key in ("open", "high", "low", "close")) <= 0
-                        ):
-                            continue
-                        history.append({"timestamp": int(timestamps[index]), **values})
+                chart = results[0]
+                timestamps = chart.get("timestamp") or []
+                quotes = chart.get("indicators", {}).get("quote") or []
+                if not quotes:
+                    return []
+                closes = quotes[0].get("close") or []
+                history = []
+                for timestamp, raw_close in zip(timestamps, closes):
+                    close = parse_optional_float(raw_close)
+                    if timestamp is None or close is None or close <= 0:
+                        continue
+                    history.append({"timestamp": int(timestamp), "close": close})
                     regular = (chart.get("meta") or {}).get("currentTradingPeriod", {}).get("regular", {})
                     start, end = int(regular.get("start") or 0), int(regular.get("end") or 0)
                     now = int(datetime.now(timezone.utc).timestamp())
@@ -783,57 +761,33 @@ jobs:
             # The setup belongs to the fund; US data never creates or upgrades it here.
             stats = fund_data.get("price_stats") or {}
             keys = (
-                "current_price", "average_30", "average_60", "minimum_60", "maximum_60",
-                "below_average_30", "from_high_60", "from_low_60", "range_position_60",
-                "to_average_60", "history_daily", "previous_daily",
+                "below_average_30", "from_high_60", "range_position_60",
+                "history_daily", "previous_daily",
             )
             values = {key: parse_optional_float(stats.get(key)) for key in keys}
             if not stats.get("coverage_60") or any(v is None for v in values.values()):
-                return {"status_key": "unavailable", "candidate": False, "score": 0,
-                        "label": "Недостаточно истории фонда"}
+                return {"status_key": "unavailable", "candidate": False}
             daily = values["history_daily"]
             discounted = values["below_average_30"] <= -3
             low_zone = values["range_position_60"] <= 30
             pullback = values["from_high_60"] <= -3
             candidate = discounted and low_zone and pullback
             if not candidate:
-                status, label = "watch", "Цена вне зоны отбора"
+                status = "watch"
             elif daily <= 0 or stats.get("new_low_5"):
-                status, label = "blocked", "Снижение ещё не остановилось"
+                status = "blocked"
             elif values["previous_daily"] > 0:
-                status, label = "ready", "Два повышения цены подряд"
+                status = "ready"
             else:
-                status, label = "forming", "Первое повышение цены"
+                status = "forming"
             return {
-                **values,
-                "status_key": status, "label": label, "candidate": candidate,
-                "score": round(100 - values["range_position_60"]),
+                "status_key": status, "candidate": candidate,
+                "range_position_60": values["range_position_60"],
                 "daily": daily, "price_date": stats.get("price_date", ""),
-                "fund_change_5": stats.get("history_change_5"),
                 "base5": parse_optional_float(market_data.get("change_5d")),
                 "base1": parse_optional_float(market_data.get("change_1d")),
                 "base_date": market_data.get("market_date", ""),
                 "proxy_ticker": market_data.get("proxy_ticker", ""),
-            }
-
-
-        def us_session_state(now: Optional[datetime] = None) -> dict:
-            now_ny = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo("America/New_York"))
-            minutes = now_ny.hour * 60 + now_ny.minute
-            if now_ny.weekday() >= 5:
-                state = "closed"
-            elif 4 * 60 <= minutes < 9 * 60 + 30:
-                state = "premarket"
-            elif 9 * 60 + 30 <= minutes < 16 * 60:
-                state = "regular"
-            elif 16 * 60 <= minutes < 20 * 60:
-                state = "afterhours"
-            else:
-                state = "closed"
-            return {
-                "state": state,
-                "time_ny": now_ny.strftime("%d.%m.%Y %H:%M"),
-                "weekday": now_ny.weekday(),
             }
 
 
@@ -842,7 +796,7 @@ jobs:
             connector = aiohttp.TCPConnector(limit=8, limit_per_host=6, ttl_dns_cache=300)
             async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
                 tasks = {
-                    sector: asyncio.create_task(fetch_ticker_year_history(session, config["proxy_ticker"]))
+                    sector: asyncio.create_task(fetch_ticker_history(session, config["proxy_ticker"]))
                     for sector, config in sectors_config.items()
                     if config.get("proxy_ticker")
                 }
@@ -1144,21 +1098,16 @@ jobs:
             return f"+{number:.{digits}f}%" if number > 0 else f"{number:.{digits}f}%"
 
 
-        def _display_date(value: str, with_year: bool = False) -> str:
+        def _display_date(value: str) -> str:
             try:
                 parsed = date.fromisoformat(str(value))
             except ValueError:
                 return str(value or "—")
-            return parsed.strftime("%d.%m.%Y" if with_year else "%d.%m")
+            return parsed.strftime("%d.%m")
 
 
         def _fund_date(row: dict) -> str:
             return str((row.get("il_fund_data", {}).get("price_stats") or {}).get("price_date") or "")
-
-
-        def _comparison_fund_date(rows: list[dict]) -> str:
-            dates = [_fund_date(row) for row in rows if _fund_date(row)]
-            return max(set(dates), key=lambda value: (dates.count(value), value)) if dates else ""
 
 
         def _ranked_funds(rows: list[dict]) -> list[dict]:
@@ -1404,10 +1353,6 @@ jobs:
         def radar_chart_target(rows: list[dict]) -> int:
             usable = rank_radar_rows(rows)
             return min(len(usable), 3)
-
-
-        def selected_radar_rows(rows: list[dict]) -> list[dict]:
-            return ordered_radar_rows(rows)[:radar_chart_target(rows)]
 
 
         def build_combined_radar_message(rows: list[dict], chart_count=None) -> str:
@@ -1769,11 +1714,6 @@ jobs:
         from modules.telegram_sender import send_to_telegram, send_chart_photos
         from modules.charts import build_radar_charts
 
-
-
-
-
-
         async def run_market_analytics() -> None:
             print(f"Build: {BOT_VERSION}; commit={os.getenv('GITHUB_SHA', 'local')[:12]}")
             all_tickers = sorted(
@@ -1873,12 +1813,7 @@ jobs:
                     if price_date and price_date != comparison_fund_date:
                         row["entry_analysis"] = {
                             "status_key": "unavailable",
-                            "label": "Данные фонда устарели",
-                            "score": 0,
                             "candidate": False,
-                            "reasons": [
-                                f"NAV фонда от {price_date}; сопоставимая дата {comparison_fund_date}"
-                            ],
                         }
 
             results.sort(
@@ -1897,6 +1832,13 @@ jobs:
                 await send_to_telegram(message)
             if not has_il_data:
                 raise RuntimeError("IL data failure: no daily fund returns")
+            if not dry_run:
+                import json
+                from datetime import datetime, timezone
+                from pathlib import Path
+                Path('portfolio_candidates.json').write_text(json.dumps({
+                    'generated_at': datetime.now(timezone.utc).isoformat(), 'rows': results,
+                }, ensure_ascii=False), encoding='utf-8')
             charts = build_radar_charts(results, "charts" if dry_run else None)
             radar = build_combined_radar_message(results, chart_count=len(charts))
             if radar:
@@ -1917,6 +1859,344 @@ jobs:
                 asyncio.run(run_portfolio())
             else:
                 asyncio.run(run_market_analytics())
+        EOF
+
+        cat << 'EOF' > modules/portfolio_insights.py
+        """Deterministic portfolio rules, not a forecast of six-month returns."""
+        import asyncio
+        import json
+        import math
+        import re
+        import statistics
+        from datetime import date, datetime, timedelta
+        from html import escape
+        from pathlib import Path
+        
+        from modules.market import _FundHTML, _clean_text, fetch_ticker_history, analyze_year_history
+        from modules.news import fetch_yahoo_news, normalize_title, translate_to_russian, shorten_title, LOW_VALUE_PHRASES
+        
+        ICONS = {'5103692': '📊', '5132014': '🌱', '5132303': '🏦',
+                 '5134135': '⛏️', '5137534': '🤖', '5140983': '🛡️'}
+        HORIZON_MONTHS = 6
+        MAX_DRAWDOWN = 10
+        MAX_SIGNAL_AGE_DAYS = 4  # Conservative calendar-age gate; holidays may suppress signals.
+        CONCENTRATION_LIMIT = 35  # Model policy; not the user's loss limit.
+        RISK_PER_IDEA = 0.005
+        MAX_TOTAL_ACTIVE_RISK = 0.02
+        MAX_NEW_POSITION_WEIGHT = 0.15
+        CANDIDATES_FILE = Path('portfolio_candidates.json')
+        JOURNAL_FILE = Path('portfolio_signal_journal.json')
+        # Exact issuer names in the source holdings table; never scan arbitrary page text.
+        ISSUERS = {'NVIDIA CORP': 'NVDA', 'MICROSOFT CORP': 'MSFT',
+                   'ALPHABET INC-CL C': 'GOOG', 'META PLATFORMS INC-CLASS A': 'META',
+                   'AMAZON.COM INC': 'AMZN', 'BROADCOM INC': 'AVGO',
+                   'לאומי': 'LUMI.TA', 'פועלים': 'POLI.TA', 'דיסקונט': 'DSCT.TA',
+                   'מזרחי טפחות': 'MZTF.TA', 'בינלאומי': 'FIBI.TA'}
+        # Same-sector, same-geography research pairs, not equivalent portfolios.
+        RESEARCH_PAIRS = {'5132303': {'5139183'}, '5137534': {'5140744'}}
+
+
+        def relevant_event(title, keyword):
+            lower = title.lower()
+            if any(p in lower for p in (*LOW_VALUE_PHRASES, 'cramer', 'crypto', 'bitcoin',
+                                       'token', 'recommends', 'versus', 'should you', 'buy now')):
+                return False
+            entity = re.search(r'(?<!\w)' + re.escape(keyword) + r'(?!\w)', title, re.I)
+            event = re.search(r'\b(earnings|revenue|guidance|forecast|contract|acquisition|'
+                              r'acquires|merger|dividend|buyback|launches|lawsuit|regulator|'
+                              r'approval|approved|downgrade|upgrade)\b|דוחות|רווח|הכנסות|דיבידנד|רכישה', lower)
+            return bool(entity and event)
+        
+        
+        def holdings_from_page(html):
+            root = _FundHTML(html).root
+            result = []
+            for table in root.walk('table'):
+                if 'שם נייר' not in _clean_text(table.text()):
+                    continue
+                for row in table.walk('tr'):
+                    cells = list(row.walk('td'))
+                    if len(cells) < 2:
+                        continue
+                    name = _clean_text(cells[0].text())
+                    try:
+                        weight = float(_clean_text(cells[1].text()).replace('%', '').replace(',', ''))
+                    except ValueError:
+                        continue
+                    if math.isfinite(weight) and weight > 0 and name in ISSUERS:
+                        result.append((weight, ISSUERS[name], name))
+            return [{'ticker': t, 'name': n, 'weight': w} for w, t, n in sorted(set(result), reverse=True)[:4]]
+        
+        
+        def assess(history, now, current_price=None, current_date=None, external=None):
+            missing = {'status': 'missing', 'line': '⬜• Ждать данных · истории недостаточно'}
+            points = {}
+            for row in history:
+                try:
+                    day, price = date.fromisoformat(row['date']), float(row['price'])
+                    if day <= now.date() and price > 0 and math.isfinite(price):
+                        points[day] = price
+                except (ValueError, TypeError, KeyError):
+                    continue
+            points = sorted(points.items())
+            if len(points) < 15:
+                return missing
+            last_day, price = points[-1]
+            if current_date is None or (current_price is not None and abs(price - float(current_price)) > .001):
+                return dict(missing, line='⬜• Ждать данных · цена и история не согласованы')
+            window = [(d, p) for d, p in points if d >= last_day - timedelta(days=89)]
+            closes = [p for _, p in window]
+            avg30 = statistics.mean(p for d, p in window if d >= last_day - timedelta(days=29))
+            span = (window[-1][0] - window[0][0]).days + 1
+            missing['stats'] = (f'От макс. {span}д {(price / max(closes) - 1) * 100:+.1f}% · '
+                                f'к средней 30д {(price / avg30 - 1) * 100:+.1f}%')
+            if str(last_day) != current_date or (now.date() - last_day).days > MAX_SIGNAL_AGE_DAYS:
+                return dict(missing, line=f'⬜• Ждать обновления · история от {last_day:%d.%m}')
+            if len(points) < 50 or (points[-1][0] - points[0][0]).days < 59:
+                return missing
+            ema = points[0][1]
+            emas = []
+            for _, p in points:
+                ema += (p - ema) * 2 / 51
+                emas.append(ema)
+            drawdown = (price / max(closes) - 1) * 100
+            discount = (price / avg30 - 1) * 100
+            returns = [closes[i] / closes[i - 1] - 1 for i in range(1, len(closes))]
+            volatility = statistics.stdev(returns)
+            change20 = (price / points[-21][1] - 1) * 100
+            uptrend = price > ema and emas[-1] > emas[-6]
+            downtrend = price < ema and emas[-1] < emas[-6] and change20 <= -5
+            two_rises = price > points[-2][1] > points[-3][1]
+            ema50 = emas[-1]
+            cancel_price = min(p for _, p in points[-20:]) * .99
+            risk_pct = max(0.0, (price - cancel_price) / price * 100)
+            support = external or {}
+            base_ok = support.get('confirmed', False)
+            if downtrend and drawdown <= -10:
+                status, line = 'reduce', '🔻▼ Рассмотреть сокращение · устойчивое снижение'
+            elif not uptrend and price <= points[-2][1]:
+                status, line = 'wait', '⚠️→ Не докупать · ждать разворота и роста активов'
+            elif (uptrend and discount <= -3 and drawdown <= -3 and two_rises and base_ok
+                  and 2 <= risk_pct <= 12):
+                status, line = 'add', '✅▲ Рассмотреть докупку · откат и восстановление подтверждены'
+            elif uptrend:
+                status, line = 'hold', '🟩▲ Держать · восходящий тренд, докупка не подтверждена'
+            else:
+                status, line = 'watch', '⚠️→ Наблюдать · ждать устойчивого роста фонда'
+            days = (window[-1][0] - window[0][0]).days + 1
+            return {'status': status, 'line': line, 'drawdown': drawdown, 'discount': discount,
+                    'volatility': volatility, 'date': str(last_day), 'price': price,
+                    'ema50': ema50, 'cancel_price': cancel_price, 'risk_pct': risk_pct,
+                    'stats': f'От макс. {days}д {drawdown:+.1f}% · к средней 30д {discount:+.1f}%'}
+
+
+        def trade_plan(fund_id, analysis, portfolio_value, position_value, risk):
+            if analysis.get('status') == 'add':
+                if risk.get('breached'):
+                    return {'allowed': False, 'line': '⚠️ Покупка заблокирована · просадка портфеля достигла 10%'}
+                if risk.get('concentrated') and risk.get('largest') == fund_id:
+                    return {'allowed': False, 'line': '⚠️ Покупка заблокирована · позиция уже чрезмерно велика'}
+                if risk.get('active_signal_risk', 0) >= MAX_TOTAL_ACTIVE_RISK:
+                    return {'allowed': False, 'line': '⚠️ Покупка заблокирована · общий бюджет риска исчерпан'}
+                risk_pct = float(analysis.get('risk_pct') or 0)
+                if not 2 <= risk_pct <= 12:
+                    return {'allowed': False, 'line': '⚠️ Покупка заблокирована · риск входа вне модели'}
+                risk_budget = portfolio_value * RISK_PER_IDEA
+                by_risk = risk_budget / (risk_pct / 100)
+                room = max(0.0, portfolio_value * MAX_NEW_POSITION_WEIGHT - position_value)
+                amount = min(by_risk, room)
+                if amount < 100:
+                    return {'allowed': False, 'line': '⚠️ Покупка заблокирована · лимит позиции исчерпан'}
+                return {'allowed': True, 'amount': amount,
+                        'line': f'План: до {amount:.0f} ₪ · отмена ниже {analysis["cancel_price"]:.2f}',
+                        'cancel_price': analysis['cancel_price']}
+            if analysis.get('status') == 'reduce':
+                return {'allowed': True, 'line': f'План: не докупать · пересмотреть позицию на ближайшем доступном NAV'}
+            return {'allowed': False, 'line': ''}
+
+
+        def load_journal():
+            try:
+                journal = json.loads(JOURNAL_FILE.read_text(encoding='utf-8'))
+                if not isinstance(journal, dict) or not isinstance(journal.get('signals'), list):
+                    raise ValueError('invalid journal')
+                return journal
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                return {'signals': []}
+
+
+        def update_journal(journal, analyses, plans, current, now):
+            signals = journal.setdefault('signals', [])
+            today = now.date().isoformat()
+            by_fund = {signal.get('fund_id'): signal for signal in signals
+                       if signal.get('kind') == 'entry' and signal.get('state') == 'open'}
+            for fund_id, signal in list(by_fund.items()):
+                row = current.get(fund_id)
+                if not row:
+                    continue
+                price = float(row['price'])
+                entry = float(signal['entry_price'])
+                change = (price / entry - 1) * 100
+                signal['last_date'], signal['last_price'] = row.get('date') or today, price
+                signal['best_pct'] = max(float(signal.get('best_pct', change)), change)
+                signal['worst_pct'] = min(float(signal.get('worst_pct', change)), change)
+                horizon = date.fromisoformat(signal['horizon_date'])
+                reason = None
+                if price <= float(signal['cancel_price']):
+                    reason = 'отмена сценария'
+                elif analyses.get(fund_id, {}).get('status') == 'reduce':
+                    reason = 'тренд ухудшился'
+                elif now.date() >= horizon:
+                    reason = '6 месяцев'
+                if reason:
+                    signal.update(state='closed', close_date=today, close_price=price,
+                                  return_pct=round(change, 2), close_reason=reason)
+            for fund_id, analysis in analyses.items():
+                plan = plans.get(fund_id, {})
+                if analysis.get('status') == 'add' and plan.get('allowed') and fund_id not in by_fund:
+                    signals.append({
+                        'id': f'{today}:{fund_id}:entry', 'kind': 'entry', 'state': 'open',
+                        'fund_id': fund_id, 'entry_date': today, 'entry_price': analysis['price'],
+                        'suggested_amount': round(plan['amount'], 2),
+                        'risk_budget_pct': RISK_PER_IDEA * 100,
+                        'cancel_price': round(plan['cancel_price'], 2),
+                        'horizon_date': (now.date() + timedelta(days=183)).isoformat(),
+                        'best_pct': 0.0, 'worst_pct': 0.0,
+                    })
+                if analysis.get('status') == 'reduce':
+                    signal_id = f'{today}:{fund_id}:reduce'
+                    if not any(s.get('id') == signal_id for s in signals):
+                        signals.append({'id': signal_id, 'kind': 'reduce', 'state': 'recorded',
+                                        'fund_id': fund_id, 'date': today,
+                                        'price': analysis.get('price')})
+            journal['signals'] = signals[-500:]
+            return journal
+
+
+        def journal_summary(journal):
+            entries = [s for s in journal.get('signals', []) if s.get('kind') == 'entry']
+            active = sum(s.get('state') == 'open' for s in entries)
+            closed = [s for s in entries if s.get('state') == 'closed' and s.get('return_pct') is not None]
+            if not closed:
+                return f'📒 Журнал: проверяются {active} · завершённых сигналов нет'
+            wins = sum(float(s['return_pct']) > 0 for s in closed)
+            average = statistics.mean(float(s['return_pct']) for s in closed)
+            worst = min(float(s.get('worst_pct', 0)) for s in closed)
+            return (f'📒 Журнал: {wins}/{len(closed)} прибыльных · сред. {average:+.1f}% · '
+                    f'худшая просадка {worst:.1f}% · активных {active}')
+        
+        
+        async def collect_context(session, quotes, now):
+            drivers = {x['ticker']: x for q in quotes.values() for x in q.get('drivers', [])}
+            limiter = asyncio.Semaphore(4)
+            async def load(ticker):
+                async with limiter:
+                    return analyze_year_history(await fetch_ticker_history(session, ticker), ticker)
+            histories = dict(zip(drivers, await asyncio.gather(*(load(t) for t in drivers))))
+            contexts = {}
+            for fid, quote in quotes.items():
+                basket = [(d, histories.get(d['ticker'], {})) for d in quote.get('drivers', [])]
+                basket = [(d, h) for d, h in basket if h.get('market_date') and
+                          0 <= (now.date() - date.fromisoformat(h['market_date'])).days <= MAX_SIGNAL_AGE_DAYS]
+                if not basket:
+                    contexts[fid] = {}
+                    continue
+                day = max(h['market_date'] for _, h in basket)
+                basket = [(d, h) for d, h in basket if h['market_date'] == day]
+                positive = sum(h['change_1d'] > 0 and h['change_5d'] > 0 for _, h in basket)
+                contexts[fid] = {'confirmed': len(basket) >= 2 and positive * 2 >= len(basket),
+                                 'line': f'Активы: рост дня и 5 сессий {positive}/{len(basket)} · {day[8:10]}.{day[5:7]}'}
+            # Direct company headlines only. News is context, never proof of causation.
+            news = []
+            async def headline(ticker):
+                async with limiter:
+                    return ticker, await fetch_yahoo_news(session, ticker)
+            batches = await asyncio.gather(*(headline(t) for t in list(drivers)[:8]))
+            for ticker, items in batches:
+                name = drivers[ticker]['name']
+                keyword = name.split()[0] if not ticker.endswith('.TA') else name
+                for item in items:
+                    title = normalize_title(item.get('title'))
+                    try:
+                        timestamp = int(item.get('providerPublishTime') or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    age = now.timestamp() - timestamp
+                    if not 0 <= age <= 48 * 3600 or not item.get('link', '').startswith('https://'):
+                        continue
+                    if not relevant_event(title, keyword):
+                        continue
+                    news.append((timestamp, title, item['link']))
+            unique = list(dict.fromkeys(sorted(news, reverse=True)))[:2]
+            lines = []
+            for timestamp, title, url in unique:
+                translated = await translate_to_russian(session, title)
+                text = shorten_title(translated or title, 120)
+                lines.append(f'📰 <a href="{escape(url, quote=True)}">{escape(text)}</a> · '
+                             f'{datetime.fromtimestamp(timestamp, now.tzinfo):%d.%m}')
+            return contexts, lines
+        
+        
+        def risk_summary(current, snapshots, now):
+            if len(current) != 6:
+                return {'line': '🛡 Риск: оценка неполная · порог 10%', 'breached': True}
+            quantities = {fid: r['quantity'] for fid, r in current.items()}
+            def total(rows):
+                return sum(float(r['quantity']) * float(r['price']) / 100 for r in rows.values())
+            value = total(current)
+            comparable = []
+            for day in sorted(snapshots, reverse=True):
+                if day >= str(now.date()):
+                    continue
+                if date.fromisoformat(day) < now.date() - timedelta(days=183):
+                    break
+                rows = snapshots[day]
+                if set(rows) != set(quantities):
+                    continue  # A data outage must not reset the portfolio risk baseline.
+                if {fid: r.get('quantity') for fid, r in rows.items()} != quantities:
+                    break  # A changed position starts a new comparable tracking segment.
+                comparable.append((day, total(rows)))
+            peak = max([value] + [v for _, v in comparable])
+            drawdown = (value / peak - 1) * 100
+            fid = max(current, key=lambda f: total({f: current[f]}))
+            weight = total({fid: current[fid]}) / value * 100
+            line = f'🛡 {fid}: {weight:.1f}% портфеля'
+            if comparable:
+                line += f' · от пика снимков {drawdown:.1f}% / порог −10%'
+            else:
+                line += ' · контроль просадки начат (порог 10%)'
+            breached = drawdown <= -MAX_DRAWDOWN
+            if breached:
+                line += '\n🔻 Порог риска достигнут: пересмотреть позиции; докупки отложить.'
+            return {'line': line, 'breached': breached, 'largest': fid,
+                    'largest_value': total({fid: current[fid]}),
+                    'concentrated': weight > CONCENTRATION_LIMIT}
+        
+        
+        def comparison_lines(analyses, now):
+            try:
+                payload = json.loads(CANDIDATES_FILE.read_text())
+                age = now.timestamp() - datetime.fromisoformat(payload['generated_at']).timestamp()
+                if not 0 <= age <= 48 * 3600:
+                    return []
+                rows = payload['rows']
+            except (OSError, ValueError, KeyError, TypeError):
+                return []
+            from modules.formatter import _radar_verdict
+            for fid, own in analyses.items():
+                if own['status'] != 'reduce':
+                    continue
+                for row in rows:
+                    if row.get('fund_id') not in RESEARCH_PAIRS.get(fid, set()):
+                        continue
+                    stats = row.get('il_fund_data', {}).get('price_stats', {})
+                    candidate = assess(stats.get('chart_history', []), now, stats.get('current_price'), stats.get('price_date'))
+                    if (candidate['status'] == 'hold' and _radar_verdict(row)[0] == '✅▲'
+                            and candidate['date'] == own.get('date')
+                            and candidate['volatility'] < own['volatility'] * .9):
+                        return [f'🔄 Сравнить {fid} → {row["fund_id"]}: восстановление, колебания ниже.',
+                                'Кандидат для замены; состав, налоги и результат после продажи требуют проверки.']
+            return []
         EOF
 
         cat << 'EOF' > modules/portfolio.py
@@ -1999,6 +2279,8 @@ jobs:
                     if status == 200:
                         quote = parse_portfolio_quote(body, fund_id)
                         if quote:
+                            from modules.portfolio_insights import holdings_from_page
+                            quote['drivers'] = holdings_from_page(body)
                             break
                 except (aiohttp.ClientError, asyncio.TimeoutError) as error:
                     print(f'Portfolio page {fund_id}: {type(error).__name__}')
@@ -2026,15 +2308,23 @@ jobs:
             return sorted(points.items())
         
         
-        def build_report(histories, snapshots, now, quotes=None):
+        def build_report(histories, snapshots, now, quotes=None, contexts=None, news_lines=None, journal=None):
+            from modules.portfolio_insights import (
+                ICONS, assess, risk_summary, comparison_lines, trade_plan,
+                update_journal, journal_summary,
+            )
             quotes = quotes or {}
+            contexts = contexts or {}
+            journal = journal or {'signals': []}
+            analyses = {}
+            position_values = {}
             today = now.date()
             previous_days = sorted(d for d in snapshots if d < today.isoformat())
             previous_day = previous_days[-1] if previous_days else None
             previous = snapshots.get(previous_day, {}) if previous_day else {}
             lines = ['💼 <b>МОЙ ПОРТФЕЛЬ</b>', now.strftime('📅 %d.%m | %H:%M · Израиль')]
             if previous_day:
-                lines.append('Сравнение с утром ' + date.fromisoformat(previous_day).strftime('%d.%m'))
+                lines.append('С прошлого отчёта · ' + date.fromisoformat(previous_day).strftime('%d.%m'))
             else:
                 lines.append('Первый отчёт · сохраняем начальную оценку')
             current_snapshot = {}
@@ -2043,7 +2333,7 @@ jobs:
             for fund_id, name, qty in HOLDINGS:
                 points = valid_points(histories.get(fund_id, []), today)
                 quote = quotes.get(fund_id) or {}
-                lines.extend(['', f'<b>{name}</b> · <code>{fund_id}</code>'])
+                lines.extend(['', f'{ICONS.get(fund_id, "📊")} <b>{name}</b> · <code>{fund_id}</code>'])
                 if not points and not quote:
                     lines.append('Цена недоступна · в итог не включён')
                     continue
@@ -2067,6 +2357,7 @@ jobs:
                 total += value
                 valued += 1
                 current_snapshot[fund_id] = {'date': price_day, 'price': raw_price, 'quantity': qty}
+                position_values[fund_id] = float(value)
                 date_label = f'цена от {date.fromisoformat(price_day):%d.%m}' if price_day else 'дата цены не указана'
                 lines.append(f'{money(value)} ₪ · {date_label}')
                 baseline = None
@@ -2086,26 +2377,65 @@ jobs:
                     icon = '🟩▲' if delta > 0 else '🟥▼' if delta < 0 else '⬜•'
                     lines.append(f'{icon} {money(delta, True)} ₪ ({money(pct, True)}%)')
                     if price_day and price_day == old_day:
-                        lines.append('Новой даты цены нет' if delta == 0 else 'Цена пересмотрена источником')
+                        lines.append('Цена без обновления' if delta == 0 else 'Цена пересмотрена источником')
                     elif not previous_day:
                         lines.append(f'К цене от {date.fromisoformat(old_day):%d.%m}')
                 else:
                     if quote.get('daily') is not None:
                         lines.append(f"День по источнику: {money(Decimal(str(quote['daily'])), True)}%")
                     lines.append('Сравнение в ₪ появится после сохранения следующего снимка')
+                analysis = assess(histories.get(fund_id, []), now, price, price_day, contexts.get(fund_id))
+                analyses[fund_id] = analysis
+                lines.append(analysis['line'])
+                if analysis.get('stats'):
+                    lines.append(analysis['stats'])
+                if contexts.get(fund_id, {}).get('line') and analysis['status'] in {'add', 'watch', 'reduce'}:
+                    lines.append(contexts[fund_id]['line'])
+                lines.append(f'__PLAN_{fund_id}__')
             if not valued:
                 return '\n'.join([
                     '💼 <b>МОЙ ПОРТФЕЛЬ</b>', now.strftime('📅 %d.%m | %H:%M · Израиль'),
                     '⚠️ Цены фондов временно недоступны.',
                     'Стоимость не рассчитана. Предыдущий снимок сохранён.', BOT_NAME,
-                ]), {}
+                ]), {}, journal
             label = 'Итого' if valued == len(HOLDINGS) else f'Частичный итог ({valued}/{len(HOLDINGS)})'
-            lines.extend(['', f'<b>{label}: {money(total)} ₪</b>'])
-            if compared:
+            totals = [f'<b>{label}: {money(total)} ₪</b>']
+            if compared and previous_day:
                 label = 'Изменение' if compared == len(HOLDINGS) else f'Изменение {compared}/{len(HOLDINGS)} позиций'
-                lines.append(f'{label}: {money(change_total, True)} ₪ ({money(change_total / base_total * 100, True)}%)')
-            lines.extend(['', 'Оценка по опубликованным ценам; количество паёв задано вручную.', BOT_NAME])
-            return '\n'.join(lines), current_snapshot
+                totals.append(f'{label}: {money(change_total, True)} ₪ ({money(change_total / base_total * 100, True)}%)')
+            lines[2:2] = totals
+            risk = risk_summary(current_snapshot, snapshots, now)
+            active_risk = sum(
+                float(signal.get('risk_budget_pct', RISK_PER_IDEA * 100)) / 100
+                for signal in journal.get('signals', [])
+                if signal.get('kind') == 'entry' and signal.get('state') == 'open'
+            )
+            plans = {}
+            for fid, analysis in analyses.items():
+                risk['active_signal_risk'] = active_risk
+                plans[fid] = trade_plan(fid, analysis, float(total), position_values.get(fid, 0), risk)
+                if analysis.get('status') == 'add' and plans[fid].get('allowed'):
+                    active_risk += RISK_PER_IDEA
+            for fid, analysis in analyses.items():
+                if analysis['status'] == 'add' and (risk['breached'] or (risk.get('concentrated') and risk.get('largest') == fid)):
+                    index = next(i for i, line in enumerate(lines) if f'<code>{fid}</code>' in line)
+                    for j in range(index + 1, len(lines)):
+                        if lines[j] == analysis['line']:
+                            lines[j] = '⚠️→ Не увеличивать позицию · ограничение риска портфеля'
+                            break
+                marker = f'__PLAN_{fid}__'
+                marker_index = lines.index(marker)
+                plan_line = plans[fid].get('line', '')
+                if plan_line:
+                    lines[marker_index] = plan_line
+                else:
+                    lines.pop(marker_index)
+            journal = update_journal(journal, analyses, plans, current_snapshot, now)
+            if news_lines:
+                lines.extend(['', '📰 <b>Контекст активов</b>', *news_lines[:2]])
+            lines.extend(['', *comparison_lines(analyses, now), risk['line'], journal_summary(journal)])
+            lines.extend(['', 'Модель · горизонт 6м · сделки без комиссии · налог не рассчитан.', BOT_NAME])
+            return '\n'.join(lines), current_snapshot, journal
         
         
         async def run_portfolio():
@@ -2129,6 +2459,8 @@ jobs:
                             raise ValueError('invalid baseline price')
             except (OSError, ValueError, TypeError, KeyError, ArithmeticError, AttributeError):
                 snapshots = {}
+            from modules.portfolio_insights import load_journal, JOURNAL_FILE
+            journal = load_journal()
             limiter, denied = asyncio.Semaphore(IL_CONCURRENCY), asyncio.Event()
             timeout = aiohttp.ClientTimeout(total=IL_REQUEST_TIMEOUT)
             async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
@@ -2138,7 +2470,16 @@ jobs:
                 ])
             histories = {holding[0]: result[0] for holding, result in zip(HOLDINGS, values)}
             quotes = {holding[0]: result[1] for holding, result in zip(HOLDINGS, values)}
-            message, current = build_report(histories, snapshots, now, quotes)
+            from modules.portfolio_insights import collect_context
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+                try:
+                    contexts, news_lines = await collect_context(session, quotes, now)
+                except Exception as error:
+                    print(f'Portfolio context unavailable: {type(error).__name__}')
+                    contexts, news_lines = {}, []
+            message, current, journal = build_report(
+                histories, snapshots, now, quotes, contexts, news_lines, journal
+            )
             if dry_run:
                 print(message)
                 return
@@ -2148,10 +2489,13 @@ jobs:
                 return
             # Repeated runs on the same date retain the previous morning as the baseline.
             snapshots[now.date().isoformat()] = current
-            snapshots = {day: snapshots[day] for day in sorted(snapshots)[-14:]}
+            snapshots = {day: snapshots[day] for day in sorted(snapshots)[-200:]}
             temporary = STATE.with_suffix('.tmp')
             temporary.write_text(json.dumps(snapshots, ensure_ascii=False), encoding='utf-8')
             temporary.replace(STATE)
+            journal_temporary = JOURNAL_FILE.with_suffix('.tmp')
+            journal_temporary.write_text(json.dumps(journal, ensure_ascii=False), encoding='utf-8')
+            journal_temporary.replace(JOURNAL_FILE)
         EOF
 
         cat << 'EOF' > tests/test_bot.py
@@ -2222,8 +2566,7 @@ jobs:
                 ]
                 stats = market.calculate_price_stats(history)
                 self.assertEqual(stats["current_price"], 86.2)
-                self.assertEqual(stats["observations_60"], 60)
-                self.assertTrue(stats["at_minimum_60"])
+                self.assertTrue(stats["coverage_60"])
                 self.assertEqual(stats["period_days"], 70)
                 self.assertLess(stats["from_high_60"], 0)
                 self.assertEqual(stats["range_position_60"], 0.0)
@@ -2237,7 +2580,6 @@ jobs:
                 ]
                 stats = market.calculate_price_stats(history)
                 self.assertEqual(stats["period_days"], 365)
-                self.assertEqual(stats["period_observations"], 365)
                 self.assertGreater(stats["period_maximum"], stats["period_minimum"])
 
             def test_price_stats_reject_too_short_history(self):
@@ -2427,54 +2769,34 @@ jobs:
                 self.assertEqual(market.analyze_year_history(history, "TEST")["change_5d"], 5.0)
                 self.assertEqual(market.analyze_year_history(history[:5], "TEST"), {})
 
-            def test_session_window_uses_new_york_time(self):
-                from datetime import datetime, timezone
-                inside = market.us_session_state(datetime(2026, 9, 14, 13, 15, tzinfo=timezone.utc))
-                outside = market.us_session_state(datetime(2026, 9, 14, 14, 0, tzinfo=timezone.utc))
-                self.assertEqual(inside["state"], "premarket")
-                self.assertEqual(outside["state"], "regular")
-
-
         class RadarTests(unittest.TestCase):
             @staticmethod
             def fund(daily=1.0, below=-10.0):
                 current = 90.0 if below < 0 else 104.0
-                average = current / (1.0 + below / 100.0)
                 minimum60, maximum60 = 88.0, 120.0
                 return {
                     "daily": daily,
                     "price_stats": {
-                        "current_price": current, "average_30": average, "average_60": 102.0,
-                        "minimum_60": minimum60, "maximum_60": maximum60,
+                        "current_price": current,
                         "below_average_30": below,
-                        "to_average_30": (average / current - 1.0) * 100.0,
-                        "to_average_60": (102.0 / current - 1.0) * 100.0,
-                        "from_low_60": (current / minimum60 - 1.0) * 100.0,
                         "from_high_60": (current / maximum60 - 1.0) * 100.0,
                         "range_position_60": (current - minimum60) / (maximum60 - minimum60) * 100.0,
-                        "at_minimum_60": False, "price_date": "2026-09-05",
+                        "price_date": "2026-09-05",
                         "coverage_60": True, "history_daily": daily, "previous_daily": daily,
-                        "new_low_5": daily <= 0, "history_change_5": daily * 3,
+                        "new_low_5": daily <= 0,
                         "period_days": 365, "period_minimum": 80.0,
                         "period_average": 105.0, "period_maximum": 130.0,
                         "from_period_low": (current / 80.0 - 1.0) * 100.0,
                         "from_period_high": (current / 130.0 - 1.0) * 100.0,
                         "to_period_average": (105.0 / current - 1.0) * 100.0,
-                        "backtest_wins": 2, "backtest_total": 3,
                     },
                 }
 
             @staticmethod
-            def technical(trend='up', setup='pullback', change5=1.0, rr=2.0, total=12):
+            def technical(change1=1.0, change5=1.0):
                 return {
-                    'proxy_ticker': 'TEST', 'proxy_price': 100.0,
-                    'trend_key': trend, 'setup_type': setup,
-                    'rsi14': 39.0, 'atr14': 2.0, 'atr_percent': 2.0,
-                    'risk_reward': rr, 'target': 106.0, 'stop': 97.0,
-                    'change_1d': 1.0, 'change_5d': change5, 'change_20d': 3.0, 'volume_ratio': 1.1,
-                    'backtest_wins': 7, 'backtest_losses': 3,
-                    'backtest_timeouts': 2, 'backtest_total': total,
-                    'backtest_horizon': 10,
+                    'proxy_ticker': 'TEST', 'market_date': '2026-09-05',
+                    'change_1d': change1, 'change_5d': change5,
                 }
 
             def test_missing_data_not_wait_signal(self):
@@ -2485,8 +2807,7 @@ jobs:
                 row = {
                     'entry_analysis': market.analyze_entry_zone({}, {}),
                     'il_fund_data': {}, 'icon': '☁️', 'il_name_eng': 'Test',
-                    'short_eng': 'Cloud', 'preopen_ticker': 'WCLD',
-                    'premarket': {}, 'local_market': False,
+                    'short_eng': 'Cloud', 'local_market': False,
                 }
                 text = formatter.build_combined_radar_message([row])
                 self.assertEqual(text, "")
@@ -2496,20 +2817,19 @@ jobs:
                 row = {'entry_analysis':signal, 'il_fund_data':{'daily':1}, 'icon':'☁️', 'il_name_eng':'Test', 'short_eng':'Cloud', 'year_analysis':{}}
                 missing = dict(row, entry_analysis=market.analyze_entry_zone({}, {}))
                 for item in (missing, row):
-                    item.update(preopen_ticker='WCLD', premarket={'available': True, 'change': 1.0, 'time_ny': '09:15'},
-                                breadth_positive=3, breadth_total=4, local_market=False)
+                    item.update(breadth_positive=3, breadth_total=4, local_market=False)
                 text = formatter.build_combined_radar_message([missing,row])
                 self.assertIn('Вход по модели подтверждён: 1', text)
                 self.assertNotIn('Test', text)
 
             def test_fund_setup_is_independent_of_us_market(self):
-                for trend in ("up", "down"):
-                    with self.subTest(trend=trend):
+                for market_changes in ((1.0, 1.0), (-1.0, -1.0)):
+                    with self.subTest(market_changes=market_changes):
                         self.assertEqual(market.analyze_entry_zone(
-                            self.fund(daily=-1), self.technical(trend=trend)
+                            self.fund(daily=-1), self.technical(*market_changes)
                         )["status_key"], "blocked")
                         self.assertEqual(market.analyze_entry_zone(
-                            self.fund(), self.technical(trend=trend)
+                            self.fund(), self.technical(*market_changes)
                         )["status_key"], "ready")
                 self.assertEqual(market.analyze_entry_zone(self.fund(), {})["status_key"], "ready")
 
@@ -2528,8 +2848,7 @@ jobs:
                         elif scenario == "short_history":
                             stats["coverage_60"] = False
                         entry = market.analyze_entry_zone(data, self.technical())
-                        row = {"entry_analysis": entry, "premarket": {"available": True, "change": 1},
-                               "breadth_total": 3, "breadth_positive": 2}
+                        row = {"entry_analysis": entry, "breadth_total": 3, "breadth_positive": 2}
                         marker = formatter._radar_verdict(row)[0]
                         self.assertEqual(marker == "✅▲", scenario == "ready")
                         row["entry_analysis"]["base1"] = -1
@@ -2608,11 +2927,6 @@ jobs:
                 self.assertNotIn('Ориентир', text)
                 self.assertNotIn('восходящий тренд', text)
 
-            def test_comparison_date_uses_modal_nav_date(self):
-                rows = self.rows()
-                rows[0]['il_fund_data']['price_stats']['price_date'] = '2026-09-04'
-                self.assertEqual(formatter._comparison_fund_date(rows), '2026-09-05')
-
             def test_missing_fund_history_date_does_not_break_report(self):
                 rows = self.rows()
                 rows[0]['il_fund_data']['price_stats'].pop('price_date')
@@ -2648,22 +2962,9 @@ jobs:
                 text = formatter.build_telegram_message(rows)
                 self.assertNotIn(f"<b>{rows[0]['short_eng']}</b> · база", text)
 
-            def test_small_backtest_sample_is_not_presented_as_success_rate(self):
-                rows = self.rows()
-                for row in rows:
-                    row['entry_analysis']['backtest_total'] = 3
-                    row['entry_analysis']['backtest_wins'] = 2
-                    row.update(preopen_ticker='TEST', premarket={'available':True, 'change':1.0, 'time_ny':'09:15'},
-                               breadth_positive=1, breadth_total=1)
-                text = formatter.build_combined_radar_message(rows)
-                self.assertNotIn('История базы:', text)
-                self.assertNotIn('2/3 возвратов', text)
-
             def test_radar_message_is_explicitly_non_predictive(self):
                 rows = [{
                     'icon':'🛢️', 'short_eng':'Oil', 'local_market':False,
-                    'preopen_ticker':'USO',
-                    'premarket':{'available':True, 'change':1.2, 'time_ny':'09:15'},
                     'breadth_positive':3, 'breadth_total':4,
                 }]
                 rows[0].update(
@@ -2680,17 +2981,20 @@ jobs:
                 rows = self.rows()
                 for row in rows:
                     row.update(
-                        premarket={'available': True, 'change': 1.0, 'time_ny': '09:15'},
                         breadth_positive=2, breadth_total=3,
                     )
                 text = formatter.build_combined_radar_message(rows)
                 self.assertNotIn('План базы:', text)
                 self.assertNotIn('60д: мин', text)
                 self.assertNotIn('От макс.', text)
-                self.assertEqual(len(formatter.selected_radar_rows(rows)), 3)
+                self.assertEqual(
+                    len(formatter.ordered_radar_rows(rows)[:formatter.radar_chart_target(rows)]), 3
+                )
                 for row in rows:
                     row['entry_analysis']['candidate'] = False
-                self.assertEqual(len(formatter.selected_radar_rows(rows)), 3)
+                self.assertEqual(
+                    len(formatter.ordered_radar_rows(rows)[:formatter.radar_chart_target(rows)]), 3
+                )
                 no_signal = formatter.build_combined_radar_message(rows)
                 self.assertEqual(no_signal, '')
                 self.assertNotIn('Сигналов:', no_signal)
@@ -2847,6 +3151,69 @@ jobs:
                 self.assertGreaterEqual(news.news_score(item, ['CRWD'], 'Cyber'), 35)
 
 
+        class PortfolioInsightsTests(unittest.TestCase):
+            def test_falling_and_stale_funds_cannot_trigger_buy(self):
+                from modules.portfolio_insights import assess
+                from datetime import datetime, timedelta
+                now = datetime(2026, 9, 29)
+                history = [{'date': str((now - timedelta(days=89-i)).date()), 'price': 200-i}
+                           for i in range(90)]
+                result = assess(history, now, 111, '2026-09-29', {'confirmed': True})
+                self.assertEqual(result['status'], 'reduce')
+                self.assertEqual(assess(history, now + timedelta(days=5), 111, '2026-09-29')['status'], 'missing')
+                self.assertEqual(assess(history, now, 115, '2026-09-29')['status'], 'missing')
+
+            def test_drawdown_is_portfolio_peak_and_resets_after_quantity_change(self):
+                from modules.portfolio_insights import risk_summary
+                from datetime import datetime
+                old = {str(i): {'quantity': '10', 'price': '100'} for i in range(6)}
+                current = {str(i): {'quantity': '10', 'price': '89'} for i in range(6)}
+                result = risk_summary(current, {'2026-09-28': old}, datetime(2026, 9, 29))
+                self.assertTrue(result['breached'])
+                current['0']['quantity'] = '9'
+                self.assertFalse(risk_summary(current, {'2026-09-28': old}, datetime(2026, 9, 29))['breached'])
+
+            def test_holdings_confirmation_ignores_mentions_outside_table(self):
+                from modules.portfolio_insights import holdings_from_page, relevant_event
+                html = '<p>NVIDIA CORP</p><table><tr><th>שם נייר</th><th>%</th></tr>'
+                html += '<tr><td>MICROSOFT CORP</td><td>3.5</td></tr></table>'
+                self.assertEqual([r['ticker'] for r in holdings_from_page(html)], ['MSFT'])
+                self.assertFalse(relevant_event('HBAR Crypto rally: Nvidia AI link', 'NVIDIA'))
+                self.assertFalse(relevant_event('Cramer recommends Meta after earnings', 'META'))
+                self.assertTrue(relevant_event('Microsoft raises revenue forecast', 'MICROSOFT'))
+
+            def test_position_size_uses_risk_budget_and_portfolio_limits(self):
+                from modules.portfolio_insights import trade_plan
+                analysis = {'status': 'add', 'risk_pct': 5, 'cancel_price': 95}
+                risk = {'breached': False, 'concentrated': False, 'largest': 'other'}
+                plan = trade_plan('fund', analysis, 12_000, 500, risk)
+                self.assertTrue(plan['allowed'])
+                self.assertAlmostEqual(plan['amount'], 1200)
+                self.assertIn('отмена ниже 95.00', plan['line'])
+                risk['breached'] = True
+                self.assertFalse(trade_plan('fund', analysis, 12_000, 500, risk)['allowed'])
+                risk.update(breached=False, active_signal_risk=.02)
+                self.assertIn('общий бюджет риска', trade_plan('fund', analysis, 12_000, 500, risk)['line'])
+
+            def test_signal_journal_is_forward_only_and_not_duplicated(self):
+                from modules.portfolio_insights import update_journal, journal_summary
+                from datetime import datetime
+                analysis = {'status': 'add', 'price': 100}
+                plan = {'allowed': True, 'amount': 1000, 'cancel_price': 95}
+                current = {'fund': {'price': '100', 'date': '2026-09-29'}}
+                journal = update_journal({'signals': []}, {'fund': analysis}, {'fund': plan}, current,
+                                         datetime(2026, 9, 29))
+                journal = update_journal(journal, {'fund': analysis}, {'fund': plan}, current,
+                                         datetime(2026, 9, 29))
+                self.assertEqual(len(journal['signals']), 1)
+                current['fund']['price'] = '94'
+                journal = update_journal(journal, {'fund': {'status': 'wait'}}, {'fund': {}}, current,
+                                         datetime(2026, 10, 1))
+                self.assertEqual(journal['signals'][0]['state'], 'closed')
+                self.assertEqual(journal['signals'][0]['close_reason'], 'отмена сценария')
+                self.assertIn('0/1 прибыльных', journal_summary(journal))
+
+
         class PortfolioRegressionTests(unittest.IsolatedAsyncioTestCase):
             def test_redemption_price_identity_and_missing_date(self):
                 from modules.portfolio import parse_portfolio_quote
@@ -2867,14 +3234,14 @@ jobs:
                 now = datetime(2026, 9, 28, 8, 20, tzinfo=TZ)
                 quotes = {h[0]: {'price': p, 'date': None} for h, p in zip(
                     HOLDINGS, ['1017.6', '120.86', '383.27', '171.75', '207.5', '192.45'])}
-                text, saved = build_report({}, {}, now, quotes)
+                text, saved, _ = build_report({}, {}, now, quotes)
                 self.assertIn('12 180.35', text)
                 self.assertIn('дата цены не указана', text)
                 quotes['5103692']['price'] = '1018.6'
-                text, _ = build_report({}, {'2026-09-27': saved}, now, quotes)
+                text, _, _ = build_report({}, {'2026-09-27': saved}, now, quotes)
                 self.assertIn('+6.74 ₪', text)
                 self.assertNotIn('Новой даты цены нет', text)
-                text, saved = build_report({}, {}, now)
+                text, saved, _ = build_report({}, {}, now)
                 self.assertEqual(saved, {})
                 self.assertNotIn('0.00', text)
                 self.assertNotIn('5103692', text)
@@ -2922,5 +3289,13 @@ jobs:
       if: success() && steps.report.outputs.mode == 'portfolio' && hashFiles('portfolio_snapshots.json') != ''
       uses: actions/cache/save@v5
       with:
-        path: portfolio_snapshots.json
+        path: |
+          portfolio_snapshots.json
+          portfolio_signal_journal.json
         key: portfolio-v3-${{ github.run_id }}-${{ github.run_attempt }}
+    - name: Save Sector Analysis
+      if: success() && steps.report.outputs.mode == 'market' && hashFiles('portfolio_candidates.json') != ''
+      uses: actions/cache/save@v5
+      with:
+        path: portfolio_candidates.json
+        key: sector-analysis-v3-${{ github.run_id }}-${{ github.run_attempt }}
