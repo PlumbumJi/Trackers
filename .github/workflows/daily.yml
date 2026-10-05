@@ -1866,14 +1866,11 @@ jobs:
         import asyncio
         import json
         import math
-        import re
         import statistics
         from datetime import date, datetime, timedelta
-        from html import escape
         from pathlib import Path
         
         from modules.market import _FundHTML, _clean_text, fetch_ticker_history, analyze_year_history
-        from modules.news import fetch_yahoo_news, normalize_title, translate_to_russian, shorten_title, LOW_VALUE_PHRASES
         
         ICONS = {'5103692': '📊', '5132014': '🌱', '5132303': '🏦',
                  '5134135': '⛏️', '5137534': '🤖', '5140983': '🛡️'}
@@ -1894,18 +1891,6 @@ jobs:
                    'מזרחי טפחות': 'MZTF.TA', 'בינלאומי': 'FIBI.TA'}
         # Same-sector, same-geography research pairs, not equivalent portfolios.
         RESEARCH_PAIRS = {'5132303': {'5139183'}, '5137534': {'5140744'}}
-
-
-        def relevant_event(title, keyword):
-            lower = title.lower()
-            if any(p in lower for p in (*LOW_VALUE_PHRASES, 'cramer', 'crypto', 'bitcoin',
-                                       'token', 'recommends', 'versus', 'should you', 'buy now')):
-                return False
-            entity = re.search(r'(?<!\w)' + re.escape(keyword) + r'(?!\w)', title, re.I)
-            event = re.search(r'\b(earnings|revenue|guidance|forecast|contract|acquisition|'
-                              r'acquires|merger|dividend|buyback|launches|lawsuit|regulator|'
-                              r'approval|approved|downgrade|upgrade)\b|דוחות|רווח|הכנסות|דיבידנד|רכישה', lower)
-            return bool(entity and event)
         
         
         def holdings_from_page(html):
@@ -1940,7 +1925,7 @@ jobs:
                     continue
             points = sorted(points.items())
             if len(points) < 15:
-                return missing
+                return dict(missing, line=f'⬜• Без сигнала · цен {len(points)}/50')
             last_day, price = points[-1]
             if current_date is None or (current_price is not None and abs(price - float(current_price)) > .001):
                 return dict(missing, line='⬜• Ждать данных · цена и история не согласованы')
@@ -1952,8 +1937,10 @@ jobs:
                                 f'к средней 30д {(price / avg30 - 1) * 100:+.1f}%')
             if str(last_day) != current_date or (now.date() - last_day).days > MAX_SIGNAL_AGE_DAYS:
                 return dict(missing, line=f'⬜• Ждать обновления · история от {last_day:%d.%m}')
-            if len(points) < 50 or (points[-1][0] - points[0][0]).days < 59:
-                return missing
+            if len(points) < 50:
+                return dict(missing, line=f'⬜• Без сигнала · цен {len(points)}/50')
+            if (points[-1][0] - points[0][0]).days < 59:
+                return dict(missing, line='⬜• Без сигнала · история короче 60 дней')
             ema = points[0][1]
             emas = []
             for _, p in points:
@@ -1988,8 +1975,8 @@ jobs:
                     'volatility': volatility, 'date': str(last_day), 'price': price,
                     'ema50': ema50, 'cancel_price': cancel_price, 'risk_pct': risk_pct,
                     'stats': f'От макс. {days}д {drawdown:+.1f}% · к средней 30д {discount:+.1f}%'}
-
-
+        
+        
         def trade_plan(fund_id, analysis, portfolio_value, position_value, risk):
             if analysis.get('status') == 'add':
                 if risk.get('breached'):
@@ -2013,8 +2000,8 @@ jobs:
             if analysis.get('status') == 'reduce':
                 return {'allowed': True, 'line': f'План: не докупать · пересмотреть позицию на ближайшем доступном NAV'}
             return {'allowed': False, 'line': ''}
-
-
+        
+        
         def load_journal():
             try:
                 journal = json.loads(JOURNAL_FILE.read_text(encoding='utf-8'))
@@ -2023,8 +2010,8 @@ jobs:
                 return journal
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 return {'signals': []}
-
-
+        
+        
         def update_journal(journal, analyses, plans, current, now):
             signals = journal.setdefault('signals', [])
             today = now.date().isoformat()
@@ -2071,8 +2058,8 @@ jobs:
                                         'price': analysis.get('price')})
             journal['signals'] = signals[-500:]
             return journal
-
-
+        
+        
         def journal_summary(journal):
             entries = [s for s in journal.get('signals', []) if s.get('kind') == 'entry']
             active = sum(s.get('state') == 'open' for s in entries)
@@ -2106,35 +2093,7 @@ jobs:
                 positive = sum(h['change_1d'] > 0 and h['change_5d'] > 0 for _, h in basket)
                 contexts[fid] = {'confirmed': len(basket) >= 2 and positive * 2 >= len(basket),
                                  'line': f'Активы: рост дня и 5 сессий {positive}/{len(basket)} · {day[8:10]}.{day[5:7]}'}
-            # Direct company headlines only. News is context, never proof of causation.
-            news = []
-            async def headline(ticker):
-                async with limiter:
-                    return ticker, await fetch_yahoo_news(session, ticker)
-            batches = await asyncio.gather(*(headline(t) for t in list(drivers)[:8]))
-            for ticker, items in batches:
-                name = drivers[ticker]['name']
-                keyword = name.split()[0] if not ticker.endswith('.TA') else name
-                for item in items:
-                    title = normalize_title(item.get('title'))
-                    try:
-                        timestamp = int(item.get('providerPublishTime') or 0)
-                    except (TypeError, ValueError):
-                        continue
-                    age = now.timestamp() - timestamp
-                    if not 0 <= age <= 48 * 3600 or not item.get('link', '').startswith('https://'):
-                        continue
-                    if not relevant_event(title, keyword):
-                        continue
-                    news.append((timestamp, title, item['link']))
-            unique = list(dict.fromkeys(sorted(news, reverse=True)))[:2]
-            lines = []
-            for timestamp, title, url in unique:
-                translated = await translate_to_russian(session, title)
-                text = shorten_title(translated or title, 120)
-                lines.append(f'📰 <a href="{escape(url, quote=True)}">{escape(text)}</a> · '
-                             f'{datetime.fromtimestamp(timestamp, now.tzinfo):%d.%m}')
-            return contexts, lines
+            return contexts
         
         
         def risk_summary(current, snapshots, now):
@@ -2227,10 +2186,21 @@ jobs:
             ('5137534', 'Eylim · AI', '442'),
             ('5140983', 'Ayalon · страхование', '251'),
         )
+        # Acquisition basis inferred from the bank screenshot dated 2026-10-05:
+        # displayed market value minus displayed accumulated P/L (rounded bank amounts).
+        # Update BOTH quantity and basis after any trade; never infer trades from price changes.
+        PURCHASE_BASIS = {
+            '5103692': ('674', '6774.37'),
+            '5132014': ('754', '1272.98'),
+            '5132303': ('193', '796.99'),
+            '5134135': ('1322', '2296.98'),
+            '5137534': ('442', '824.64'),
+            '5140983': ('251', '405.29'),
+        }
         STATE = Path('portfolio_snapshots.json')
         TZ = ZoneInfo('Asia/Jerusalem')
-
-
+        
+        
         def parse_portfolio_quote(html, fund_id):
             # Reuse strict fund identity validation; never pick a fee or buy price.
             general = parse_bizportal_page(html, fund_id)
@@ -2261,8 +2231,8 @@ jobs:
                             pass
                     return {'price': str(price), 'date': day, 'daily': general.get('daily')}
             return {}
-
-
+        
+        
         async def fetch_portfolio_fund(session, fund_id, limiter, denied):
             quote = {}
             # Visiting the page also initializes the ordinary site's session before AJAX.
@@ -2308,133 +2278,151 @@ jobs:
             return sorted(points.items())
         
         
-        def build_report(histories, snapshots, now, quotes=None, contexts=None, news_lines=None, journal=None):
+        def signed_result(delta, base):
+            marker = '🟩▲' if delta > 0 else '🟥▼' if delta < 0 else '⬜•'
+            return f'{marker} {money(delta, True)} ₪ ({money(delta / base * 100, True)}%)'
+        
+        
+        def daily_result(points, price_day, price, quantity, quote):
+            """Use two source observations, never the previous bot snapshot."""
+            if not price_day or len(points) < 2:
+                return None
+            if points[-1][0] != price_day or Decimal(points[-1][1]) != price:
+                return None
+            old_day, old_price = points[-2]
+            # A long gap is not called a daily move; no extrapolation from missing NAVs.
+            if not 0 < (date.fromisoformat(price_day) - date.fromisoformat(old_day)).days <= 7:
+                return None
+            old_price = Decimal(old_price)
+            pct = (price / old_price - 1) * 100
+            # When supplied for the same date, the source's daily return must agree.
+            if quote.get('date') == price_day and quote.get('daily') is not None:
+                published_pct = Decimal(str(quote['daily']))
+                if not published_pct.is_finite() or abs(pct - published_pct) > Decimal('0.10'):
+                    return None
+            base = quantity * old_price / 100
+            return {'delta': quantity * (price - old_price) / 100, 'base': base,
+                    'start': old_day, 'end': price_day}
+        
+        
+        def build_report(histories, snapshots, now, quotes=None, contexts=None, journal=None):
             from modules.portfolio_insights import (
                 ICONS, assess, risk_summary, comparison_lines, trade_plan,
-                update_journal, journal_summary,
+                update_journal, journal_summary, RISK_PER_IDEA,
             )
-            quotes = quotes or {}
-            contexts = contexts or {}
-            journal = journal or {'signals': []}
-            analyses = {}
-            position_values = {}
+            quotes, contexts = quotes or {}, contexts or {}
+            journal = journal if journal is not None else {'signals': []}
             today = now.date()
             previous_days = sorted(d for d in snapshots if d < today.isoformat())
-            previous_day = previous_days[-1] if previous_days else None
-            previous = snapshots.get(previous_day, {}) if previous_day else {}
-            lines = ['💼 <b>МОЙ ПОРТФЕЛЬ</b>', now.strftime('📅 %d.%m | %H:%M · Израиль')]
-            if previous_day:
-                lines.append('С прошлого отчёта · ' + date.fromisoformat(previous_day).strftime('%d.%m'))
-            else:
-                lines.append('Первый отчёт · сохраняем начальную оценку')
-            current_snapshot = {}
-            total = change_total = base_total = Decimal(0)
-            valued = compared = 0
+            previous = snapshots[previous_days[-1]] if previous_days else {}
+            analyses, position_values, current_snapshot, cards, daily_moves = {}, {}, {}, [], []
+            total = cost_total = pnl_total = Decimal(0)
+            cost_count = 0
             for fund_id, name, qty in HOLDINGS:
+                quantity = Decimal(qty)
                 points = valid_points(histories.get(fund_id, []), today)
                 quote = quotes.get(fund_id) or {}
-                lines.extend(['', f'{ICONS.get(fund_id, "📊")} <b>{name}</b> · <code>{fund_id}</code>'])
+                card = [f'{ICONS.get(fund_id, "📊")} <b>{name}</b> · <code>{fund_id}</code>']
+                cards.append((fund_id, card))
                 if not points and not quote:
-                    lines.append('Цена недоступна · в итог не включён')
+                    card.append('⬜• Цена недоступна · в итог не включён')
                     continue
+                # Prefer the page on equal dates; a disagreement disables the signal.
                 use_page = bool(quote) and (
-                    not points or (quote.get('date') and quote['date'] > points[-1][0])
+                    not points or (quote.get('date') and quote['date'] >= points[-1][0])
                     or (not quote.get('date') and Decimal(quote['price']) != Decimal(points[-1][1]))
                 )
-                if use_page:
-                    price_day, raw_price = quote.get('date'), quote['price']
-                else:
-                    price_day, raw_price = points[-1]
-                if price_day and price_day > today.isoformat():
-                    lines.append('Некорректная дата цены · расчёт пропущен')
-                    continue
+                price_day, raw_price = (quote.get('date'), quote['price']) if use_page else points[-1]
                 old = previous.get(fund_id, {})
-                if price_day and old.get('date') and price_day < old['date']:
-                    lines.append('Источник вернул более старую цену · расчёт пропущен')
+                if price_day and (price_day > today.isoformat() or
+                                  (old.get('date') and price_day < old['date'])):
+                    card.append('⬜• Дата цены некорректна · расчёт пропущен')
                     continue
                 price = Decimal(raw_price)
-                value = Decimal(qty) * price / 100
+                value = quantity * price / 100
                 total += value
-                valued += 1
-                current_snapshot[fund_id] = {'date': price_day, 'price': raw_price, 'quantity': qty}
                 position_values[fund_id] = float(value)
-                date_label = f'цена от {date.fromisoformat(price_day):%d.%m}' if price_day else 'дата цены не указана'
-                lines.append(f'{money(value)} ₪ · {date_label}')
-                baseline = None
-                if previous_day:
-                    if old.get('quantity') == qty:
-                        baseline = (old['date'], old['price'])
-                elif len(points) >= 2 and not use_page:
-                    baseline = points[-2]
-                if baseline:
-                    old_day, old_price = baseline
-                    old_value = Decimal(qty) * Decimal(old_price) / 100
-                    delta = value - old_value
-                    pct = delta / old_value * 100
-                    compared += 1
-                    base_total += old_value
-                    change_total += delta
-                    icon = '🟩▲' if delta > 0 else '🟥▼' if delta < 0 else '⬜•'
-                    lines.append(f'{icon} {money(delta, True)} ₪ ({money(pct, True)}%)')
-                    if price_day and price_day == old_day:
-                        lines.append('Цена без обновления' if delta == 0 else 'Цена пересмотрена источником')
-                    elif not previous_day:
-                        lines.append(f'К цене от {date.fromisoformat(old_day):%d.%m}')
+                current_snapshot[fund_id] = {'date': price_day, 'price': raw_price, 'quantity': qty}
+                basis = PURCHASE_BASIS.get(fund_id)
+                if basis and Decimal(basis[0]) == quantity and Decimal(basis[1]) > 0:
+                    cost = Decimal(basis[1])
+                    pnl = value - cost
+                    cost_total += cost
+                    pnl_total += pnl
+                    cost_count += 1
+                    current_snapshot[fund_id]['purchase_cost'] = str(cost)
+                    card.append(f'{money(value)} ₪ · с покупки {signed_result(pnl, cost)}')
                 else:
-                    if quote.get('daily') is not None:
-                        lines.append(f"День по источнику: {money(Decimal(str(quote['daily'])), True)}%")
-                    lines.append('Сравнение в ₪ появится после сохранения следующего снимка')
+                    card.append(f'{money(value)} ₪ · с покупки N/A: обнови базу покупки')
+                day_label = date.fromisoformat(price_day).strftime('%d.%m') if price_day else 'дата неизвестна'
+                movement = daily_result(points, price_day, price, quantity, quote)
+                if movement:
+                    daily_moves.append(movement)
+                    prior = date.fromisoformat(movement['start']).strftime('%d.%m')
+                    card.append(f'День {prior}→{day_label}: {signed_result(movement["delta"], movement["base"])}')
+                else:
+                    card.append(f'День: N/A · NAV {day_label}')
+                if price_day and old.get('date') == price_day and Decimal(old['price']) == price:
+                    card[-1] += ' · без обновления'
                 analysis = assess(histories.get(fund_id, []), now, price, price_day, contexts.get(fund_id))
                 analyses[fund_id] = analysis
-                lines.append(analysis['line'])
-                if analysis.get('stats'):
-                    lines.append(analysis['stats'])
-                if contexts.get(fund_id, {}).get('line') and analysis['status'] in {'add', 'watch', 'reduce'}:
-                    lines.append(contexts[fund_id]['line'])
-                lines.append(f'__PLAN_{fund_id}__')
+        
+            lines = ['💼 <b>МОЙ ПОРТФЕЛЬ</b>', now.strftime('📅 %d.%m | %H:%M · Израиль')]
+            valued = len(current_snapshot)
             if not valued:
-                return '\n'.join([
-                    '💼 <b>МОЙ ПОРТФЕЛЬ</b>', now.strftime('📅 %d.%m | %H:%M · Израиль'),
-                    '⚠️ Цены фондов временно недоступны.',
-                    'Стоимость не рассчитана. Предыдущий снимок сохранён.', BOT_NAME,
-                ]), {}, journal
-            label = 'Итого' if valued == len(HOLDINGS) else f'Частичный итог ({valued}/{len(HOLDINGS)})'
-            totals = [f'<b>{label}: {money(total)} ₪</b>']
-            if compared and previous_day:
-                label = 'Изменение' if compared == len(HOLDINGS) else f'Изменение {compared}/{len(HOLDINGS)} позиций'
-                totals.append(f'{label}: {money(change_total, True)} ₪ ({money(change_total / base_total * 100, True)}%)')
-            lines[2:2] = totals
+                return '\n'.join(lines + ['⚠️ Цены фондов временно недоступны.',
+                                          'Стоимость не рассчитана. Предыдущий снимок сохранён.', BOT_NAME]), {}, journal
+            label = 'Стоимость' if valued == len(HOLDINGS) else f'Стоимость {valued}/{len(HOLDINGS)}'
+            lines.append(f'<b>{label}: {money(total)} ₪</b>')
+            if cost_count:
+                label = 'С покупки' if cost_count == len(HOLDINGS) else f'С покупки {cost_count}/{len(HOLDINGS)}'
+                lines.append(f'{label}: {signed_result(pnl_total, cost_total)}')
+            else:
+                lines.append('С покупки: N/A · нужна стоимость приобретения')
+            periods = {(m['start'], m['end']) for m in daily_moves}
+            if len(daily_moves) == len(HOLDINGS) and len(periods) == 1:
+                first, last = next(iter(periods))
+                days = f'{date.fromisoformat(first):%d.%m}→{date.fromisoformat(last):%d.%m}'
+                lines.append(f'День {days}: ' + signed_result(
+                    sum(m['delta'] for m in daily_moves), sum(m['base'] for m in daily_moves)))
+            else:
+                lines.append('День: общего расчёта нет · разные даты или неполные данные')
+        
             risk = risk_summary(current_snapshot, snapshots, now)
-            active_risk = sum(
-                float(signal.get('risk_budget_pct', RISK_PER_IDEA * 100)) / 100
-                for signal in journal.get('signals', [])
-                if signal.get('kind') == 'entry' and signal.get('state') == 'open'
-            )
+            active_risk = sum(float(s.get('risk_budget_pct', RISK_PER_IDEA * 100)) / 100
+                              for s in journal.get('signals', [])
+                              if s.get('kind') == 'entry' and s.get('state') == 'open')
             plans = {}
-            for fid, analysis in analyses.items():
-                risk['active_signal_risk'] = active_risk
-                plans[fid] = trade_plan(fid, analysis, float(total), position_values.get(fid, 0), risk)
-                if analysis.get('status') == 'add' and plans[fid].get('allowed'):
-                    active_risk += RISK_PER_IDEA
-            for fid, analysis in analyses.items():
-                if analysis['status'] == 'add' and (risk['breached'] or (risk.get('concentrated') and risk.get('largest') == fid)):
-                    index = next(i for i, line in enumerate(lines) if f'<code>{fid}</code>' in line)
-                    for j in range(index + 1, len(lines)):
-                        if lines[j] == analysis['line']:
-                            lines[j] = '⚠️→ Не увеличивать позицию · ограничение риска портфеля'
-                            break
-                marker = f'__PLAN_{fid}__'
-                marker_index = lines.index(marker)
-                plan_line = plans[fid].get('line', '')
-                if plan_line:
-                    lines[marker_index] = plan_line
-                else:
-                    lines.pop(marker_index)
+            for fid, card in cards:
+                analysis = analyses.get(fid)
+                if analysis:
+                    risk['active_signal_risk'] = active_risk
+                    plan = trade_plan(fid, analysis, float(total), position_values[fid], risk)
+                    plans[fid] = plan
+                    status = analysis['status']
+                    if status == 'add':
+                        if plan.get('allowed'):
+                            active_risk += RISK_PER_IDEA
+                            card.append(f'✅▲ Докупка по модели · до {plan["amount"]:.0f} ₪ · отмена < {plan["cancel_price"]:.2f}')
+                        else:
+                            card.append(plan.get('line') or '⚠️ Докупка ограничена риском')
+                    elif status == 'reduce':
+                        card.append('🔻▼ Рассмотреть сокращение · устойчивое снижение')
+                    elif status == 'missing':
+                        card.append(analysis['line'])
+                lines.extend(['', *card])
             journal = update_journal(journal, analyses, plans, current_snapshot, now)
-            if news_lines:
-                lines.extend(['', '📰 <b>Контекст активов</b>', *news_lines[:2]])
-            lines.extend(['', *comparison_lines(analyses, now), risk['line'], journal_summary(journal)])
-            lines.extend(['', 'Модель · горизонт 6м · сделки без комиссии · налог не рассчитан.', BOT_NAME])
+            alternatives = comparison_lines(analyses, now)
+            if alternatives:
+                lines.extend(['', *alternatives])
+            if risk.get('breached'):
+                lines.extend(['', '⚠️ Докупки заблокированы · данные неполные или просадка достигла 10%'])
+            elif risk.get('concentrated'):
+                lines.extend(['', f'⚠️ {risk["largest"]}: {risk["largest_value"] / float(total) * 100:.1f}% портфеля'])
+            if any(s.get('kind') == 'entry' for s in journal.get('signals', [])):
+                lines.append(journal_summary(journal).replace('📒 Журнал:', '📒 Модель, не сделки:'))
+            lines.extend(['', 'NAV — опубликованные цены. База покупки ≈ по скриншоту; до налога.',
+                          BOT_NAME])
             return '\n'.join(lines), current_snapshot, journal
         
         
@@ -2473,12 +2461,12 @@ jobs:
             from modules.portfolio_insights import collect_context
             async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
                 try:
-                    contexts, news_lines = await collect_context(session, quotes, now)
+                    contexts = await collect_context(session, quotes, now)
                 except Exception as error:
                     print(f'Portfolio context unavailable: {type(error).__name__}')
-                    contexts, news_lines = {}, []
+                    contexts = {}
             message, current, journal = build_report(
-                histories, snapshots, now, quotes, contexts, news_lines, journal
+                histories, snapshots, now, quotes, contexts, journal
             )
             if dry_run:
                 print(message)
@@ -2503,12 +2491,12 @@ jobs:
         import unittest
         from types import SimpleNamespace
         from unittest.mock import AsyncMock, patch
-
+        
         import main as app
         from modules import market, formatter, news, telegram_sender
         from modules.config import SECTORS_CONFIG
-
-
+        
+        
         def page(fund_id="5139183", daily="2.2%", annual="26.46%"):
             daily_html = f'<span class="num percent rise"><span>{daily}</span></span>' if daily is not None else ''
             body = (
@@ -2520,33 +2508,33 @@ jobs:
                 '<p>דמי ניהול 0.5%</p>'
             )
             return body
-
-
+        
+        
         class Response:
             def __init__(self, html, status=200):
                 self.html, self.status = html, status
-
+        
             async def __aenter__(self):
                 return self
-
+        
             async def __aexit__(self, *args):
                 return False
-
+        
             async def text(self, **kwargs):
                 return self.html
-
-
+        
+        
         class Session:
             def __init__(self, fail=None, status=200):
                 self.fail, self.status, self.calls = fail, status, []
-
+        
             def get(self, url, **kwargs):
                 self.calls.append(url)
                 if self.fail and self.fail in url:
                     raise asyncio.TimeoutError()
                 return Response(page(url.rsplit('/', 1)[-1]), self.status)
-
-
+        
+        
         class ParserTests(unittest.TestCase):
             def test_history_response_and_price_stats(self):
                 rows = [
@@ -2556,7 +2544,7 @@ jobs:
                 parsed, pages = market.parse_bizportal_history_response("~4^" + __import__('json').dumps(rows))
                 self.assertEqual(pages, 4)
                 self.assertEqual(len(parsed), 9)
-
+        
             def test_price_stats_use_calendar_windows(self):
                 from datetime import date, timedelta
                 start = date(2026, 6, 1)
@@ -2570,7 +2558,7 @@ jobs:
                 self.assertEqual(stats["period_days"], 70)
                 self.assertLess(stats["from_high_60"], 0)
                 self.assertEqual(stats["range_position_60"], 0.0)
-
+        
             def test_price_stats_identify_full_twelve_month_coverage(self):
                 from datetime import date, timedelta
                 start = date(2025, 1, 1)
@@ -2581,7 +2569,7 @@ jobs:
                 stats = market.calculate_price_stats(history)
                 self.assertEqual(stats["period_days"], 365)
                 self.assertGreater(stats["period_maximum"], stats["period_minimum"])
-
+        
             def test_price_stats_reject_too_short_history(self):
                 history = [
                     {"date": "2026-09-14", "price": 100.0},
@@ -2589,45 +2577,45 @@ jobs:
                     {"date": "2026-09-16", "price": 102.0},
                 ]
                 self.assertEqual(market.calculate_price_stats(history), {})
-
+        
             def test_header(self):
                 result = market.parse_bizportal_page(page(), '5139183')
                 self.assertEqual(result['daily'], 2.2)
                 self.assertEqual(result['mtd'], 4.09)
-
+        
             def test_wrong_identity(self):
                 self.assertIsNone(market.parse_bizportal_page(page(), '5141841'))
-
+        
             def test_missing_identity(self):
                 self.assertIsNone(market.parse_bizportal_page('<html>123.0% 1.0%</html>', '5139183'))
-
+        
             def test_fee_not_used_as_daily(self):
                 self.assertIsNone(market.parse_bizportal_page(page(daily=None), '5139183')['daily'])
-
+        
             def test_high_annual_return_not_discarded(self):
                 result = market.parse_bizportal_page(page(annual='350.0%'), '5139183')
                 self.assertEqual(result['ytd'], 350.0)
                 self.assertEqual(result['daily'], 2.2)
-
+        
             def test_zero_not_missing(self):
                 self.assertEqual(market.parse_bizportal_page(page(daily='0%'), '5139183')['daily'], 0.0)
-
+        
             def test_source_placeholder_not_zero_and_not_retryable(self):
                 result=market.parse_bizportal_page(page(annual='--%'), '5139183')
                 self.assertIsNone(result['ytd'])
                 self.assertIn('ytd',result['source_missing'])
-
+        
             def test_numbers(self):
                 self.assertEqual(market.parse_optional_float('\u200e− 1.25 %'), -1.25)
                 self.assertEqual(market.parse_optional_float('1,25%-'), -1.25)
                 self.assertIsNone(market.parse_optional_float('error 403'))
-
+        
             def test_merge_missing_only(self):
                 result = market.merge_returns({'daily':0.0, 'mtd':None}, {'daily':1.0, 'mtd':2.0})
                 self.assertEqual(result['daily'], 0.0)
                 self.assertEqual(result['mtd'], 2.0)
-
-
+        
+        
         class FetchTests(unittest.IsolatedAsyncioTestCase):
             async def test_fund_history_requests_long_period(self):
                 import json
@@ -2647,7 +2635,7 @@ jobs:
                 )
                 self.assertEqual(session.params[0]['period'], '3')
                 self.assertEqual(len(rows), 16)
-
+        
             async def test_complete_general_skips_performance(self):
                 session = Session(fail='performance')
                 with patch.object(market.asyncio, 'sleep', new=AsyncMock()):
@@ -2656,23 +2644,23 @@ jobs:
                 self.assertEqual(result['ytd'], 26.46)
                 self.assertEqual(len(session.calls), 1)
                 self.assertFalse(any('performance' in call for call in session.calls))
-
+        
             async def test_general_timeout_performance_recovers_all(self):
                 with patch.object(market.asyncio, 'sleep', new=AsyncMock()):
                     _, result = await market.fetch_bizportal_page(Session(fail='generalview'), '5139183')
                 self.assertEqual(result['daily'], 2.2)
-
+        
             async def test_both_fail(self):
                 with patch.object(market.asyncio, 'sleep', new=AsyncMock()):
                     _, result = await market.fetch_bizportal_page(Session(fail='quote'), '5139183')
                 self.assertTrue(all(result[k] is None for k in market.RETURN_KEYS))
-
+        
             async def test_access_denied_no_retry(self):
                 session = Session(status=403)
                 _, result = await market.fetch_bizportal_page(session, '5139183')
                 self.assertTrue(result['access_denied'])
                 self.assertEqual(len(session.calls), 1)
-
+        
             async def test_browser_skips_performance_when_general_is_complete(self):
                 calls = []
                 class Page:
@@ -2693,12 +2681,12 @@ jobs:
                 self.assertEqual(result['5139183']['daily'], 2.2)
                 self.assertFalse(any('performance' in url for url in calls))
                 browser.close.assert_awaited_once()
-
+        
             async def test_browser_unavailable_does_not_raise(self):
                 with patch.object(market, 'async_playwright', side_effect=RuntimeError('test missing browser')):
                     result = await market.fetch_bizportal_playwright({'5139183'})
                 self.assertEqual(result, {})
-
+        
             async def test_browser_retries_http_access_denied_result(self):
                 calls = []
                 class Page:
@@ -2717,11 +2705,11 @@ jobs:
                     result = await market.fetch_bizportal_playwright({'5139183'}, existing)
                 self.assertTrue(calls)
                 self.assertEqual(result['5139183']['daily'], 2.2)
-
+        
             async def test_translation_error_never_returns_english(self):
                 translated = await news.translate_to_russian(Session(status=503), 'Snowflake jumps')
                 self.assertEqual(translated, '')
-
+        
             async def test_translation_uses_mymemory_fallback(self):
                 class JsonResponse(Response):
                     def __init__(self, status, payload):
@@ -2736,7 +2724,7 @@ jobs:
                         return JsonResponse(200, {'responseData': {'translatedText': 'Акции выросли'}})
                 translated = await news.translate_to_russian(TranslationSession(), 'Stocks rose')
                 self.assertEqual(translated, 'Акции выросли')
-
+        
             async def test_open_daily_candle_is_excluded(self):
                 import time
                 now = int(time.time())
@@ -2757,10 +2745,10 @@ jobs:
                 _, result = await market.fetch_single_ticker(MarketSession(), 'TEST')
                 self.assertEqual(result['price'], 101.0)
                 self.assertEqual(result['change'], 1.0)
-
-
-
-
+        
+        
+        
+        
         class BaseHistoryTests(unittest.TestCase):
             def test_change_uses_five_completed_intervals(self):
                 from datetime import datetime, timezone
@@ -2768,7 +2756,7 @@ jobs:
                 history = [{"timestamp": start + i * 86400, "close": 100 + i} for i in range(6)]
                 self.assertEqual(market.analyze_year_history(history, "TEST")["change_5d"], 5.0)
                 self.assertEqual(market.analyze_year_history(history[:5], "TEST"), {})
-
+        
         class RadarTests(unittest.TestCase):
             @staticmethod
             def fund(daily=1.0, below=-10.0):
@@ -2791,18 +2779,18 @@ jobs:
                         "to_period_average": (105.0 / current - 1.0) * 100.0,
                     },
                 }
-
+        
             @staticmethod
             def technical(change1=1.0, change5=1.0):
                 return {
                     'proxy_ticker': 'TEST', 'market_date': '2026-09-05',
                     'change_1d': change1, 'change_5d': change5,
                 }
-
+        
             def test_missing_data_not_wait_signal(self):
                 signal = market.analyze_entry_zone({}, {})
                 self.assertEqual(signal['status_key'], 'unavailable')
-
+        
             def test_total_outage_not_no_entry(self):
                 row = {
                     'entry_analysis': market.analyze_entry_zone({}, {}),
@@ -2811,7 +2799,7 @@ jobs:
                 }
                 text = formatter.build_combined_radar_message([row])
                 self.assertEqual(text, "")
-
+        
             def test_eligible_fund_not_displaced_by_missing(self):
                 signal = market.analyze_entry_zone(self.fund(), self.technical())
                 row = {'entry_analysis':signal, 'il_fund_data':{'daily':1}, 'icon':'☁️', 'il_name_eng':'Test', 'short_eng':'Cloud', 'year_analysis':{}}
@@ -2821,7 +2809,7 @@ jobs:
                 text = formatter.build_combined_radar_message([missing,row])
                 self.assertIn('Вход по модели подтверждён: 1', text)
                 self.assertNotIn('Test', text)
-
+        
             def test_fund_setup_is_independent_of_us_market(self):
                 for market_changes in ((1.0, 1.0), (-1.0, -1.0)):
                     with self.subTest(market_changes=market_changes):
@@ -2832,7 +2820,7 @@ jobs:
                             self.fund(), self.technical(*market_changes)
                         )["status_key"], "ready")
                 self.assertEqual(market.analyze_entry_zone(self.fund(), {})["status_key"], "ready")
-
+        
             def test_confirmation_requires_fund_and_us(self):
                 fund = self.fund()
                 for scenario in ("ready", "first_rise", "falling", "expensive", "short_history"):
@@ -2853,8 +2841,8 @@ jobs:
                         self.assertEqual(marker == "✅▲", scenario == "ready")
                         row["entry_analysis"]["base1"] = -1
                         self.assertNotEqual(formatter._radar_verdict(row)[0], "✅▲")
-
-
+        
+        
         class MessageTests(unittest.TestCase):
             def test_link_lengths_and_footer_do_not_create_extra_messages(self):
                 from modules.config import BOT_NAME
@@ -2882,7 +2870,7 @@ jobs:
                 for chunk in overflow:
                     self.assertLessEqual(telegram_sender.message_length(chunk), 3900)
                     self.assertEqual(chunk.count('<blockquote expandable>'), chunk.count('</blockquote>'))
-
+        
             def rows(self, missing=False):
                 rows=[]
                 for config in SECTORS_CONFIG.values():
@@ -2898,7 +2886,7 @@ jobs:
                                      news=['• 📰 ' + 'Тестовая новость. ' * 7], il_fund_data=fund, year_analysis=year,
                                      entry_analysis=market.analyze_entry_zone(fund,year)))
                 return rows
-
+        
             def test_digest_format_and_delivery_limits(self):
                 rows = self.rows()
                 rows[1]['il_fund_data']['ytd'] = None
@@ -2913,27 +2901,27 @@ jobs:
                 self.assertIn('Y N/A', chunks[1])
                 self.assertEqual(text.count('@oil_tracker_pavel_bot'), 1)
                 self.assertNotIn(app.BOT_VERSION, text)
-
+        
             def test_total_outage_short_report(self):
                 text=formatter.build_telegram_message(self.rows(missing=True))
                 self.assertIn('Израильские данные не получены',text)
                 self.assertNotIn('РАДАР ТОЧЕК ВХОДА',text)
                 self.assertNotIn('0/4',text)
-
+        
             def test_fund_analysis_uses_own_price_history_not_proxy_description(self):
                 text = formatter.build_telegram_message(self.rows())
                 self.assertIn('365д: мин 80.00 · сред. 105.00 · макс. 130.00 · сейчас 90.00', text)
                 self.assertIn('от максимума -30.8%', text)
                 self.assertNotIn('Ориентир', text)
                 self.assertNotIn('восходящий тренд', text)
-
+        
             def test_missing_fund_history_date_does_not_break_report(self):
                 rows = self.rows()
                 rows[0]['il_fund_data']['price_stats'].pop('price_date')
                 text = formatter.build_telegram_message(rows)
                 self.assertIn('АНАЛИТИКА ИЗРАИЛЬСКИХ ФОНДОВ', text)
                 self.assertIn('Barak Ultra WTI', text)
-
+        
             def test_digest_omits_removed_labels(self):
                 rows = self.rows()
                 rows[0]['il_fund_data']['price_stats']['price_date'] = '2026-09-04'
@@ -2941,7 +2929,7 @@ jobs:
                 for label in ('США:', 'Цены фондов:', 'Стрелка —',
                               'Фондов с другой датой NAV', 'Показываются последние завершённые'):
                     self.assertNotIn(label, text)
-
+        
             def test_day_strength_shows_only_color_without_score(self):
                 rows = self.rows()
                 for row, change in zip(rows[:4], (1.0, 0.0, -1.0, None)):
@@ -2954,14 +2942,14 @@ jobs:
                 self.assertIn('🔴', first_message)
                 self.assertIn('⚪', first_message)
                 self.assertNotIn('/100', first_message)
-
+        
             def test_gap_requires_matching_dates(self):
                 rows = self.rows()
                 rows[0]['base_date'] = '2026-09-04'
                 rows[0]['il_fund_data']['daily'] = 10.0
                 text = formatter.build_telegram_message(rows)
                 self.assertNotIn(f"<b>{rows[0]['short_eng']}</b> · база", text)
-
+        
             def test_radar_message_is_explicitly_non_predictive(self):
                 rows = [{
                     'icon':'🛢️', 'short_eng':'Oil', 'local_market':False,
@@ -2976,7 +2964,7 @@ jobs:
                 self.assertIn('не гарантирует дно', text)
                 self.assertIn('Вход по модели подтверждён: 1', text)
                 self.assertNotIn('покупать', text.lower())
-
+        
             def test_radar_uses_three_to_five_charts(self):
                 rows = self.rows()
                 for row in rows:
@@ -2999,9 +2987,9 @@ jobs:
                 self.assertEqual(no_signal, '')
                 self.assertNotIn('Сигналов:', no_signal)
                 self.assertNotIn('Отбор:', no_signal)
-
-
-
+        
+        
+        
         class EveningDeliveryTests(unittest.IsolatedAsyncioTestCase):
             async def test_digest_radar_and_photos_order(self):
                 config = next(iter(SECTORS_CONFIG.values()))
@@ -3027,8 +3015,8 @@ jobs:
                     await app.run_market_analytics()
                     self.assertEqual(calls, ['digest', 'photos'])
                     chart_builder.assert_called_once()
-
-
+        
+        
         class ChartTests(unittest.IsolatedAsyncioTestCase):
             def test_calendar_window_and_missing_history(self):
                 from datetime import date, timedelta
@@ -3042,7 +3030,7 @@ jobs:
                 self.assertIsNone(chart_window(history[:3]))
                 damaged = [p for p in history if not '2025-04' in p['date']]
                 self.assertTrue(chart_window(damaged)[1])
-
+        
             def test_chart_image_and_caption(self):
                 from datetime import date, timedelta
                 from modules.charts import render_fund_chart, chart_caption
@@ -3058,7 +3046,7 @@ jobs:
                 self.assertNotIn(row['il_name_eng'], caption)
                 self.assertIn(row['fund_id'], caption)
                 self.assertNotIn('Отбор', caption)
-
+        
             async def test_photo_payload_and_window_guard(self):
                 class PhotoResponse:
                     status = 200
@@ -3090,8 +3078,8 @@ jobs:
                     self.assertEqual(sum('caption' in item for item in media), 1)
                     for i in range(3):
                         self.assertIn(f'Фонд {i}', media[0]['caption'])
-
-
+        
+        
         class NewsSelectionTests(unittest.IsolatedAsyncioTestCase):
             async def test_sector_search_date_filter_and_translation_failure(self):
                 from datetime import datetime, timezone
@@ -3111,46 +3099,46 @@ jobs:
                 self.assertEqual(result[0]['url'], relevant['link'])
                 self.assertFalse(news.headline_matches('ai', 'retail sales rise'))
                 self.assertEqual(news.normalize_title('(TSLA)находится'), '(TSLA) находится')
-
-
+        
+        
         class NewsFormattingTests(unittest.TestCase):
             def test_shortening_keeps_whole_words(self):
                 result = news.shorten_title('Очень длинный заголовок новости про рынок и компании', 32)
                 self.assertTrue(result.endswith('...'))
                 self.assertNotIn('комп...', result)
-
+        
             def test_currency_spacing_is_cleaned(self):
                 self.assertEqual(news.normalize_title('Contract worth $ 729 million'), 'Contract worth $729 million')
-
+        
             def test_clean_energy_rejects_macro_roundup(self):
                 item = {
                     'title': "Kevin Warsh hawkishness distracts markets as inflation rises",
                     'relatedTickers': ['CEG'],
                 }
                 self.assertLess(news.news_score(item, ['CEG'], 'Clean'), 35)
-
+        
             def test_clean_energy_accepts_sector_company(self):
                 item = {
                     'title': "Constellation Energy expands clean power capacity",
                     'relatedTickers': ['CEG'],
                 }
                 self.assertGreaterEqual(news.news_score(item, ['CEG'], 'Clean'), 35)
-
+        
             def test_related_ticker_without_sector_context_is_rejected(self):
                 item = {
                     'title': 'Markets rise as investors assess the economic outlook',
                     'relatedTickers': ['TSLA'],
                 }
                 self.assertLess(news.news_score(item, ['TSLA'], 'EV'), 35)
-
+        
             def test_industry_company_headline_is_accepted(self):
                 item = {
                     'title': 'CrowdStrike expands cloud security platform',
                     'relatedTickers': ['CRWD'],
                 }
                 self.assertGreaterEqual(news.news_score(item, ['CRWD'], 'Cyber'), 35)
-
-
+        
+        
         class PortfolioInsightsTests(unittest.TestCase):
             def test_falling_and_stale_funds_cannot_trigger_buy(self):
                 from modules.portfolio_insights import assess
@@ -3162,7 +3150,7 @@ jobs:
                 self.assertEqual(result['status'], 'reduce')
                 self.assertEqual(assess(history, now + timedelta(days=5), 111, '2026-09-29')['status'], 'missing')
                 self.assertEqual(assess(history, now, 115, '2026-09-29')['status'], 'missing')
-
+        
             def test_drawdown_is_portfolio_peak_and_resets_after_quantity_change(self):
                 from modules.portfolio_insights import risk_summary
                 from datetime import datetime
@@ -3172,16 +3160,13 @@ jobs:
                 self.assertTrue(result['breached'])
                 current['0']['quantity'] = '9'
                 self.assertFalse(risk_summary(current, {'2026-09-28': old}, datetime(2026, 9, 29))['breached'])
-
+        
             def test_holdings_confirmation_ignores_mentions_outside_table(self):
-                from modules.portfolio_insights import holdings_from_page, relevant_event
+                from modules.portfolio_insights import holdings_from_page
                 html = '<p>NVIDIA CORP</p><table><tr><th>שם נייר</th><th>%</th></tr>'
                 html += '<tr><td>MICROSOFT CORP</td><td>3.5</td></tr></table>'
                 self.assertEqual([r['ticker'] for r in holdings_from_page(html)], ['MSFT'])
-                self.assertFalse(relevant_event('HBAR Crypto rally: Nvidia AI link', 'NVIDIA'))
-                self.assertFalse(relevant_event('Cramer recommends Meta after earnings', 'META'))
-                self.assertTrue(relevant_event('Microsoft raises revenue forecast', 'MICROSOFT'))
-
+        
             def test_position_size_uses_risk_budget_and_portfolio_limits(self):
                 from modules.portfolio_insights import trade_plan
                 analysis = {'status': 'add', 'risk_pct': 5, 'cancel_price': 95}
@@ -3194,7 +3179,7 @@ jobs:
                 self.assertFalse(trade_plan('fund', analysis, 12_000, 500, risk)['allowed'])
                 risk.update(breached=False, active_signal_risk=.02)
                 self.assertIn('общий бюджет риска', trade_plan('fund', analysis, 12_000, 500, risk)['line'])
-
+        
             def test_signal_journal_is_forward_only_and_not_duplicated(self):
                 from modules.portfolio_insights import update_journal, journal_summary
                 from datetime import datetime
@@ -3212,8 +3197,8 @@ jobs:
                 self.assertEqual(journal['signals'][0]['state'], 'closed')
                 self.assertEqual(journal['signals'][0]['close_reason'], 'отмена сценария')
                 self.assertIn('0/1 прибыльных', journal_summary(journal))
-
-
+        
+        
         class PortfolioRegressionTests(unittest.IsolatedAsyncioTestCase):
             def test_redemption_price_identity_and_missing_date(self):
                 from modules.portfolio import parse_portfolio_quote
@@ -3227,8 +3212,8 @@ jobs:
                 self.assertEqual(quote['price'], '1017.6')
                 self.assertIsNone(quote['date'])
                 self.assertEqual(parse_portfolio_quote(html, '5132014'), {})
-
-            def test_missing_history_uses_quote_and_next_morning_comparison(self):
+        
+            def test_missing_history_uses_quote_but_never_snapshot_as_daily_return(self):
                 from modules.portfolio import build_report, HOLDINGS, TZ
                 from datetime import datetime
                 now = datetime(2026, 9, 28, 8, 20, tzinfo=TZ)
@@ -3236,16 +3221,17 @@ jobs:
                     HOLDINGS, ['1017.6', '120.86', '383.27', '171.75', '207.5', '192.45'])}
                 text, saved, _ = build_report({}, {}, now, quotes)
                 self.assertIn('12 180.35', text)
-                self.assertIn('дата цены не указана', text)
+                self.assertIn('дата неизвестна', text)
                 quotes['5103692']['price'] = '1018.6'
                 text, _, _ = build_report({}, {'2026-09-27': saved}, now, quotes)
-                self.assertIn('+6.74 ₪', text)
+                self.assertNotIn('День: 🟩▲ +6.74 ₪', text)
+                self.assertIn('День: N/A', text)
                 self.assertNotIn('Новой даты цены нет', text)
                 text, saved, _ = build_report({}, {}, now)
                 self.assertEqual(saved, {})
                 self.assertNotIn('0.00', text)
                 self.assertNotIn('5103692', text)
-
+        
             async def test_outage_keeps_snapshot_without_raising(self):
                 from modules import portfolio
                 from pathlib import Path
@@ -3261,8 +3247,101 @@ jobs:
                         sender.assert_awaited_once()
                         self.assertEqual(sender.call_args.kwargs['chat_id'], 'private')
                         self.assertEqual(state.read_text(), '{}')
-
-
+        
+        
+        if __name__ == '__main__':
+            unittest.main()
+        EOF
+        cat << 'EOF' > tests/test_portfolio_returns.py
+        import unittest
+        from datetime import datetime
+        from decimal import Decimal
+        from unittest.mock import patch
+        
+        from modules import portfolio, portfolio_insights
+        from modules.telegram_sender import message_length, split_message
+        
+        
+        class PortfolioReturnsTests(unittest.TestCase):
+            def setUp(self):
+                self.now = datetime(2026, 10, 5, 8, 20, tzinfo=portfolio.TZ)
+                self.prices = ['1011.87', '118.05', '378.23', '168.49', '205.12', '189.95']
+                self.quotes = {h[0]: {'price': p, 'date': '2026-10-01'}
+                               for h, p in zip(portfolio.HOLDINGS, self.prices)}
+        
+            def test_bank_values_and_acquisition_basis_are_not_snapshot_returns(self):
+                with patch.object(portfolio_insights, 'comparison_lines', return_value=[]):
+                    text, saved, journal = portfolio.build_report({}, {}, self.now, self.quotes)
+                self.assertIn('12 050.93 ₪', text)
+                # Raw quantities * NAV are summed before rounding; screenshot rows are rounded.
+                self.assertIn('С покупки: 🟥▼ -320.32 ₪ (-2.59%)', text)
+                for expected in ('+45.63 ₪ (+0.67%)', '-382.88 ₪ (-30.08%)',
+                                 '-67.01 ₪ (-8.41%)', '-69.54 ₪ (-3.03%)',
+                                 '+81.99 ₪ (+9.94%)', '+71.48 ₪ (+17.64%)'):
+                    self.assertIn(expected, text)
+                self.assertEqual(saved['5132014']['purchase_cost'], '1272.98')
+                self.assertEqual(journal['signals'], [])
+                self.assertNotIn('завершённых сигналов нет', text)
+                self.assertNotIn('Контекст активов', text)
+                self.assertLess(message_length(text), 3900)
+                self.assertEqual(len(split_message(text)), 1)
+        
+            def test_daily_uses_history_not_old_bot_snapshot_and_labels_unchanged_nav(self):
+                fid = '5103692'
+                history = {fid: [{'date': '2026-09-30', 'price': '1000'},
+                                 {'date': '2026-10-01', 'price': '1011.87'}]}
+                snapshots = {'2026-10-04': {fid: {'quantity': '674', 'price': '1011.87',
+                                                 'date': '2026-10-01'}}}
+                text, _, _ = portfolio.build_report(history, snapshots, self.now, self.quotes)
+                self.assertIn('День 30.09→01.10: 🟩▲ +80.00 ₪ (+1.19%) · без обновления', text)
+                self.assertNotIn('+0.00 ₪ (+0.00%)', text)
+                self.assertIn('День: общего расчёта нет', text)
+        
+            def test_aggregate_requires_identical_periods_for_all_holdings(self):
+                histories = {h[0]: [{'date': '2026-09-30', 'price': str(Decimal(p) / 2)},
+                                    {'date': '2026-10-01', 'price': p}]
+                             for h, p in zip(portfolio.HOLDINGS, self.prices)}
+                text, _, _ = portfolio.build_report(histories, {}, self.now, self.quotes)
+                self.assertIn('День 30.09→01.10: 🟩▲ +6 025.46 ₪ (+100.00%)', text)
+                histories['5132014'][0]['date'] = '2026-09-29'
+                text, _, _ = portfolio.build_report(histories, {}, self.now, self.quotes)
+                self.assertIn('День: общего расчёта нет', text)
+        
+            def test_no_daily_estimate_from_page_percentage_missing_history_or_long_gap(self):
+                quote = {'date': '2026-10-01', 'daily': 2}
+                for points in ([], [('2026-10-01', '102')],
+                               [('2026-09-01', '100'), ('2026-10-01', '102')]):
+                    self.assertIsNone(portfolio.daily_result(points, '2026-10-01',
+                                      Decimal('102'), Decimal('10'), quote))
+        
+            def test_source_price_or_return_conflict_blocks_daily_number(self):
+                points = [('2026-09-30', '100'), ('2026-10-01', '102')]
+                self.assertIsNone(portfolio.daily_result(points, '2026-10-01', Decimal('103'),
+                                  Decimal('10'), {}))
+                self.assertIsNone(portfolio.daily_result(points, '2026-10-01', Decimal('102'),
+                                  Decimal('10'), {'date': '2026-10-01', 'daily': -2}))
+        
+            def test_quantity_change_does_not_reuse_old_acquisition_basis(self):
+                modified = list(portfolio.HOLDINGS)
+                modified[0] = (modified[0][0], modified[0][1], '675')
+                with patch.object(portfolio, 'HOLDINGS', modified):
+                    text, saved, _ = portfolio.build_report({}, {}, self.now, self.quotes)
+                self.assertIn('обнови базу покупки', text)
+                self.assertIn('С покупки 5/6:', text)
+                self.assertNotIn('purchase_cost', saved['5103692'])
+        
+            def test_nonempty_model_journal_does_not_crash_or_claim_real_trades(self):
+                journal = {'signals': [{'kind': 'entry', 'state': 'closed', 'return_pct': 1,
+                                        'worst_pct': -2}]}
+                text, _, _ = portfolio.build_report({}, {}, self.now, self.quotes, journal=journal)
+                self.assertIn('Модель, не сделки:', text)
+        
+            def test_short_history_explains_number_of_observations(self):
+                history = [{'date': '2026-10-01', 'price': 100}]
+                result = portfolio_insights.assess(history, self.now, 100, '2026-10-01')
+                self.assertIn('цен 1/50', result['line'])
+        
+        
         if __name__ == '__main__':
             unittest.main()
         EOF
