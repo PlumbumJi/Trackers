@@ -1393,18 +1393,18 @@ jobs:
         from datetime import date, timedelta
         from io import BytesIO
         from pathlib import Path
-
+        
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.dates as mdates
         import matplotlib.pyplot as plt
-
+        
         from modules.formatter import (
             _radar_verdict, _display_date, format_percent,
             ordered_radar_rows, radar_chart_target,
         )
-
-
+        
+        
         def chart_window(history):
             """Three calendar months ending at the last published observation; no invented prices."""
             points = {}
@@ -1431,8 +1431,8 @@ jobs:
             gaps = [(b[0] - a[0]).days for a, b in zip(window, window[1:])]
             partial = window[0][0] > start + timedelta(days=7) or len(window) < 40 or max(gaps, default=0) > 10
             return window, partial
-
-
+        
+        
         def render_fund_chart(row):
             stats = row.get("il_fund_data", {}).get("price_stats") or {}
             prepared = chart_window(stats.get("chart_history") or [])
@@ -1480,31 +1480,52 @@ jobs:
                     return output.getvalue()
                 finally:
                     plt.close(fig)
-
-
+        
+        
         def chart_caption(row):
+            """Explain the plotted fund prices, then the existing model's conclusion."""
             marker, _, _ = _radar_verdict(row)
-            entry = row["entry_analysis"]
-            if marker == "✅▲":
-                label = "вход подтверждён по модели"
-            elif entry.get("status_key") == "blocked":
-                label = "снижение продолжается"
-            elif marker == "🔻▼":
-                label = "база не подтверждает рост"
+            entry = row.get("entry_analysis") or {}
+            stats = (row.get("il_fund_data") or {}).get("price_stats") or {}
+            window = chart_window(stats.get("chart_history") or [])
+            lines = [f'{row.get("icon", "")} {row.get("short_eng", "")} · {row["fund_id"]}']
+            if not window:
+                return "\n".join(lines + ["▫️— Истории недостаточно для вывода."])
+            points, partial = window
+            prices = [price for _, price in points]
+            current = prices[-1]
+            from_high = (current / max(prices) - 1) * 100
+            from_mean = (current / (sum(prices) / len(prices)) - 1) * 100
+            daily = entry.get("daily")
+            day_text = f' · день {format_percent(daily, 1)}' if daily is not None else ''
+            lines.append(f'На {_display_date(points[-1][0].isoformat())}{day_text}')
+            period = "Доступный период" if partial else "3 мес."
+            lines.append(f'{period}: от пика {format_percent(from_high, 1)} · к средней {format_percent(from_mean, 1)}')
+            status = entry.get("status_key")
+            if partial or status == "unavailable":
+                marker, conclusion = "▫️—", "История неполная — вход не оценён."
+            elif status == "blocked":
+                conclusion = "Цена низкая, но падает — ждать двух повышений подряд."
+            elif status == "forming":
+                conclusion = "Первый рост после спада — ждать второго повышения."
             elif not entry.get("candidate"):
-                label = "вне зоны входа"
-            elif entry.get("status_key") == "forming":
-                label = "первое повышение цены"
+                conclusion = ("Цена выше средней — условия входа не выполнены."
+                              if from_mean > 0 else "Цена ниже средней, но условия входа ещё не выполнены.")
+            elif marker == "✅▲":
+                conclusion = "Фонд растёт после спада, рынок поддерживает — вход по модели."
+            elif entry.get("base1") is None or entry.get("base5") is None:
+                conclusion = "Фонд восстанавливается — подтверждения рынка нет."
+            elif marker == "🔻▼":
+                conclusion = "Фонд восстанавливается, рынок слабеет — ждать."
             else:
-                label = "ждём подтверждения"
-            lines = [f'{row.get("icon", "")} {row.get("short_eng", "")} · {row["fund_id"]}',
-                     f'{marker} Фонд {format_percent(entry.get("daily"), 1)} · {label}']
+                conclusion = "Фонд восстанавливается — поддержка рынка пока слабая."
             market_label = "Израиль" if row.get("local_market") else "США"
-            lines.append(f'{market_label} {entry.get("proxy_ticker") or "—"}: день {format_percent(entry.get("base1"), 1)} · 5 сессий {format_percent(entry.get("base5"), 1)}')
-            lines.append(f'Даты: фонды {_display_date(entry.get("price_date") or "")} · {market_label} {_display_date(entry.get("base_date") or "")}.')
+            if all(entry.get(key) is not None for key in ("base1", "base5")) and entry.get("base_date"):
+                lines.append(f'{market_label} {_display_date(entry["base_date"])}: день {format_percent(entry["base1"], 1)} · 5д {format_percent(entry["base5"], 1)}')
+            lines.append(f'{marker} {conclusion}')
             return "\n".join(lines)
-
-
+        
+        
         def build_radar_charts(rows, output_directory=None):
             charts = []
             target = radar_chart_target(rows)
@@ -1529,27 +1550,27 @@ jobs:
         import json
         import re
         from html.parser import HTMLParser
-
+        
         import aiohttp
-
+        
         from modules.config import BOT_TOKEN, CHAT_ID, HTTP_TIMEOUT, BOT_NAME
-
-
+        
+        
         def message_length(text: str) -> int:
             class VisibleText(HTMLParser):
                 def __init__(self):
                     super().__init__(convert_charrefs=True)
                     self.parts = []
-
+        
                 def handle_data(self, data):
                     self.parts.append(data)
-
+        
             parser = VisibleText()
             parser.feed(text)
             parser.close()
             return len(''.join(parser.parts).encode('utf-16-le')) // 2
-
-
+        
+        
         def split_plain_text(text: str, max_length: int) -> list[str]:
             chunks, current = [], ""
             for line in text.splitlines(keepends=True):
@@ -1561,8 +1582,8 @@ jobs:
             if current.strip():
                 chunks.append(current.strip())
             return chunks
-
-
+        
+        
         def split_blockquote(block: str, max_length: int) -> list[str]:
             match = re.search(r"<blockquote(?:\s+expandable)?>", block)
             close_tag = "</blockquote>"
@@ -1588,8 +1609,8 @@ jobs:
             if final:
                 chunks.append(final)
             return chunks
-
-
+        
+        
         def split_message(text: str, max_length: int = 3900) -> list[str]:
             # A footer is part of the final text message, never its own chunk.
             has_footer = any(line.strip() == BOT_NAME for line in text.splitlines())
@@ -1624,8 +1645,8 @@ jobs:
             if any(message_length(chunk) > max_length for chunk in chunks):
                 raise ValueError("A single message paragraph exceeds Telegram limit")
             return chunks
-
-
+        
+        
         async def send_to_telegram(text: str, chat_id=None) -> None:
             destination = chat_id or CHAT_ID
             if not BOT_TOKEN or not destination:
@@ -1649,8 +1670,8 @@ jobs:
                                 f"Telegram HTTP {response.status} on chunk {index}/{len(chunks)}: {response_text[:500]}"
                             )
                         print(f"🚀 Sent chunk {index}/{len(chunks)}")
-
-
+        
+        
         async def send_chart_photos(charts, may_send=lambda: True) -> None:
             if not charts or not may_send():
                 return
@@ -1658,13 +1679,7 @@ jobs:
                 raise RuntimeError("BOT_TOKEN or CHAT_ID is missing")
             charts = charts[:3]
             captions = [caption for _, caption in charts]
-            date_lines = [caption.splitlines()[-1] for caption in captions]
-            common_dates = len(set(date_lines)) == 1 and date_lines[0].startswith("Даты:")
-            if common_dates:
-                captions = [caption.rsplit("\n", 1)[0] for caption in captions]
-            album_caption = "✍️ К графикам\n\n" + "\n\n".join(captions)
-            if common_dates:
-                album_caption += "\n\n" + date_lines[0]
+            album_caption = "📊 Что видно на графиках\n\n" + "\n\n".join(captions)
             if len(album_caption.encode("utf-16-le")) // 2 > 1024:
                 raise ValueError("Album caption exceeds Telegram limit")
             payload = aiohttp.FormData()
@@ -3018,6 +3033,32 @@ jobs:
         
         
         class ChartTests(unittest.IsolatedAsyncioTestCase):
+            def test_caption_explains_price_and_preserves_album_limit(self):
+                from datetime import date, timedelta
+                from modules.charts import chart_caption
+                row = MessageTests().rows()[0]
+                row['il_fund_data']['price_stats']['chart_history'] = [
+                    {'date': (date(2025, 1, 1)+timedelta(days=i)).isoformat(), 'price': 200-i}
+                    for i in range(100)]
+                row['entry_analysis'].update(status_key='blocked', candidate=True, daily=-2.9,
+                                             base1=None, base5=None, base_date=None)
+                text = chart_caption(row)
+                self.assertIn('от пика', text)
+                self.assertIn('ждать двух повышений', text)
+                self.assertNotIn('США —', text)
+                self.assertNotIn('5д', text)
+                row['entry_analysis'].update(status_key='ready', base1=1, base5=2,
+                                             base_date='2025-04-10')
+                row.update(breadth_total=6, breadth_positive=4)
+                text = chart_caption(row)
+                self.assertIn('вход по модели', text)
+                album = '📊 Что видно на графиках\n\n' + '\n\n'.join([text]*3)
+                self.assertLessEqual(len(album.encode('utf-16-le'))//2, 1024)
+                row['il_fund_data']['price_stats']['chart_history'] = row['il_fund_data']['price_stats']['chart_history'][-20:]
+                text = chart_caption(row)
+                self.assertIn('История неполная', text)
+                self.assertNotIn('вход по модели', text)
+        
             def test_calendar_window_and_missing_history(self):
                 from datetime import date, timedelta
                 from modules.charts import chart_window
