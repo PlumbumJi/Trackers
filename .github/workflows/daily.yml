@@ -44,6 +44,13 @@ jobs:
       uses: actions/setup-python@v7
       with:
         python-version: '3.11'
+    - name: Restore Fund Discovery Journal
+      if: steps.report.outputs.mode == 'portfolio'
+      uses: actions/cache/restore@v5
+      with:
+        path: fund_movers_state.json
+        key: fund-discovery-v1-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: fund-discovery-v1-
     - name: Restore Sector Analysis
       if: steps.report.outputs.mode == 'portfolio'
       uses: actions/cache/restore@v5
@@ -165,46 +172,46 @@ jobs:
         from html.parser import HTMLParser
         from typing import Any, Optional
         from zoneinfo import ZoneInfo
-
+        
         import aiohttp
         from playwright.async_api import async_playwright
-
+        
         from modules.config import HEADERS, HTTP_TIMEOUT
-
+        
         RETURN_KEYS = ("daily", "mtd", "ytd")
         EMPTY_RETURNS = {key: None for key in RETURN_KEYS}
         IL_CONCURRENCY = 3
         IL_REQUEST_TIMEOUT = 25
-
-
+        
+        
         class _Node:
             def __init__(self, tag="root", attrs=()):
                 self.tag, self.attrs, self.children = tag, dict(attrs), []
-
+        
             def walk(self, tag=None):
                 if tag is None or self.tag == tag:
                     yield self
                 for child in self.children:
                     if isinstance(child, _Node):
                         yield from child.walk(tag)
-
+        
             def text(self):
                 if self.tag in {"script", "style", "noscript"}:
                     return ""
                 return " ".join(c.text() if isinstance(c, _Node) else c for c in self.children)
-
-
+        
+        
         class _FundHTML(HTMLParser):
             """Small stdlib DOM reader for the fund header and the returns table."""
             VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
-
+        
             def __init__(self, html):
                 super().__init__(convert_charrefs=True)
                 self.root = _Node()
                 self.stack = [self.root]
                 self.feed(html)
                 self.close()
-
+        
             def handle_starttag(self, tag, attrs):
                 # Bizportal contains unclosed spans inside cells. Boundaries stay explicit.
                 if tag in {"tr", "td", "th", "li"}:
@@ -213,25 +220,25 @@ jobs:
                 self.stack[-1].children.append(node)
                 if tag not in self.VOID:
                     self.stack.append(node)
-
+        
             def handle_startendtag(self, tag, attrs):
                 self.handle_starttag(tag, attrs)
                 self.handle_endtag(tag)
-
+        
             def handle_endtag(self, tag):
                 for index in range(len(self.stack) - 1, 0, -1):
                     if self.stack[index].tag == tag:
                         del self.stack[index:]
                         break
-
+        
             def handle_data(self, data):
                 self.stack[-1].children.append(data)
-
-
+        
+        
         def _clean_text(value):
             return re.sub(r"\s+", " ", str(value).translate(dict.fromkeys(map(ord, "\u200e\u200f\u202a\u202b\u202c\u2066\u2067\u2068\u2069"), None))).strip()
-
-
+        
+        
         def parse_optional_float(value: Any) -> Optional[float]:
             if value is None or isinstance(value, bool):
                 return None
@@ -256,8 +263,8 @@ jobs:
             except ValueError:
                 return None
             return round(number, 2) if math.isfinite(number) else None
-
-
+        
+        
         def normalize_returns(data: dict) -> dict:
             result = {}
             for key in RETURN_KEYS:
@@ -270,15 +277,15 @@ jobs:
                 if key in data:
                     result[key] = data[key]
             return result
-
-
+        
+        
         def valid_returns(data: Any) -> bool:
             if not isinstance(data, dict):
                 return False
             values = [parse_optional_float(data.get(key)) for key in RETURN_KEYS]
             return any(value is not None and value >= -100.0 for value in values)
-
-
+        
+        
         async def fetch_single_ticker(session: aiohttp.ClientSession, ticker: str) -> tuple[str, dict]:
             api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{api_ticker}?range=10d&interval=1d"
@@ -327,8 +334,8 @@ jobs:
             return ticker, {
                 "price": None, "change": None, "market_date": None,
             }
-
-
+        
+        
         async def fetch_all_yahoo_data(tickers: list[str]) -> dict:
             timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT)
             connector = aiohttp.TCPConnector(limit=12, limit_per_host=8, ttl_dns_cache=300)
@@ -336,14 +343,14 @@ jobs:
                 return dict(await asyncio.gather(*[
                     fetch_single_ticker(session, ticker) for ticker in tickers
                 ]))
-
-
-
-
-
-
-
-
+        
+        
+        
+        
+        
+        
+        
+        
         def parse_bizportal_page(html: str, fund_id: str) -> Optional[dict]:
             root = _FundHTML(html).root
             page_text = _clean_text(root.text())
@@ -353,10 +360,10 @@ jobs:
             if not identities or any(value != str(fund_id) for value in identities):
                 print(f"⚠️ Bizportal {fund_id}: fund identity missing or mismatched")
                 return None
-
+        
             data = dict(EMPTY_RETURNS)
             data["source_missing"] = []
-
+        
             def read_value(key, text):
                 value = parse_optional_float(text)
                 if value is None and _clean_text(text) in {"--", "--%", "—", "—%", "N/A"}:
@@ -377,7 +384,7 @@ jobs:
                             key = {"החודש": "mtd", "השנה": "ytd"}.get(label)
                             if key:
                                 data[key] = read_value(key, nums[0].text())
-
+        
             date_match = re.search(r"(?:תאריך עדכון|מועד עדכון אחרון)\s*[:\-]?\s*(\d{1,2}[./]\d{1,2}[./]\d{4})", page_text)
             if date_match:
                 data["update_date"] = date_match.group(1)
@@ -385,8 +392,8 @@ jobs:
             data["source_missing"] = sorted({key for key in data["source_missing"] if data.get(key) is None})
             print(f"🔍 Bizportal {fund_id}: " + ", ".join(f"{key}={data[key]}" for key in RETURN_KEYS))
             return data if valid_returns(data) else None
-
-
+        
+        
         def merge_returns(current: dict, extra: dict) -> dict:
             merged = dict(current)
             for key, value in extra.items():
@@ -399,23 +406,23 @@ jobs:
             result = normalize_returns(merged)
             result["source_missing"] = [key for key in result.get("source_missing", []) if result.get(key) is None]
             return result
-
-
+        
+        
         def is_access_challenge(html: str) -> bool:
             title = re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
             title = title.group(1).lower() if title else ""
             return any(word in title for word in ("access denied", "just a moment", "captcha", "verify you are human"))
-
-
+        
+        
         async def fetch_bizportal_page(session: aiohttp.ClientSession, fund_id: str, limiter=None, denied=None) -> tuple[str, dict]:
             general_url = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{fund_id}"
             performance_url = f"https://www.bizportal.co.il/mutualfunds/quote/performance/{fund_id}"
             headers = dict(HEADERS, Referer="https://www.bizportal.co.il/mutualfunds")
-
+        
             limiter = limiter or asyncio.Semaphore(IL_CONCURRENCY)
             denied = denied or asyncio.Event()
             errors = []
-
+        
             async def load(url: str) -> Optional[dict]:
                 page_name = "general" if "generalview" in url else "performance"
                 for attempt in (1, 2):
@@ -455,7 +462,7 @@ jobs:
                     if attempt == 1:
                         await asyncio.sleep(1)
                 return None
-
+        
             general = await load(general_url)
             needs_backup = not general or any(
                 general.get(key) is None and key not in general.get("source_missing", [])
@@ -466,8 +473,8 @@ jobs:
             result["errors"] = list(dict.fromkeys(errors))
             result["access_denied"] = denied.is_set()
             return fund_id, result
-
-
+        
+        
         async def fetch_bizportal_playwright(fund_ids: set[str], existing=None) -> dict:
             results = {}
             existing = existing or {}
@@ -515,8 +522,8 @@ jobs:
             except Exception as error:
                 print(f"⚠️ Browser fallback stopped: {type(error).__name__}; keeping partial results")
             return results
-
-
+        
+        
         def parse_bizportal_history_response(payload: str) -> tuple[list[dict], int]:
             """Parse Bizportal's ~pages^[JSON] graph response without guessing values."""
             text = str(payload or "").strip()
@@ -543,8 +550,8 @@ jobs:
                     continue
                 result.append({"date": day.isoformat(), "price": price})
             return result, max(1, int(match.group(1)))
-
-
+        
+        
         def calculate_price_stats(history: list[dict]) -> dict:
             points = []
             for row in history:
@@ -575,13 +582,13 @@ jobs:
             period_average = sum(price for _, price in period) / len(period)
             period_minimum = min(price for _, price in period)
             period_maximum = max(price for _, price in period)
-
+        
             def range_position(price: float, minimum: float, maximum: float) -> Optional[float]:
                 spread = maximum - minimum
                 if spread <= 0:
                     return None
                 return round((price - minimum) / spread * 100.0, 2)
-
+        
             return {
                 "chart_history": [{"date": day.isoformat(), "price": price} for day, price in points[-400:]],
                 "current_price": round(current, 2),
@@ -601,13 +608,14 @@ jobs:
                 "from_period_high": round((current / period_maximum - 1.0) * 100.0, 2),
                 "to_period_average": round((period_average / current - 1.0) * 100.0, 2),
             }
-
-
+        
+        
         async def fetch_bizportal_price_history(
             session: aiohttp.ClientSession,
             fund_id: str,
             limiter: asyncio.Semaphore,
             denied: asyncio.Event,
+            *, max_pages: int = 12,
         ) -> list[dict]:
             if denied.is_set():
                 return []
@@ -619,7 +627,7 @@ jobs:
             )
             all_rows = []
             pages = 1
-            for page_number in range(1, 13):
+            for page_number in range(1, min(max_pages, 12) + 1):
                 if page_number > pages:
                     break
                 params = {
@@ -634,6 +642,7 @@ jobs:
                         async with session.get(url, params=params, headers=headers, timeout=timeout) as response:
                             body = await response.text(errors="ignore")
                     if response.status in {401, 403, 429} or is_access_challenge(body):
+                        denied.set()
                         print(f"⚠️ Bizportal history {fund_id}: access restricted (HTTP {response.status})")
                         return []
                     if response.status != 200 or not body.strip():
@@ -650,8 +659,8 @@ jobs:
                     print(f"⚠️ Bizportal history {fund_id}: {type(error).__name__}")
                     break
             return sorted({row["date"]: row for row in all_rows}.values(), key=lambda row: row["date"])
-
-
+        
+        
         async def fetch_all_israeli_funds(sectors_config: dict) -> dict:
             fund_to_sector = {
                 str(config["fund_id"]): sector
@@ -679,7 +688,7 @@ jobs:
                 for fund_id, history in zip(sorted(fund_ids), histories):
                     if history:
                         by_fund_id[fund_id]["price_stats"] = calculate_price_stats(history)
-
+        
             fallback_ids = {
                 fund_id for fund_id in fund_ids
                 if any(
@@ -694,7 +703,7 @@ jobs:
                 for fund_id, fallback in fallback_data.items():
                     current = by_fund_id.get(fund_id, dict(EMPTY_RETURNS))
                     by_fund_id[fund_id] = merge_returns(current, fallback)
-
+        
             results = {}
             for fund_id, sector in fund_to_sector.items():
                 data = by_fund_id.get(fund_id)
@@ -706,8 +715,8 @@ jobs:
             complete = sum(all(row.get(key) is not None for key in RETURN_KEYS) for row in results.values())
             print(f"📊 Israeli funds: daily={daily_count}/{len(fund_ids)}, complete={complete}/{len(fund_ids)}")
             return results
-
-
+        
+        
         async def fetch_ticker_history(session: aiohttp.ClientSession, ticker: str) -> list[dict]:
             """Fetch completed daily closes used for one- and five-session confirmation."""
             api_ticker = f"^{ticker}" if ticker == "OVX" else ticker
@@ -741,8 +750,8 @@ jobs:
             except Exception as error:
                 print(f"⚠️ Yahoo history {ticker}: {error}")
                 return []
-
-
+        
+        
         def analyze_year_history(history: list[dict], ticker: str) -> dict:
             if len(history) < 6:
                 return {}
@@ -755,8 +764,8 @@ jobs:
                 "change_5d": round((latest["close"] / base["close"] - 1) * 100, 2),
                 "change_1d": round((latest["close"] / history[-2]["close"] - 1) * 100, 2),
             }
-
-
+        
+        
         def analyze_entry_zone(fund_data: dict, market_data: dict) -> dict:
             # The setup belongs to the fund; US data never creates or upgrades it here.
             stats = fund_data.get("price_stats") or {}
@@ -789,8 +798,8 @@ jobs:
                 "base_date": market_data.get("market_date", ""),
                 "proxy_ticker": market_data.get("proxy_ticker", ""),
             }
-
-
+        
+        
         async def fetch_all_year_analytics(sectors_config: dict) -> dict:
             timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT + 20)
             connector = aiohttp.TCPConnector(limit=8, limit_per_host=6, ttl_dns_cache=300)
@@ -1672,18 +1681,22 @@ jobs:
                         print(f"🚀 Sent chunk {index}/{len(chunks)}")
         
         
-        async def send_chart_photos(charts, may_send=lambda: True) -> None:
+        async def send_chart_photos(charts, may_send=lambda: True, *, chat_id=None,
+                                    title="📊 Что видно на графиках", parse_mode=None) -> None:
             if not charts or not may_send():
                 return
-            if not BOT_TOKEN or not CHAT_ID:
+            destination = chat_id or CHAT_ID
+            if not BOT_TOKEN or not destination:
                 raise RuntimeError("BOT_TOKEN or CHAT_ID is missing")
             charts = charts[:3]
             captions = [caption for _, caption in charts]
-            album_caption = "📊 Что видно на графиках\n\n" + "\n\n".join(captions)
-            if len(album_caption.encode("utf-16-le")) // 2 > 1024:
+            album_caption = title + "\n\n" + "\n\n".join(captions)
+            from html import unescape
+            visible = unescape(re.sub(r'<[^>]*>', '', album_caption)) if parse_mode == 'HTML' else album_caption
+            if len(visible.encode("utf-16-le")) // 2 > 1024:
                 raise ValueError("Album caption exceeds Telegram limit")
             payload = aiohttp.FormData()
-            payload.add_field("chat_id", CHAT_ID)
+            payload.add_field("chat_id", destination)
             payload.add_field("disable_notification", "true")
             media = []
             for index, (png, _) in enumerate(charts):
@@ -1693,12 +1706,16 @@ jobs:
                 item = {"type": "photo", "media": f"attach://{attachment}"}
                 if index == 0:
                     item["caption"] = album_caption
+                    if parse_mode:
+                        item['parse_mode'] = parse_mode
                 media.append(item)
             if len(charts) > 1:
                 payload.add_field("media", json.dumps(media, ensure_ascii=False))
                 method = "sendMediaGroup"
             else:
                 payload.add_field("caption", album_caption)
+                if parse_mode:
+                    payload.add_field('parse_mode', parse_mode)
                 method = "sendPhoto"
             timeout = aiohttp.ClientTimeout(total=45)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -1711,9 +1728,9 @@ jobs:
         cat << 'EOF' > main.py
         import asyncio
         import os
-
+        
         import aiohttp
-
+        
         from modules.config import BOT_VERSION, SECTORS_CONFIG
         from modules.formatter import (
             build_combined_radar_message,
@@ -1728,7 +1745,7 @@ jobs:
         from modules.news import fetch_sector_news
         from modules.telegram_sender import send_to_telegram, send_chart_photos
         from modules.charts import build_radar_charts
-
+        
         async def run_market_analytics() -> None:
             print(f"Build: {BOT_VERSION}; commit={os.getenv('GITHUB_SHA', 'local')[:12]}")
             all_tickers = sorted(
@@ -1741,7 +1758,7 @@ jobs:
             il_results = await fetch_all_israeli_funds(SECTORS_CONFIG)
             print("📈 Collecting completed base-market history...")
             year_results = await fetch_all_year_analytics(SECTORS_CONFIG)
-
+        
             async with aiohttp.ClientSession() as session:
                 sector_tasks = []
                 sector_rows = []
@@ -1777,7 +1794,7 @@ jobs:
                     sector_tasks.append(asyncio.create_task(fetch_sector_news(
                         session, config["news_ticker"], top_movements, config["short_eng"]
                     )))
-
+        
                 results = []
                 for row, news_task in zip(sector_rows, sector_tasks):
                     sector, config, top_movements, base_change, base_date = row
@@ -1813,7 +1830,7 @@ jobs:
                             for t in config["tickers"]
                         ),
                     })
-
+        
             fund_dates = [
                 (row.get("il_fund_data", {}).get("price_stats") or {}).get("price_date")
                 for row in results
@@ -1830,7 +1847,7 @@ jobs:
                             "status_key": "unavailable",
                             "candidate": False,
                         }
-
+        
             results.sort(
                 key=lambda item: (
                     item["avg_change"] is not None,
@@ -1865,13 +1882,13 @@ jobs:
                 print(f"Album prepared: {len(charts)} charts")
             else:
                 await send_chart_photos(charts)
-
-
-
+        
+        
+        
         if __name__ == "__main__":
             if os.getenv("RUN_MODE", "market") == "portfolio":
-                from modules.portfolio import run_portfolio
-                asyncio.run(run_portfolio())
+                from modules.movers import run_morning_reports
+                asyncio.run(run_morning_reports())
             else:
                 asyncio.run(run_market_analytics())
         EOF
@@ -2248,18 +2265,21 @@ jobs:
             return {}
         
         
-        async def fetch_portfolio_fund(session, fund_id, limiter, denied):
+        async def fetch_portfolio_fund(session, fund_id, limiter, denied, *, history_pages=12):
             quote = {}
             # Visiting the page also initializes the ordinary site's session before AJAX.
             for page in ('generalview', 'performance'):
                 url = f'https://www.bizportal.co.il/mutualfunds/quote/{page}/{fund_id}'
                 try:
                     async with limiter:
+                        if denied.is_set():
+                            return [], {}
                         async with session.get(url, headers=HEADERS) as response:
                             body = await response.text(errors='ignore')
                             status = response.status
                     print(f'Portfolio page {fund_id} {page}: HTTP {status}, bytes={len(body)}')
                     if status in {401, 403, 429} or is_access_challenge(body):
+                        denied.set()
                         return [], {}
                     if status == 200:
                         quote = parse_portfolio_quote(body, fund_id)
@@ -2269,7 +2289,7 @@ jobs:
                             break
                 except (aiohttp.ClientError, asyncio.TimeoutError) as error:
                     print(f'Portfolio page {fund_id}: {type(error).__name__}')
-            history = await fetch_bizportal_price_history(session, fund_id, limiter, denied)
+            history = await fetch_bizportal_price_history(session, fund_id, limiter, denied, max_pages=history_pages)
             return history, quote
         
         
@@ -3386,6 +3406,590 @@ jobs:
         if __name__ == '__main__':
             unittest.main()
         EOF
+        cat << 'EOF' > modules/movers.py
+        """Morning fund discovery. Coverage is the readable Funder list, not all TASE.
+        
+        Funder screens; Bizportal's dated quote and price history independently check
+        the move. Failed checks never become buy/sell signals or zero-event successes.
+        """
+        import asyncio
+        import copy
+        import json
+        import math
+        import os
+        import re
+        import xml.etree.ElementTree as ET
+        from datetime import date, datetime
+        from email.utils import parsedate_to_datetime
+        from html import escape
+        from pathlib import Path
+        from urllib.parse import urlparse
+        from zoneinfo import ZoneInfo
+        
+        import aiohttp
+        
+        from modules.charts import render_fund_chart
+        from modules.config import BOT_NAME, HEADERS
+        from modules.market import _FundHTML, _clean_text, parse_optional_float, is_access_challenge
+        from modules.portfolio import fetch_portfolio_fund
+        from modules.news import translate_to_russian, shorten_title
+        from modules.telegram_sender import send_chart_photos
+        
+        LIST_URL = 'https://funder.co.il/allInOne.aspx'
+        STATE = Path('fund_movers_state.json')
+        TZ = ZoneInfo('Asia/Jerusalem')
+        THRESHOLD = 10.0
+        MAX_CHECKS = 30
+        MAX_TRACKED = 30
+        MIN_LIST_ROWS = 100  # A broken or tiny table must not count as a market scan.
+        
+        
+        def number(value):
+            return parse_optional_float(value)
+        
+        
+        def parse_listing(body):
+            root = _FundHTML(body).root
+            found, conflicts = {}, set()
+            for table in root.walk('table'):
+                columns = None
+                for tr in table.walk('tr'):
+                    cells = [n for n in tr.children if getattr(n, 'tag', '') in {'td', 'th'}]
+                    labels = [_clean_text(c.text()) for c in cells]
+                    daily = next((i for i, s in enumerate(labels) if s == 'תשואה יומית'), None)
+                    name = next((i for i, s in enumerate(labels) if s == 'שם קרן הנאמנות'), None)
+                    if daily is not None and name is not None:
+                        columns = (name, daily)
+                        continue
+                    if columns is None or len(cells) <= max(columns):
+                        continue
+                    name_index, daily_index = columns
+                    links = list(cells[name_index].walk('a'))
+                    ids = set()
+                    for link in links:
+                        href = link.attrs.get('href', '')
+                        match = re.search(r'(?:^|/)fund/(\d{6,8})(?:[/?#]|$)', urlparse(href).path)
+                        if match:
+                            ids.add(match.group(1))
+                    change = number(labels[daily_index])
+                    if len(ids) != 1 or change is None or change <= -100:
+                        continue
+                    fid = ids.pop()
+                    row = {'fund_id': fid, 'name': labels[name_index], 'daily': change}
+                    if fid in found and found[fid]['daily'] != change:
+                        conflicts.add(fid)
+                    found[fid] = row
+            return [row for fid, row in found.items() if fid not in conflicts]
+        
+        
+        def verified_publication(history, quote, reported_change, today):
+            """Require same last price/date plus agreement of both published daily returns."""
+            points = {}
+            for point in history:
+                try:
+                    day = date.fromisoformat(point['date'])
+                    price = float(point['price'])
+                    if day > today or not math.isfinite(price) or price <= 0:
+                        continue
+                    if day in points and points[day] != price:
+                        return None
+                    points[day] = price
+                except (ValueError, KeyError, TypeError):
+                    continue
+            ordered = sorted(points.items())
+            if len(ordered) < 2:
+                return None
+            (previous_day, previous), (last_day, current) = ordered[-2:]
+            # Conservative bounds: do not disguise long publication gaps as one day.
+            if (today - last_day).days > 7 or (last_day - previous_day).days > 4:
+                return None
+            # Some fund pages omit the date. In that case use the dated history ONLY
+            # after matching its exact last price and both published daily changes.
+            if quote.get('date') and quote['date'] != last_day.isoformat():
+                return None
+            quote_price, quote_change = number(quote.get('price')), number(quote.get('daily'))
+            change = (current / previous - 1) * 100
+            if quote_price is None or quote_change is None:
+                return None
+            if abs(quote_price - current) > max(0.011, current * 0.0001):
+                return None
+            if abs(change - quote_change) > 0.15 or abs(change - reported_change) > 0.15:
+                return None
+            return ordered
+        
+        
+        def validated_event(row, history, quote, today):
+            ordered = verified_publication(history, quote, row['daily'], today)
+            if not ordered or len(ordered) < 15:
+                return None
+            (previous_day, previous), (last_day, current) = ordered[-2:]
+            change = (current / previous - 1) * 100
+            if round(abs(change), 6) < THRESHOLD:
+                return None
+            # Very large jumps require corporate-action review outside this model.
+            if abs(change) >= 60:
+                return None
+            prior_changes = [abs(b[1] / a[1] - 1) * 100
+                             for a, b in zip(ordered[:-2], ordered[1:-1])
+                             if (b[0] - a[0]).days <= 4]
+            rare = len(prior_changes) >= 30 and abs(change) > max(prior_changes)
+            prior = ordered[-3][1]
+            if change < 0:
+                conclusion = 'Резкое снижение; разворот не подтверждён.'
+            elif previous < prior:
+                conclusion = 'Первый рост после падения; одного повышения мало.'
+            elif previous > prior:
+                conclusion = 'Рост продолжается; скачок сам по себе не сигнал входа.'
+            else:
+                conclusion = 'Рост после неизменной цены; подтверждения входа нет.'
+            name = row['name']
+            leverage = re.search(r'(?<!\w)פי\s*(\d{1,2}(?:\.\d+)?)(?![\w.])', name)
+            if leverage:
+                risk = f'плечо ×{leverage.group(1)}'
+            elif 'ממונפת' in name and 'לא ממונפת' not in name:
+                risk = 'с плечом'
+            else:
+                risk = ''
+            if 'שורט' in name:
+                risk = (risk + ' · шорт') if risk else 'стратегия шорт'
+            return {**row, 'daily': round(change, 2), 'date': last_day.isoformat(),
+                    'previous_date': previous_day.isoformat(), 'price': current,
+                    'history': [{'date': d.isoformat(), 'price': p} for d, p in ordered],
+                    'rare': rare, 'risk': risk, 'conclusion': conclusion}
+        
+        
+        async def fund_context(session, event, now):
+            """Only exact fund mentions; a headline is context, never proof of causality."""
+            try:
+                params = {'q': f'"{event["name"]}" when:2d', 'hl': 'he', 'gl': 'IL', 'ceid': 'IL:he'}
+                async with session.get('https://news.google.com/rss/search', params=params) as response:
+                    if response.status != 200:
+                        return None
+                    root = ET.fromstring(await response.text())
+                for item in root.findall('./channel/item'):
+                    title = _clean_text(item.findtext('title') or '')
+                    if event['name'] not in title and not re.search(rf'\b{event["fund_id"]}\b', title):
+                        continue
+                    published = parsedate_to_datetime(item.findtext('pubDate') or '')
+                    age = (now - published).total_seconds()
+                    if not 0 <= age <= 48 * 3600:
+                        continue
+                    link = item.findtext('link') or ''
+                    if urlparse(link).scheme != 'https':
+                        continue
+                    translated = await translate_to_russian(session, title)
+                    if not translated or not re.search('[А-Яа-я]', translated):
+                        continue
+                    return {'title': shorten_title(translated, 65), 'url': link}
+            except (aiohttp.ClientError, asyncio.TimeoutError, ET.ParseError, ValueError, TypeError):
+                pass
+            return None
+        
+        
+        def load_state():
+            try:
+                state = json.loads(STATE.read_text())
+                if state.get('schema') == 1 and isinstance(state.get('events'), dict):
+                    if not isinstance(state.get('last_scan'), dict):
+                        state['last_scan'] = {}
+                    count = state['last_scan'].get('readable_funds', 0)
+                    if not isinstance(count, int) or count < 0:
+                        state['last_scan']['readable_funds'] = 0
+                    # Corrupt records cannot influence delivery or follow-up arithmetic.
+                    for event in state['events'].values():
+                        date.fromisoformat(event['date'])
+                        date.fromisoformat(event['detected_on'])
+                        price = float(event['price'])
+                        if not math.isfinite(price) or price <= 0:
+                            raise ValueError('invalid discovery price')
+                        event['price'] = price
+                        if not isinstance(event.get('checked_at'), str):
+                            event['checked_at'] = ''
+                    return state
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                pass
+            return {'schema': 1, 'events': {}}
+        
+        
+        def save_state(state):
+            temporary = STATE.with_suffix('.tmp')
+            temporary.write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8')
+            temporary.replace(STATE)
+        
+        
+        def track(event, history, today):
+            # Observations must be AFTER discovery, not merely after an old NAV date.
+            observed = {}
+            for point in history:
+                try:
+                    d = date.fromisoformat(point['date'])
+                    p = float(point['price'])
+                    if event['detected_on'] < d.isoformat() <= today.isoformat() and math.isfinite(p) and p > 0:
+                        observed[d] = p
+                except (KeyError, ValueError, TypeError):
+                    continue
+            prices = [p for _, p in sorted(observed.items())]
+            for n in (5, 20):
+                if len(prices) >= n:
+                    event[f'after_{n}_publications_pct'] = round((prices[n-1] / event['price'] - 1) * 100, 2)
+            if prices:
+                event['worst_since_detection_pct'] = round((min(prices) / event['price'] - 1) * 100, 2)
+            if len(prices) >= 20:
+                event['tracking'] = 'completed'
+            elif (today - date.fromisoformat(event['detected_on'])).days > 120:
+                event['tracking'] = 'expired'
+        
+        
+        def event_caption(event):
+            fid = event['fund_id']
+            name = shorten_title(event['name'], 32)
+            link = f'https://funder.co.il/fund/{fid}'
+            source = f'https://www.bizportal.co.il/mutualfunds/quote/generalview/{fid}'
+            marker = '🟩▲' if event['daily'] > 0 else '🟥▼'
+            start = date.fromisoformat(event['previous_date']).strftime('%d.%m')
+            end = date.fromisoformat(event['date']).strftime('%d.%m')
+            risk = ' · ' + event['risk'] if event['risk'] else ''
+            lines = [f'<a href="{link}">{escape(name)}</a> · {fid}',
+                     f'{marker} {event["daily"]:+.1f}% · NAV {start}→{end}{escape(risk)}']
+            if event['rare']:
+                lines.append('Максимальное движение за период истории.')
+            context = event.get('context')
+            if context:
+                lines.append(f'Контекст: <a href="{escape(context["url"], quote=True)}">{escape(shorten_title(context["title"], 45))}</a>')
+            else:
+                lines.append('Причина не установлена.')
+            lines.append(f'<a href="{source}">Вывод:</a> {escape(event["conclusion"])}')
+            return '\n'.join(lines)
+        
+        
+        async def prepare_movers():
+            state = copy.deepcopy(load_state())
+            now = datetime.now(TZ)
+            timeout = aiohttp.ClientTimeout(total=25)
+            async with aiohttp.ClientSession(timeout=timeout, headers=HEADERS, trust_env=True) as session:
+                async with session.get(LIST_URL) as response:
+                    if response.status != 200:
+                        raise RuntimeError(f'Funder list HTTP {response.status}')
+                    body = await response.text(errors='ignore')
+                if is_access_challenge(body):
+                    raise RuntimeError('Funder access restricted')
+                listing = parse_listing(body)
+                previous_count = state.get('last_scan', {}).get('readable_funds', 0)
+                if len(listing) < max(MIN_LIST_ROWS, previous_count * 0.7):
+                    raise RuntimeError(f'Incomplete list: {len(listing)} readable funds')
+                candidates = sorted((r for r in listing if abs(r['daily']) >= THRESHOLD),
+                                    key=lambda r: abs(r['daily']), reverse=True)
+                active = sorted((e for e in state['events'].values() if e.get('tracking') == 'open'),
+                                key=lambda e: e.get('checked_at', ''))
+                # Check a few non-candidates too: a readable but stale list is not success.
+                probes = sorted((r for r in listing if abs(r['daily']) < THRESHOLD),
+                                key=lambda r: abs(r['daily']), reverse=True)[:3]
+                ids = list(dict.fromkeys([r['fund_id'] for r in candidates[:MAX_CHECKS]] +
+                                        [r['fund_id'] for r in active[:MAX_TRACKED]] +
+                                        [r['fund_id'] for r in probes]))
+                history_ids = {r['fund_id'] for r in candidates[:MAX_CHECKS]} | {r['fund_id'] for r in active[:MAX_TRACKED]}
+                limiter, denied = asyncio.Semaphore(3), asyncio.Event()
+                async def fetch(fid):
+                    async with limiter:
+                        # Limit whole-fund jobs, not just individual requests.
+                        try:
+                            return await fetch_portfolio_fund(session, fid, asyncio.Semaphore(1), denied,
+                                                              history_pages=12 if fid in history_ids else 1)
+                        except Exception as error:
+                            print(f'::warning::Fund {fid} unavailable: {type(error).__name__}')
+                            return [], {}
+                results = await asyncio.gather(*(fetch(fid) for fid in ids))
+                data = dict(zip(ids, results))
+                for event in active:
+                    if event['fund_id'] in data:
+                        track(event, data[event['fund_id']][0], now.date())
+                        event['checked_at'] = now.isoformat()
+                healthy_probes = 0
+                for row in probes:
+                    history, quote = data[row['fund_id']]
+                    healthy_probes += int(bool(verified_publication(history, quote, row['daily'], now.date())))
+                selected, validated = [], 0
+                for row in candidates[:MAX_CHECKS]:
+                    history, quote = data[row['fund_id']]
+                    event = validated_event(row, history, quote, now.date())
+                    if not event:
+                        continue
+                    validated += 1
+                    key = f'{event["fund_id"]}:{event["date"]}'
+                    if state['events'].get(key, {}).get('sent_at') or len(selected) >= 3:
+                        continue
+                    png = render_fund_chart({'fund_id': event['fund_id'],
+                                            'il_name_eng': f'Фонд {event["fund_id"]}',
+                                            'il_fund_data': {'price_stats': {'chart_history': event['history']}}})
+                    if not png:
+                        continue
+                    event['context'] = await fund_context(session, event, now)
+                    selected.append((key, event, png))
+                state['last_scan'] = {
+                    'at': now.isoformat(), 'readable_funds': len(listing),
+                    'candidates': len(candidates), 'checked': min(len(candidates), MAX_CHECKS),
+                    'validated': validated,
+                    'freshness_checks': healthy_probes,
+                    'status': 'partial' if (len(candidates) > MAX_CHECKS or validated < len(candidates)
+                                            or healthy_probes < len(probes)) else 'ok',
+                    'scope': 'Funder readable rows; full-market coverage not asserted',
+                }
+                print('Fund discovery: ' + json.dumps(state['last_scan'], ensure_ascii=False))
+                if state['last_scan']['status'] == 'partial':
+                    print('::warning::Some fund moves could not be verified; see scan counters')
+                return state, selected
+        
+        
+        async def prepare_safely():
+            try:
+                async with asyncio.timeout(240):
+                    return await prepare_movers()
+            except Exception as error:
+                # Preserve prior successful scan and delivery markers on any failure.
+                print(f'::warning::Fund discovery unavailable: {type(error).__name__}: {error}')
+                return None
+        
+        
+        async def deliver_movers(prepared):
+            if prepared is None:
+                return
+            state, selected = prepared
+            dry = os.getenv('DRY_RUN', '').lower() == 'true'
+            charts = [(png, event_caption(event)) for _, event, png in selected]
+            if charts:
+                title = (f'⚡ РЕЗКИЕ ДВИЖЕНИЯ ФОНДОВ · {datetime.now(TZ):%d.%m}\n'
+                         f'Отбор из {state["last_scan"]["readable_funds"]} доступных фондов · от ±10%')
+                if state['last_scan']['status'] == 'partial':
+                    title += '\nНе все кандидаты удалось проверить.'
+                # One album and one caption, signature inside the final card.
+                charts[-1] = (charts[-1][0], charts[-1][1] + '\n\n' + BOT_NAME)
+                if dry:
+                    print(title + '\n\n' + '\n\n'.join(c for _, c in charts))
+                else:
+                    destination = os.getenv('PORTFOLIO_CHAT_ID')
+                    if not destination:
+                        raise RuntimeError('PORTFOLIO_CHAT_ID is required for morning discovery')
+                    await send_chart_photos(charts, chat_id=destination, title=title, parse_mode='HTML')
+                if not dry:
+                    for key, event, _ in selected:
+                        state['events'][key] = {k: v for k, v in event.items() if k != 'history'}
+                        state['events'][key].update(sent_at=datetime.now(TZ).isoformat(),
+                                                   detected_on=datetime.now(TZ).date().isoformat(), tracking='open')
+            if not dry:
+                # Keep journal bounded without deleting currently followed discoveries.
+                closed = sorted((k for k, e in state['events'].items() if e.get('tracking') != 'open'),
+                                key=lambda k: state['events'][k]['detected_on'])
+                for key in closed[:-200]:
+                    del state['events'][key]
+                save_state(state)
+        
+        
+        async def run_morning_reports():
+            from modules.portfolio import run_portfolio
+            task = asyncio.create_task(prepare_safely())
+            try:
+                await run_portfolio()  # Message 4 must be delivered before message 5.
+                try:
+                    await deliver_movers(await task)
+                except Exception as error:
+                    # Portfolio has already been delivered and must keep its saved state.
+                    print(f'::warning::Fund discovery delivery failed: {type(error).__name__}')
+            finally:
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        EOF
+
+        cat << 'EOF' > tests/test_movers.py
+        import copy
+        import json
+        import tempfile
+        import unittest
+        from datetime import date, datetime, timedelta
+        from pathlib import Path
+        from unittest.mock import AsyncMock, MagicMock, patch
+        
+        from modules import movers, telegram_sender, portfolio
+        
+        
+        def listing(change='12', fid='5101183'):
+            # Representative semantic table, not a downloaded live fixture.
+            return (f'<table><tr><th></th><th>שם קרן הנאמנות</th><th>תשואה יומית</th>'
+                    f'<th>מתחילת השנה</th></tr><tr><td>1</td><td><a href="/fund/{fid}">קרן בדיקה</a>'
+                    f'</td><td>{change}%</td><td>99%</td></tr></table>')
+        
+        
+        def fixture():
+            today = date(2026, 10, 16)
+            points = [{'date': (today - timedelta(days=90-i)).isoformat(), 'price': 100.0}
+                      for i in range(91)]
+            points[-1]['price'] = 112.0
+            row = {'fund_id': '5101183', 'name': 'בדיקה פי 3', 'daily': 12.0}
+            quote = {'price': '112', 'date': today.isoformat(), 'daily': 12.0}
+            return row, points, quote, today
+        
+        
+        class MoverTests(unittest.IsolatedAsyncioTestCase):
+            def test_header_selection_and_duplicate_conflicts(self):
+                self.assertEqual(movers.parse_listing(listing())[0]['daily'], 12)
+                self.assertEqual(len(movers.parse_listing(listing()*2)), 1)
+                self.assertEqual(movers.parse_listing(listing()+listing('-12')), [])
+                self.assertEqual(movers.parse_listing(listing('N/A')), [])
+                self.assertEqual(movers.parse_listing('<table><tr><td>99%</td></tr></table>'), [])
+                # Live Funder response uses relative href="fund/ID" (no leading slash).
+                for href in ('fund/5101183','/fund/5101183','https://funder.co.il/fund/5101183?x=1'):
+                    self.assertEqual(movers.parse_listing(listing().replace('/fund/5101183',href))[0]['fund_id'], '5101183')
+        
+            def test_verified_move_and_bad_data_rejection(self):
+                row, points, quote, today = fixture()
+                event = movers.validated_event(row, points, quote, today)
+                self.assertEqual(event['daily'], 12)
+                self.assertEqual(event['risk'], 'плечо ×3')
+                self.assertTrue(event['rare'])
+                exact = copy.deepcopy(points)
+                exact[-1]['price'] = 110
+                self.assertIsNotNone(movers.validated_event(dict(row,daily=10), exact,
+                    dict(quote,price=110,daily=10),today))
+                self.assertIsNotNone(movers.validated_event(row, points, dict(quote,date=None), today))
+                for bad in (dict(quote, price='200'), dict(quote, date='2026-10-15'), dict(quote, daily=1)):
+                    self.assertIsNone(movers.validated_event(row, points, bad, today))
+                self.assertIsNone(movers.validated_event(row, points, quote, today+timedelta(days=8)))
+                gapped = points[:-7] + points[-1:]
+                self.assertIsNone(movers.validated_event(row, gapped, quote, today))
+                self.assertIsNone(movers.validated_event(row, points+[dict(points[-1],price=113)], quote, today))
+                points[-1]['price'] = 200
+                self.assertIsNone(movers.validated_event(dict(row,daily=100), points, dict(quote,price=200,daily=100),today))
+        
+            def test_followup_starts_after_discovery_not_old_nav(self):
+                event = {'price': 100, 'date': '2026-10-01', 'detected_on': '2026-10-05'}
+                points = [{'date': f'2026-10-{i:02d}', 'price': 100+i} for i in range(1, 12)]
+                movers.track(event, points, date(2026,10,11))
+                self.assertEqual(event['after_5_publications_pct'], 10)
+                self.assertNotIn('after_20_publications_pct', event)
+        
+            async def test_sequence_portfolio_before_discovery(self):
+                order = []
+                async def first(): order.append('portfolio')
+                async def second(prepared): order.append('movers')
+                with patch.object(portfolio, 'run_portfolio', new=first), \
+                     patch.object(movers, 'prepare_safely', new=AsyncMock(return_value=({},[]))), \
+                     patch.object(movers, 'deliver_movers', new=second):
+                    await movers.run_morning_reports()
+                self.assertEqual(order, ['portfolio','movers'])
+                with patch.object(portfolio, 'run_portfolio', new=AsyncMock()) as first, \
+                     patch.object(movers, 'prepare_safely', new=AsyncMock(return_value=({},[]))), \
+                     patch.object(movers, 'deliver_movers', new=AsyncMock(side_effect=RuntimeError('HTTP 500'))):
+                    await movers.run_morning_reports()
+                    first.assert_awaited_once()
+        
+            async def test_denial_stops_new_fund_requests(self):
+                import asyncio
+                class Response:
+                    status = 403
+                    async def __aenter__(self): return self
+                    async def __aexit__(self,*args): pass
+                    async def text(self,**kwargs): return 'Forbidden'
+                session = MagicMock()
+                session.get.return_value = Response()
+                denied = asyncio.Event()
+                with patch.object(portfolio,'fetch_bizportal_price_history',new=AsyncMock()) as history:
+                    await portfolio.fetch_portfolio_fund(session,'5101183',asyncio.Semaphore(1),denied)
+                    await portfolio.fetch_portfolio_fund(session,'5101184',asyncio.Semaphore(1),denied)
+                    self.assertTrue(denied.is_set())
+                    session.get.assert_called_once()
+                    history.assert_not_awaited()
+        
+            async def test_scan_validates_candidates_and_suppresses_sent_event(self):
+                row, points, quote, today = fixture()
+                body = listing('12') + ''.join(listing('0.1', str(5200000+i)) for i in range(100))
+                class Clock(datetime):
+                    @classmethod
+                    def now(cls, tz=None): return cls(2026,10,17,8,20,tzinfo=movers.TZ)
+                class Response:
+                    status = 200
+                    async def __aenter__(self): return self
+                    async def __aexit__(self,*args): pass
+                    async def text(self,**kwargs): return body
+                session = MagicMock()
+                session.get.return_value = Response()
+                manager = AsyncMock()
+                manager.__aenter__.return_value = session
+                async def fetch(session, fid, *args, **kwargs):
+                    if fid == '5101183': return points, quote
+                    probe = copy.deepcopy(points)
+                    probe[-1]['price'] = 100.1
+                    return probe, dict(quote,price=100.1,daily=0.1)
+                cache = {'schema':1,'events':{}}
+                with patch.object(movers, 'datetime', Clock), \
+                     patch.object(movers.aiohttp, 'ClientSession',return_value=manager), \
+                     patch.object(movers,'fetch_portfolio_fund',new=fetch), \
+                     patch.object(movers,'load_state',return_value=cache), \
+                     patch.object(movers,'render_fund_chart',return_value=b'png'), \
+                     patch.object(movers,'fund_context',new=AsyncMock(return_value=None)):
+                    state, selected = await movers.prepare_movers()
+                    self.assertEqual(len(selected),1)
+                    self.assertEqual(state['last_scan']['status'],'ok')
+                    key, event, _ = selected[0]
+                    cache['events'][key] = dict(event,sent_at='done',detected_on=today.isoformat())
+                    state, selected = await movers.prepare_movers()
+                    self.assertEqual(selected,[])
+        
+            async def test_no_empty_message_and_no_mark_sent_before_delivery(self):
+                row, points, quote, today = fixture()
+                event = movers.validated_event(row, points, quote, today)
+                key = event['fund_id']+':'+event['date']
+                initial = {'schema': 1, 'events': {}, 'last_scan': {'readable_funds':1000,'status':'ok'}}
+                with tempfile.TemporaryDirectory() as d, patch.object(movers, 'STATE', Path(d)/'state.json'), \
+                     patch.dict(movers.os.environ, {'PORTFOLIO_CHAT_ID':'private','DRY_RUN':'false'}), \
+                     patch.object(movers, 'send_chart_photos', new=AsyncMock()) as sender:
+                    await movers.deliver_movers((copy.deepcopy(initial), []))
+                    sender.assert_not_awaited()
+                    sender.side_effect = RuntimeError('delivery failed')
+                    with self.assertRaises(RuntimeError):
+                        await movers.deliver_movers((copy.deepcopy(initial), [(key,event,b'png')]))
+                    self.assertEqual(json.loads(movers.STATE.read_text())['events'], {})
+                    sender.side_effect = None
+                    await movers.deliver_movers((copy.deepcopy(initial), [(key,event,b'png')]))
+                    self.assertIn(key, json.loads(movers.STATE.read_text())['events'])
+                    self.assertEqual(sender.call_args.kwargs['chat_id'], 'private')
+        
+            async def test_three_html_captions_fit_and_send_privately(self):
+                row, points, quote, today = fixture()
+                event = movers.validated_event(row, points, quote, today)
+                event['name'] = 'Фонд & название с длинным описанием ' * 5
+                event['context'] = {'title':'Новость о фонде ' * 4, 'url':'https://example.com/?a=1&b=2'}
+                captions = [movers.event_caption(event) for _ in range(3)]
+                class Response:
+                    status=200
+                    async def __aenter__(self): return self
+                    async def __aexit__(self,*args): pass
+                    async def json(self): return {'ok':True}
+                session = MagicMock()
+                session.post.return_value = Response()
+                manager = AsyncMock()
+                manager.__aenter__.return_value = session
+                with patch.object(telegram_sender,'BOT_TOKEN','fake'), \
+                     patch.object(telegram_sender,'CHAT_ID','public'), \
+                     patch.object(telegram_sender.aiohttp,'ClientSession',return_value=manager):
+                    await telegram_sender.send_chart_photos([(b'png',c) for c in captions],
+                        chat_id='private', title='⚡ РЕЗКИЕ ДВИЖЕНИЯ ФОНДОВ · 17.10\nОтбор из 2500 доступных фондов · от ±10%\nНе все кандидаты удалось проверить.\n'+movers.BOT_NAME, parse_mode='HTML')
+                fields = session.post.call_args.kwargs['data']._fields
+                self.assertEqual(next(v for f,_,v in fields if f['name']=='chat_id'), 'private')
+                media=json.loads(next(v for f,_,v in fields if f['name']=='media'))
+                self.assertEqual(len(media),3)
+                self.assertEqual(media[0]['parse_mode'],'HTML')
+        
+            async def test_access_error_stays_failure(self):
+                with patch.object(movers,'prepare_movers',new=AsyncMock(side_effect=RuntimeError('HTTP 403'))), \
+                     patch.object(movers,'save_state') as save:
+                    self.assertIsNone(await movers.prepare_safely())
+                    save.assert_not_called()
+        
+        
+        if __name__ == '__main__':
+            unittest.main()
+        EOF
+
     - name: Install Python Dependencies
       run: |-
         set -euo pipefail
@@ -3406,7 +4010,7 @@ jobs:
         PYTHONUNBUFFERED: '1'
       run: python main.py
     - name: Save Portfolio History
-      if: success() && steps.report.outputs.mode == 'portfolio' && hashFiles('portfolio_snapshots.json') != ''
+      if: always() && steps.report.outputs.mode == 'portfolio' && hashFiles('portfolio_snapshots.json') != ''
       uses: actions/cache/save@v5
       with:
         path: |
@@ -3419,3 +4023,9 @@ jobs:
       with:
         path: portfolio_candidates.json
         key: sector-analysis-v3-${{ github.run_id }}-${{ github.run_attempt }}
+    - name: Save Fund Discovery Journal
+      if: always() && steps.report.outputs.mode == 'portfolio' && hashFiles('fund_movers_state.json') != ''
+      uses: actions/cache/save@v5
+      with:
+        path: fund_movers_state.json
+        key: fund-discovery-v1-${{ github.run_id }}-${{ github.run_attempt }}
