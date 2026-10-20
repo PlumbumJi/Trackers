@@ -2578,7 +2578,7 @@ jobs:
                                     daily=total_day)
             return '\n'.join(lines), current_snapshot, journal
         
-        async def run_portfolio():
+        async def run_portfolio(caption_builder=None, on_delivered=None):
             destination = os.getenv('PORTFOLIO_CHAT_ID')
             dry_run = os.getenv('DRY_RUN', '').lower() == 'true'
             if not destination and not dry_run:
@@ -2621,25 +2621,30 @@ jobs:
             message, current, journal = build_report(
                 histories, snapshots, now, quotes, contexts, journal, presentation
             )
+            from modules.portfolio_card import render_portfolio_card, portfolio_caption
+            from modules.telegram_sender import send_chart_photos
+            caption = portfolio_caption(presentation) if current else ''
+            supplement = ''
+            if caption_builder:
+                caption, supplement = await caption_builder(caption)
+            if supplement:
+                message = message.removesuffix(BOT_NAME).rstrip() + '\n\n' + supplement + '\n\n' + BOT_NAME
             if dry_run:
                 print(message)
                 return
+            png = None
             if current:
-                from modules.portfolio_card import render_portfolio_card, portfolio_caption
-                from modules.telegram_sender import send_chart_photos
                 try:
                     png = render_portfolio_card(presentation)
-                    caption = portfolio_caption(presentation)
                 except Exception as error:
                     print(f'Portfolio image unavailable: {type(error).__name__}; using text')
-                    png = None
-                if png is not None:
-                    await send_chart_photos([(png, caption)], title='💼 МОЙ ПОРТФЕЛЬ',
-                                            chat_id=destination, parse_mode='HTML')
-                else:
-                    await send_to_telegram(message, chat_id=destination)
+            if png is not None:
+                await send_chart_photos([(png, caption)], title='💼 МОЙ ПОРТФЕЛЬ',
+                                        chat_id=destination, parse_mode='HTML')
             else:
                 await send_to_telegram(message, chat_id=destination)
+            if on_delivered:
+                on_delivered()
             if not current:
                 print('::warning::Portfolio prices unavailable; baseline was not updated')
                 return
@@ -3597,7 +3602,7 @@ jobs:
         EOF
         cat << 'EOF' > modules/movers.py
         """Morning fund discovery. Coverage is the readable Funder list, not all TASE.
-
+        
         Funder screens; Bizportal's dated quote and price history independently check
         the move. Failed checks never become buy/sell signals or zero-event successes.
         """
@@ -3614,16 +3619,15 @@ jobs:
         from pathlib import Path
         from urllib.parse import urlparse
         from zoneinfo import ZoneInfo
-
+        
         import aiohttp
-
-        from modules.charts import render_fund_chart
+        
         from modules.config import BOT_NAME, HEADERS
         from modules.market import _FundHTML, _clean_text, parse_optional_float, is_access_challenge
         from modules.portfolio import fetch_portfolio_fund
         from modules.news import translate_to_russian, shorten_title
-        from modules.telegram_sender import send_chart_photos
-
+        from modules.telegram_sender import message_length
+        
         LIST_URL = 'https://funder.co.il/allInOne.aspx'
         STATE = Path('fund_movers_state.json')
         TZ = ZoneInfo('Asia/Jerusalem')
@@ -3631,12 +3635,12 @@ jobs:
         MAX_CHECKS = 30
         MAX_TRACKED = 30
         MIN_LIST_ROWS = 100  # A broken or tiny table must not count as a market scan.
-
-
+        
+        
         def number(value):
             return parse_optional_float(value)
-
-
+        
+        
         def parse_listing(body):
             root = _FundHTML(body).root
             found, conflicts = {}, set()
@@ -3669,8 +3673,8 @@ jobs:
                         conflicts.add(fid)
                     found[fid] = row
             return [row for fid, row in found.items() if fid not in conflicts]
-
-
+        
+        
         def verified_publication(history, quote, reported_change, today):
             """Require same last price/date plus agreement of both published daily returns."""
             points = {}
@@ -3705,8 +3709,8 @@ jobs:
             if abs(change - quote_change) > 0.15 or abs(change - reported_change) > 0.15:
                 return None
             return ordered
-
-
+        
+        
         def validated_event(row, history, quote, today):
             ordered = verified_publication(history, quote, row['daily'], today)
             if not ordered or len(ordered) < 15:
@@ -3745,8 +3749,8 @@ jobs:
                     'previous_date': previous_day.isoformat(), 'price': current,
                     'history': [{'date': d.isoformat(), 'price': p} for d, p in ordered],
                     'rare': rare, 'risk': risk, 'conclusion': conclusion}
-
-
+        
+        
         async def fund_context(session, event, now):
             """Only exact fund mentions; a headline is context, never proof of causality."""
             try:
@@ -3773,8 +3777,8 @@ jobs:
             except (aiohttp.ClientError, asyncio.TimeoutError, ET.ParseError, ValueError, TypeError):
                 pass
             return None
-
-
+        
+        
         def load_state():
             try:
                 state = json.loads(STATE.read_text())
@@ -3798,14 +3802,14 @@ jobs:
             except (OSError, ValueError, TypeError, KeyError, AttributeError):
                 pass
             return {'schema': 1, 'events': {}}
-
-
+        
+        
         def save_state(state):
             temporary = STATE.with_suffix('.tmp')
             temporary.write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8')
             temporary.replace(STATE)
-
-
+        
+        
         def track(event, history, today):
             # Observations must be AFTER discovery, not merely after an old NAV date.
             observed = {}
@@ -3827,8 +3831,8 @@ jobs:
                 event['tracking'] = 'completed'
             elif (today - date.fromisoformat(event['detected_on'])).days > 120:
                 event['tracking'] = 'expired'
-
-
+        
+        
         def event_caption(event):
             fid = event['fund_id']
             name = shorten_title(event['name'], 32)
@@ -3849,8 +3853,8 @@ jobs:
                 lines.append('Причина не установлена.')
             lines.append(f'<a href="{source}">Вывод:</a> {escape(event["conclusion"])}')
             return '\n'.join(lines)
-
-
+        
+        
         async def prepare_movers():
             state = copy.deepcopy(load_state())
             now = datetime.now(TZ)
@@ -3907,13 +3911,8 @@ jobs:
                     key = f'{event["fund_id"]}:{event["date"]}'
                     if state['events'].get(key, {}).get('sent_at') or len(selected) >= 3:
                         continue
-                    png = render_fund_chart({'fund_id': event['fund_id'],
-                                            'il_name_eng': f'Фонд {event["fund_id"]}',
-                                            'il_fund_data': {'price_stats': {'chart_history': event['history']}}})
-                    if not png:
-                        continue
                     event['context'] = await fund_context(session, event, now)
-                    selected.append((key, event, png))
+                    selected.append((key, event, None))
                 state['last_scan'] = {
                     'at': now.isoformat(), 'readable_funds': len(listing),
                     'candidates': len(candidates), 'checked': min(len(candidates), MAX_CHECKS),
@@ -3927,8 +3926,8 @@ jobs:
                 if state['last_scan']['status'] == 'partial':
                     print('::warning::Some fund moves could not be verified; see scan counters')
                 return state, selected
-
-
+        
+        
         async def prepare_safely():
             try:
                 async with asyncio.timeout(240):
@@ -3937,52 +3936,68 @@ jobs:
                 # Preserve prior successful scan and delivery markers on any failure.
                 print(f'::warning::Fund discovery unavailable: {type(error).__name__}: {error}')
                 return None
-
-
-        async def deliver_movers(prepared):
-            if prepared is None:
-                return
+        
+        
+        def combined_caption(prepared, default_caption):
+            """Fit whole event cards; deferred events stay eligible for the next report."""
+            if prepared is None or not prepared[1]:
+                return default_caption, '', []
             state, selected = prepared
-            dry = os.getenv('DRY_RUN', '').lower() == 'true'
-            charts = [(png, event_caption(event)) for _, event, png in selected]
-            if charts:
-                title = (f'⚡ РЕЗКИЕ ДВИЖЕНИЯ · {datetime.now(TZ):%d.%m}\n'
-                         f'Отбор из {state["last_scan"]["readable_funds"]} фондов · порог ±10%')
-                if state['last_scan']['status'] == 'partial':
-                    title += '\nНе все кандидаты удалось проверить.'
-                # One album and one caption, signature inside the final card.
-                charts[-1] = (charts[-1][0], charts[-1][1] + '\n\n' + BOT_NAME)
-                if dry:
-                    print(title + '\n\n' + '\n\n'.join(c for _, c in charts))
-                else:
-                    destination = os.getenv('PORTFOLIO_CHAT_ID')
-                    if not destination:
-                        raise RuntimeError('PORTFOLIO_CHAT_ID is required for morning discovery')
-                    await send_chart_photos(charts, chat_id=destination, title=title, parse_mode='HTML')
-                if not dry:
-                    for key, event, _ in selected:
-                        state['events'][key] = {k: v for k, v in event.items() if k != 'history'}
-                        state['events'][key].update(sent_at=datetime.now(TZ).isoformat(),
-                                                   detected_on=datetime.now(TZ).date().isoformat(), tracking='open')
-            if not dry:
-                # Keep journal bounded without deleting currently followed discoveries.
-                closed = sorted((k for k, e in state['events'].items() if e.get('tracking') != 'open'),
-                                key=lambda k: state['events'][k]['detected_on'])
-                for key in closed[:-200]:
-                    del state['events'][key]
-                save_state(state)
-
-
+            header = (f'⚡ <b>РЕЗКИЕ ДВИЖЕНИЯ</b> · {datetime.now(TZ):%d.%m}\n'
+                      f'Отбор из {state["last_scan"]["readable_funds"]} фондов · от ±10%')
+            if state['last_scan']['status'] == 'partial':
+                header += '\nЧасть кандидатов не проверена.'
+            cards, included = [], []
+            for item in selected:
+                candidate = cards + [event_caption(item[1])]
+                remaining = len(selected) - len(candidate)
+                tail = f'\nЕщё событий: {remaining} · в следующем обзоре.' if remaining else ''
+                caption = header + '\n\n' + '\n\n'.join(candidate) + tail + '\n\n' + BOT_NAME
+                if message_length('💼 МОЙ ПОРТФЕЛЬ\n\n' + caption) > 1024:
+                    break
+                cards, included = candidate, included + [item]
+            if not cards:
+                return default_caption, '', []
+            remaining = len(selected) - len(included)
+            tail = f'\nЕщё событий: {remaining} · в следующем обзоре.' if remaining else ''
+            supplement = header + '\n\n' + '\n\n'.join(cards) + tail
+            return supplement + '\n\n' + BOT_NAME, supplement, included
+        
+        
+        def commit_movers(prepared, included):
+            if prepared is None or os.getenv('DRY_RUN', '').lower() == 'true':
+                return
+            state, _ = prepared
+            for key, event, _ in included:
+                state['events'][key] = {k: v for k, v in event.items() if k != 'history'}
+                state['events'][key].update(sent_at=datetime.now(TZ).isoformat(),
+                                           detected_on=datetime.now(TZ).date().isoformat(), tracking='open')
+            closed = sorted((k for k, e in state['events'].items() if e.get('tracking') != 'open'),
+                            key=lambda k: state['events'][k]['detected_on'])
+            for key in closed[:-200]:
+                del state['events'][key]
+            save_state(state)
+        
+        
         async def run_morning_reports():
             from modules.portfolio import run_portfolio
             task = asyncio.create_task(prepare_safely())
-            try:
-                await run_portfolio()  # Message 4 must be delivered before message 5.
+            prepared, included = None, []
+        
+            async def caption_builder(default):
+                nonlocal prepared, included
+                prepared = await task
+                caption, supplement, included = combined_caption(prepared, default)
+                return caption, supplement
+        
+            def delivered():
                 try:
-                    await deliver_movers(await task)
+                    commit_movers(prepared, included)
                 except Exception as error:
-                    # Portfolio has already been delivered and must keep its saved state.
-                    print(f'::warning::Fund discovery delivery failed: {type(error).__name__}')
+                    print(f'::warning::Discovery journal save failed: {type(error).__name__}')
+        
+            try:
+                await run_portfolio(caption_builder=caption_builder, on_delivered=delivered)
             finally:
                 if not task.done():
                     task.cancel()
@@ -4058,18 +4073,24 @@ jobs:
         
             async def test_sequence_portfolio_before_discovery(self):
                 order = []
-                async def first(): order.append('portfolio')
-                async def second(prepared): order.append('movers')
-                with patch.object(portfolio, 'run_portfolio', new=first), \
-                     patch.object(movers, 'prepare_safely', new=AsyncMock(return_value=({},[]))), \
-                     patch.object(movers, 'deliver_movers', new=second):
+                async def portfolio_delivery(caption_builder, on_delivered):
+                    caption, extra = await caption_builder('portfolio')
+                    order.append('sent')
+                    on_delivered()
+                with patch.object(portfolio, 'run_portfolio', new=portfolio_delivery), \
+                     patch.object(movers, 'prepare_safely', new=AsyncMock(return_value=({}, []))), \
+                     patch.object(movers, 'commit_movers', side_effect=lambda *a: order.append('saved')):
                     await movers.run_morning_reports()
-                self.assertEqual(order, ['portfolio','movers'])
-                with patch.object(portfolio, 'run_portfolio', new=AsyncMock()) as first, \
-                     patch.object(movers, 'prepare_safely', new=AsyncMock(return_value=({},[]))), \
-                     patch.object(movers, 'deliver_movers', new=AsyncMock(side_effect=RuntimeError('HTTP 500'))):
-                    await movers.run_morning_reports()
-                    first.assert_awaited_once()
+                self.assertEqual(order, ['sent', 'saved'])
+                async def failed(caption_builder, on_delivered):
+                    await caption_builder('portfolio')
+                    raise RuntimeError('Telegram failed')
+                with patch.object(portfolio, 'run_portfolio', new=failed), \
+                     patch.object(movers, 'prepare_safely', new=AsyncMock(return_value=({}, []))), \
+                     patch.object(movers, 'commit_movers') as commit:
+                    with self.assertRaises(RuntimeError):
+                        await movers.run_morning_reports()
+                    commit.assert_not_called()
         
             async def test_denial_stops_new_fund_requests(self):
                 import asyncio
@@ -4113,7 +4134,6 @@ jobs:
                      patch.object(movers.aiohttp, 'ClientSession',return_value=manager), \
                      patch.object(movers,'fetch_portfolio_fund',new=fetch), \
                      patch.object(movers,'load_state',return_value=cache), \
-                     patch.object(movers,'render_fund_chart',return_value=b'png'), \
                      patch.object(movers,'fund_context',new=AsyncMock(return_value=None)):
                     state, selected = await movers.prepare_movers()
                     self.assertEqual(len(selected),1)
@@ -4128,26 +4148,28 @@ jobs:
                 event = movers.validated_event(row, points, quote, today)
                 key = event['fund_id']+':'+event['date']
                 initial = {'schema': 1, 'events': {}, 'last_scan': {'readable_funds':1000,'status':'ok'}}
+                self.assertEqual(movers.combined_caption((initial, []), 'portfolio'), ('portfolio', '', []))
                 with tempfile.TemporaryDirectory() as d, patch.object(movers, 'STATE', Path(d)/'state.json'), \
-                     patch.dict(movers.os.environ, {'PORTFOLIO_CHAT_ID':'private','DRY_RUN':'false'}), \
-                     patch.object(movers, 'send_chart_photos', new=AsyncMock()) as sender:
-                    await movers.deliver_movers((copy.deepcopy(initial), []))
-                    sender.assert_not_awaited()
-                    sender.side_effect = RuntimeError('delivery failed')
-                    with self.assertRaises(RuntimeError):
-                        await movers.deliver_movers((copy.deepcopy(initial), [(key,event,b'png')]))
-                    self.assertEqual(json.loads(movers.STATE.read_text())['events'], {})
-                    sender.side_effect = None
-                    await movers.deliver_movers((copy.deepcopy(initial), [(key,event,b'png')]))
+                     patch.dict(movers.os.environ, {'DRY_RUN':'false'}):
+                    prepared = (copy.deepcopy(initial), [(key,event,None)])
+                    caption, supplement, included = movers.combined_caption(prepared, 'portfolio')
+                    self.assertFalse(movers.STATE.exists())
+                    self.assertEqual(prepared[0]['events'], {})
+                    movers.commit_movers(prepared, included)
                     self.assertIn(key, json.loads(movers.STATE.read_text())['events'])
-                    self.assertEqual(sender.call_args.kwargs['chat_id'], 'private')
         
             async def test_three_html_captions_fit_and_send_privately(self):
                 row, points, quote, today = fixture()
                 event = movers.validated_event(row, points, quote, today)
                 event['name'] = 'Фонд & название с длинным описанием ' * 5
                 event['context'] = {'title':'Новость о фонде ' * 4, 'url':'https://example.com/?a=1&b=2'}
-                captions = [movers.event_caption(event) for _ in range(3)]
+                state = {'events':{}, 'last_scan': {'readable_funds':2500,'status':'partial'}}
+                prepared = state, [(str(i),event,None) for i in range(3)]
+                caption, supplement, included = movers.combined_caption(prepared, 'portfolio')
+                self.assertGreater(len(included), 0)
+                self.assertLessEqual(telegram_sender.message_length('💼 МОЙ ПОРТФЕЛЬ\n\n'+caption), 1024)
+                self.assertEqual(caption.count(movers.BOT_NAME), 1)
+                self.assertIn('плечо ×3', caption)
                 class Response:
                     status=200
                     async def __aenter__(self): return self
@@ -4160,13 +4182,12 @@ jobs:
                 with patch.object(telegram_sender,'BOT_TOKEN','fake'), \
                      patch.object(telegram_sender,'CHAT_ID','public'), \
                      patch.object(telegram_sender.aiohttp,'ClientSession',return_value=manager):
-                    await telegram_sender.send_chart_photos([(b'png',c) for c in captions],
-                        chat_id='private', title='⚡ РЕЗКИЕ ДВИЖЕНИЯ ФОНДОВ · 17.10\nОтбор из 2500 доступных фондов · от ±10%\nНе все кандидаты удалось проверить.\n'+movers.BOT_NAME, parse_mode='HTML')
+                    await telegram_sender.send_chart_photos([(b'png',caption)],
+                        chat_id='private', title='💼 МОЙ ПОРТФЕЛЬ', parse_mode='HTML')
+                session.post.assert_called_once()
+                self.assertTrue(session.post.call_args.args[0].endswith('/sendPhoto'))
                 fields = session.post.call_args.kwargs['data']._fields
                 self.assertEqual(next(v for f,_,v in fields if f['name']=='chat_id'), 'private')
-                media=json.loads(next(v for f,_,v in fields if f['name']=='media'))
-                self.assertEqual(len(media),3)
-                self.assertEqual(media[0]['parse_mode'],'HTML')
         
             async def test_access_error_stays_failure(self):
                 with patch.object(movers,'prepare_movers',new=AsyncMock(side_effect=RuntimeError('HTTP 403'))), \
