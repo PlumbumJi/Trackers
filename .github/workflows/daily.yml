@@ -1384,18 +1384,18 @@ jobs:
         from datetime import date, timedelta
         from io import BytesIO
         from pathlib import Path
-
+        
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.dates as mdates
         import matplotlib.pyplot as plt
-
+        
         from modules.formatter import (
             _radar_verdict, _display_date, format_percent,
             ordered_radar_rows, radar_chart_target,
         )
-
-
+        
+        
         def chart_window(history):
             """Three calendar months ending at the last published observation; no invented prices."""
             points = {}
@@ -1422,57 +1422,81 @@ jobs:
             gaps = [(b[0] - a[0]).days for a, b in zip(window, window[1:])]
             partial = window[0][0] > start + timedelta(days=7) or len(window) < 40 or max(gaps, default=0) > 10
             return window, partial
-
-
-        def render_fund_chart(row):
-            stats = row.get("il_fund_data", {}).get("price_stats") or {}
-            prepared = chart_window(stats.get("chart_history") or [])
-            if prepared is None:
+        
+        
+        def render_radar_card(rows):
+            """One image, three independently scaled fund charts and existing model conclusions."""
+            import textwrap
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            from matplotlib.patches import FancyBboxPatch
+            prepared = [(row, chart_window((row.get('il_fund_data', {}).get('price_stats') or {}).get('chart_history') or [])) for row in rows[:3]]
+            prepared = [(row, window) for row, window in prepared if window]
+            if not prepared:
                 return None
-            points, partial = prepared
-            dates, prices = zip(*points)
-            current, low, high = prices[-1], min(prices), max(prices)
-            average = sum(prices) / len(prices)
-            color = "#138568" if current >= prices[0] else "#c84a52"
-            with plt.rc_context({"font.family": "DejaVu Sans", "font.size": 12}):
-                fig, ax = plt.subplots(figsize=(10, 6.7), dpi=150)
+            bg, panel, ink, muted = '#0B1220', '#152135', '#F0F5FC', '#A7B6CC'
+            up, down, amber = '#53D9AC', '#FF8A98', '#F2C879'
+            height = 190 + 580 * len(prepared)
+            with plt.rc_context({'font.family': 'DejaVu Sans', 'font.size': 13}):
+                fig = plt.figure(figsize=(12, height/100), dpi=130, facecolor=bg)
+                canvas = fig.add_axes([0, 0, 1, 1])
+                canvas.set(xlim=(0,1200), ylim=(height,0)); canvas.axis('off')
+                def text(x, y, value, size=16, color=ink, weight='normal', ha='left'):
+                    canvas.text(x,y,value,fontsize=size,color=color,weight=weight,ha=ha,va='top',linespacing=1.4)
                 try:
-                    fig.patch.set_facecolor("#f6f8fb")
-                    ax.set_facecolor("#f6f8fb")
-                    fig.subplots_adjust(left=.1, right=.95, bottom=.24, top=.74)
-                    fig.text(.1, .94, row["il_name_eng"], fontsize=17, weight="bold", color="#17283b")
-                    fig.text(.1, .89, f'{row["fund_id"]}  ·  3 месяца  ·  {dates[0]:%d.%m.%Y} — {dates[-1]:%d.%m.%Y}', color="#526579")
-                    fig.text(.1, .81, f"Мин. {low:.2f}    Средняя {average:.2f}    Макс. {high:.2f}", fontsize=13)
-                    # Gaps over ten calendar days stay visibly disconnected.
-                    xs, ys = [], []
-                    for i, (day, price) in enumerate(points):
-                        if i and (day - dates[i-1]).days > 10:
-                            xs.append(day); ys.append(float("nan"))
-                        xs.append(day); ys.append(price)
-                    ax.plot(xs, ys, color=color, linewidth=2.3)
-                    ax.axhline(average, color="#6c7d91", linestyle="--", linewidth=1.3)
-                    for price, marker_color in ((low, "#c84a52"), (high, "#138568")):
-                        i = prices.index(price)
-                        ax.scatter(dates[i], price, s=48, color=marker_color, zorder=4)
-                    ax.scatter(dates[-1], current, s=65, color="#244f99", zorder=5)
-                    ax.set_ylabel("Цена в единицах источника")
-                    ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=6))
-                    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m"))
-                    ax.grid(axis="y", color="#dce3eb", linewidth=.7)
-                    for spine in ax.spines.values():
-                        spine.set_visible(False)
-                    ax.tick_params(length=0, pad=8)
-                    fig.text(.1, .15, f"Последняя {current:.2f}   ·   От максимума {(current/high-1)*100:+.1f}%   ·   До средней {(average/current-1)*100:+.1f}%", fontsize=12)
-                    quality = "Неполная история: показатели по доступным наблюдениям" if partial else f"{len(points)} наблюдений · средняя по опубликованным ценам"
-                    fig.text(.1, .095, quality, fontsize=10, color="#526579")
-                    fig.text(.1, .05, "Источник: Bizportal · график построен ботом · минимум периода не гарантирует дно", fontsize=9, color="#526579")
-                    output = BytesIO()
-                    fig.savefig(output, format="png", facecolor=fig.get_facecolor())
+                    text(50,30,'ФОНДЫ В ФОКУСЕ',27,ink,'bold')
+                    text(1150,40,datetime.now(ZoneInfo('Asia/Jerusalem')).strftime('%d.%m · %H:%M Израиль'),14,muted,ha='right')
+                    text(50,82,'3 месяца · движение цены и вывод модели',16,muted)
+                    for index, (row,(points,partial)) in enumerate(prepared):
+                        y = 130 + index*580
+                        canvas.add_patch(FancyBboxPatch((35,y),1130,560,boxstyle='round,pad=0,rounding_size=20',facecolor=panel,linewidth=0))
+                        dates, prices = zip(*points)
+                        current, low, high = prices[-1], min(prices), max(prices)
+                        mean = sum(prices)/len(prices)
+                        caption = chart_caption(row).splitlines()
+                        conclusion = caption[-1].split(' ',1)[-1]
+                        marker = caption[-1].split(' ',1)[0]
+                        status, color = ('ПОДТВЕРЖДЕНО',up) if marker=='✅▲' else ('НЕ ПОДТВЕРЖДЕНО',down) if marker=='🔻▼' else ('НЕТ ОЦЕНКИ',muted) if marker=='▫️—' else ('НАБЛЮДАТЬ',amber)
+                        text(60,y+20,textwrap.shorten(row.get('il_name_eng','Фонд'),width=48,placeholder='…'),21,ink,'bold')
+                        text(60,y+59,f'{row["fund_id"]} · {dates[0]:%d.%m.%Y} — {dates[-1]:%d.%m.%Y}',13,muted)
+                        text(1138,y+25,status,13,color,'bold',ha='right')
+                        daily = (row.get('entry_analysis') or {}).get('daily')
+                        text(60,y+100,f'{current:.2f}',30,ink,'bold')
+                        text(285,y+113,'День '+format_percent(daily,1),17,up if daily is not None and daily>0 else down if daily is not None and daily<0 else muted)
+                        text(1138,y+111,f'От пика {(current/high-1)*100:+.1f}%  ·  До средней {(mean/current-1)*100:+.1f}%',15,muted,ha='right')
+                        ax = fig.add_axes([.09,1-(y+360)/height,.84,195/height],facecolor=panel)
+                        xs,ys=[],[]
+                        for i,(day,price) in enumerate(points):
+                            if i and (day-dates[i-1]).days>10:
+                                xs.append(day);ys.append(float('nan'))
+                            xs.append(day);ys.append(price)
+                        line_color = up if current>=prices[0] else down
+                        ax.plot(xs,ys,color=line_color,lw=2.4)
+                        ax.axhline(mean,color=muted,ls='--',lw=1,alpha=.7)
+                        for value,col in ((low,down),(high,up)):
+                            ax.scatter(dates[prices.index(value)],value,color=col,s=30,zorder=4)
+                        ax.scatter(dates[-1],current,color=ink,s=36,zorder=5)
+                        ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=3,maxticks=5))
+                        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d.%m'))
+                        ax.tick_params(colors=muted,labelsize=11,length=0,pad=6)
+                        ax.grid(axis='y',color=muted,alpha=.15)
+                        for spine in ax.spines.values(): spine.set_visible(False)
+                        text(60,y+393,f'Мин. {low:.2f}   /   Средняя {mean:.2f}   /   Макс. {high:.2f}',15,muted)
+                        text(1138,y+396,'Неполная история' if partial else f'{len(points)} наблюдений',12,amber if partial else muted,ha='right')
+                        market = next((line for line in caption if line.startswith(('США ', 'Израиль '))), 'Подтверждение рынка: нет данных')
+                        text(60,y+432,market,14,muted)
+                        text(60,y+469,'\n'.join(textwrap.wrap(conclusion,width=84)),17,color,'bold')
+                    text(50,height-41,'Bizportal · цены в единицах источника · пунктир — средняя периода',12,muted)
+                    output=BytesIO();fig.savefig(output,format='png',facecolor=bg)
                     return output.getvalue()
                 finally:
                     plt.close(fig)
-
-
+        
+        
+        def render_fund_chart(row):
+            return render_radar_card([row])
+        
+        
         def chart_caption(row):
             """Explain the plotted fund prices, then the existing model's conclusion."""
             marker, _, _ = _radar_verdict(row)
@@ -1514,26 +1538,24 @@ jobs:
                 lines.append(f'{market_label} {_display_date(entry["base_date"])}: день {format_percent(entry["base1"], 1)} · 5д {format_percent(entry["base5"], 1)}')
             lines.append(f'{marker} {conclusion}')
             return "\n".join(lines)
-
-
+        
+        
         def build_radar_charts(rows, output_directory=None):
-            charts = []
-            target = radar_chart_target(rows)
+            selected = []
             for row in ordered_radar_rows(rows):
-                if len(charts) >= target:
+                stats = row.get('il_fund_data', {}).get('price_stats') or {}
+                if chart_window(stats.get('chart_history') or []):
+                    selected.append(row)
+                if len(selected) >= radar_chart_target(rows):
                     break
-                try:
-                    png = render_fund_chart(row)
-                    if png:
-                        caption = chart_caption(row)
-                        charts.append((png, caption))
-                        if output_directory:
-                            directory = Path(output_directory)
-                            directory.mkdir(parents=True, exist_ok=True)
-                            (directory / f'{row["fund_id"]}.png').write_bytes(png)
-                except (ValueError, KeyError, TypeError) as error:
-                    print(f'Chart skipped for {row.get("fund_id")}: {type(error).__name__}')
-            return charts
+            png = render_radar_card(selected)
+            if not png:
+                return []
+            if output_directory:
+                directory = Path(output_directory)
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / 'funds_focus.png').write_bytes(png)
+            return [(png, 'Движение цены, поддержка рынка и вывод модели — на карточке.\nМинимум периода не гарантирует разворот.')]
         EOF
 
         cat << 'EOF' > modules/telegram_sender.py
@@ -1709,9 +1731,9 @@ jobs:
         cat << 'EOF' > main.py
         import asyncio
         import os
-
+        
         import aiohttp
-
+        
         from modules.config import BOT_NAME, BOT_VERSION, SECTORS_CONFIG
         from modules.formatter import (
             build_combined_radar_message,
@@ -1726,7 +1748,7 @@ jobs:
         from modules.news import fetch_sector_news
         from modules.telegram_sender import send_to_telegram, send_chart_photos
         from modules.charts import build_radar_charts
-
+        
         async def run_market_analytics() -> None:
             print(f"Build: {BOT_VERSION}; commit={os.getenv('GITHUB_SHA', 'local')[:12]}")
             all_tickers = sorted(
@@ -1739,7 +1761,7 @@ jobs:
             il_results = await fetch_all_israeli_funds(SECTORS_CONFIG)
             print("📈 Collecting completed base-market history...")
             year_results = await fetch_all_year_analytics(SECTORS_CONFIG)
-
+        
             async with aiohttp.ClientSession() as session:
                 sector_tasks = []
                 sector_rows = []
@@ -1775,7 +1797,7 @@ jobs:
                     sector_tasks.append(asyncio.create_task(fetch_sector_news(
                         session, config["news_ticker"], top_movements, config["short_eng"]
                     )))
-
+        
                 results = []
                 for row, news_task in zip(sector_rows, sector_tasks):
                     sector, config, top_movements, base_change, base_date = row
@@ -1811,7 +1833,7 @@ jobs:
                             for t in config["tickers"]
                         ),
                     })
-
+        
             fund_dates = [
                 (row.get("il_fund_data", {}).get("price_stats") or {}).get("price_date")
                 for row in results
@@ -1828,7 +1850,7 @@ jobs:
                             "status_key": "unavailable",
                             "candidate": False,
                         }
-
+        
             results.sort(
                 key=lambda item: (
                     item["avg_change"] is not None,
@@ -1854,17 +1876,17 @@ jobs:
                 }, ensure_ascii=False), encoding='utf-8')
             charts = build_radar_charts(results, "charts" if dry_run else None)
             radar = build_combined_radar_message(results, chart_count=len(charts))
-            album_title = "📊 Что видно на графиках" + ("\n" + radar if radar else "")
+            album_title = "📊 ФОНДЫ В ФОКУСЕ" + ("\n" + radar if radar else "")
             if charts:
                 charts[-1] = (charts[-1][0], charts[-1][1] + "\n\n" + BOT_NAME)
             if dry_run:
                 print(album_title)
-                print(f"Album prepared: {len(charts)} charts")
+                print(f"Fund card prepared: {len(charts)} charts")
             else:
                 await send_chart_photos(charts, title=album_title)
-
-
-
+        
+        
+        
         if __name__ == "__main__":
             if os.getenv("RUN_MODE", "market") == "portfolio":
                 from modules.movers import run_morning_reports
@@ -3249,6 +3271,17 @@ jobs:
                 self.assertNotIn(row['il_name_eng'], caption)
                 self.assertIn(row['fund_id'], caption)
                 self.assertNotIn('Отбор', caption)
+                from modules.charts import build_radar_charts
+                from copy import deepcopy
+                from PIL import Image
+                from io import BytesIO
+                rows = [deepcopy(row) for _ in range(3)]
+                cards = build_radar_charts(rows)
+                self.assertEqual(len(cards), 1)
+                with Image.open(BytesIO(cards[0][0])) as image:
+                    self.assertGreater(image.height, image.width)
+                    self.assertLess(image.width + image.height, 10000)
+                self.assertEqual(build_radar_charts([]), [])
         
             async def test_photo_payload_and_window_guard(self):
                 class PhotoResponse:
