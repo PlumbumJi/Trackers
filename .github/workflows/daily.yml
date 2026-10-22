@@ -741,12 +741,12 @@ jobs:
                     if timestamp is None or close is None or close <= 0:
                         continue
                     history.append({"timestamp": int(timestamp), "close": close})
-                    regular = (chart.get("meta") or {}).get("currentTradingPeriod", {}).get("regular", {})
-                    start, end = int(regular.get("start") or 0), int(regular.get("end") or 0)
-                    now = int(datetime.now(timezone.utc).timestamp())
-                    if start <= now < end:
-                        history = [point for point in history if point["timestamp"] < start]
-                    return sorted(history, key=lambda item: item["timestamp"])
+                regular = (chart.get("meta") or {}).get("currentTradingPeriod", {}).get("regular", {})
+                start, end = int(regular.get("start") or 0), int(regular.get("end") or 0)
+                now = int(datetime.now(timezone.utc).timestamp())
+                if start <= now < end:
+                    history = [point for point in history if point["timestamp"] < start]
+                return sorted(history, key=lambda item: item["timestamp"])
             except Exception as error:
                 print(f"⚠️ Yahoo history {ticker}: {error}")
                 return []
@@ -1392,7 +1392,7 @@ jobs:
         
         from modules.formatter import (
             _radar_verdict, _display_date, format_percent,
-            ordered_radar_rows, radar_chart_target,
+            ordered_radar_rows, radar_chart_target, FUND_LABELS,
         )
         
         
@@ -1540,6 +1540,72 @@ jobs:
             return "\n".join(lines)
         
         
+        def focus_caption(rows):
+            """Dated sector context, never an invented cause of a fund's move."""
+            import textwrap
+            from datetime import datetime
+            from html import escape
+            from urllib.parse import urlparse
+            from zoneinfo import ZoneInfo
+        
+            blocks = []
+            for row in rows:
+                stats = (row.get('il_fund_data') or {}).get('price_stats') or {}
+                prepared = chart_window(stats.get('chart_history') or [])
+                if not prepared:
+                    continue
+                points, _ = prepared
+                previous_day, previous_price = points[-2]
+                fund_day, price = points[-1]
+                daily = (price / previous_price - 1) * 100
+                fid = str(row['fund_id'])
+                name = textwrap.shorten(FUND_LABELS.get(fid, row.get('il_name_eng', 'Фонд')), width=30, placeholder='…')
+                # A calendar-date match is a contextual comparison, not proof of causation.
+                try:
+                    base = float(row['avg_change'])
+                    comparable = math.isfinite(base) and row.get('base_date') == fund_day.isoformat()
+                except (KeyError, TypeError, ValueError):
+                    base, comparable = None, False
+                if comparable and daily < 0 and base < 0:
+                    explanation = f'Сектор тоже снизился: {format_percent(base, 1)}.'
+                elif comparable and daily > 0 and base > 0:
+                    explanation = f'Сектор тоже вырос: {format_percent(base, 1)}.'
+                elif comparable and daily < 0:
+                    explanation = 'Снижение при устойчивом секторе; причина не установлена.'
+                elif comparable and daily > 0:
+                    explanation = 'Рост вопреки слабости сектора; причина не установлена.'
+                elif daily == 0:
+                    explanation = 'Цена не изменилась между публикациями.'
+                elif not row.get('base_date') or base is None or not math.isfinite(base):
+                    explanation = 'Данных сектора нет; причина движения не установлена.'
+                else:
+                    explanation = 'Даты фонда и сектора различаются; причина не установлена.'
+                # Keep only a sourced headline published in the NAV interval being described.
+                context = ''
+                for item in row.get('news') or []:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        published = datetime.fromtimestamp(int(item['published']), ZoneInfo('Asia/Jerusalem'))
+                        link = str(item['url'])
+                        parsed = urlparse(link)
+                        title = textwrap.shorten(str(item['title']), width=72, placeholder='…')
+                        valid_link = parsed.scheme in {'http', 'https'} and bool(parsed.netloc)
+                        if not (valid_link and title and previous_day <= published.date() <= fund_day
+                                and published <= datetime.now(ZoneInfo('Asia/Jerusalem'))):
+                            continue
+                    except (KeyError, TypeError, ValueError, OSError, OverflowError):
+                        continue
+                    context = f'\nКонтекст сектора: <a href="{escape(link, quote=True)}">{escape(title)}</a> · {published:%d.%m}'
+                    break
+                period = f'{previous_day:%d.%m}→{fund_day:%d.%m}'
+                blocks.append(
+                    f'{escape(row.get("icon", ""))} <b>{escape(name)}</b> · {escape(fid)}\n'
+                    f'{format_percent(daily, 1)} · {period}. {escape(explanation)}{context}'
+                )
+            return '\n\n'.join(blocks)
+        
+        
         def build_radar_charts(rows, output_directory=None):
             selected = []
             for row in ordered_radar_rows(rows):
@@ -1555,7 +1621,7 @@ jobs:
                 directory = Path(output_directory)
                 directory.mkdir(parents=True, exist_ok=True)
                 (directory / 'funds_focus.png').write_bytes(png)
-            return [(png, 'Движение цены, поддержка рынка и вывод модели — на карточке.\nМинимум периода не гарантирует разворот.')]
+            return [(png, focus_caption(selected))]
         EOF
 
         cat << 'EOF' > modules/telegram_sender.py
@@ -1883,7 +1949,7 @@ jobs:
                 print(album_title)
                 print(f"Fund card prepared: {len(charts)} charts")
             else:
-                await send_chart_photos(charts, title=album_title)
+                await send_chart_photos(charts, title=album_title, parse_mode='HTML')
         
         
         
@@ -3217,6 +3283,65 @@ jobs:
         
         
         class ChartTests(unittest.IsolatedAsyncioTestCase):
+            def test_focus_caption_lists_only_plotted_funds_and_dated_context(self):
+                from copy import deepcopy
+                from datetime import date, datetime, timedelta, timezone
+                from modules.charts import focus_caption, build_radar_charts
+                rows = MessageTests().rows()[:3]
+                end = date(2026, 1, 20)
+                for row in rows:
+                    row['il_fund_data']['price_stats']['chart_history'] = [
+                        {'date': (end-timedelta(days=19-i)).isoformat(), 'price': 120-i}
+                        for i in range(20)]
+                    row.update(avg_change=-1.2, base_date=end.isoformat(), news=[{
+                        'title': 'Акции сектора снизились после отчёта компании & прогноза на год ' * 3,
+                        'url': 'https://example.com/?a=1&b=2',
+                        'published': int(datetime(2026, 1, 20, 9, tzinfo=timezone.utc).timestamp()),
+                    }])
+                text = focus_caption(rows)
+                for row in rows:
+                    self.assertIn(row['fund_id'], text)
+                self.assertIn('Сектор тоже снизился', text)
+                self.assertIn('Контекст сектора:', text)
+                self.assertIn('&amp;', text)
+                self.assertLessEqual(telegram_sender.message_length(
+                    '📊 ФОНДЫ В ФОКУСЕ\n✅▲ Вход по модели подтверждён: 11.\n\n' + text + '\n\n@oil_tracker_pavel_bot'), 1024)
+                row = deepcopy(rows[0])
+                row['news'][0]['published'] += 86400
+                row['base_date'] = '2026-01-21'
+                text = focus_caption([row])
+                self.assertNotIn('Контекст сектора:', text)
+                self.assertIn('Даты фонда и сектора различаются', text)
+                row.update(avg_change=None, base_date=end.isoformat())
+                self.assertIn('Данных сектора нет', focus_caption([row]))
+                row.update(avg_change=1.2)
+                self.assertIn('причина не установлена', focus_caption([row]))
+                with patch('modules.charts.render_radar_card', return_value=b'png'):
+                    row = deepcopy(rows[0])
+                    row['il_fund_data']['price_stats']['chart_history'] = []
+                    card = build_radar_charts([row] + rows[1:])
+                    self.assertNotIn(row['fund_id'], card[0][1])
+                    self.assertNotIn('Движение цены, поддержка', card[0][1])
+        
+            async def test_proxy_history_keeps_all_completed_sessions(self):
+                import time
+                now = int(time.time())
+                chart = {'timestamp': [now-(6-i)*86400 for i in range(7)],
+                         'indicators': {'quote': [{'close': [100,101,102,103,104,105,200]}]},
+                         'meta': {'currentTradingPeriod': {'regular': {'start': now-3600, 'end': now+3600}}}}
+                class Response:
+                    status = 200
+                    async def __aenter__(self): return self
+                    async def __aexit__(self, *args): pass
+                    async def json(self): return {'chart': {'result': [chart]}}
+                from unittest.mock import MagicMock
+                session = MagicMock()
+                session.get.return_value = Response()
+                history = await market.fetch_ticker_history(session, 'TEST')
+                self.assertEqual(len(history), 6)
+                self.assertEqual(history[-1]['close'], 105)
+                self.assertEqual(market.analyze_year_history(history, 'TEST')['change_5d'], 5)
+        
             def test_caption_explains_price_and_preserves_album_limit(self):
                 from datetime import date, timedelta
                 from modules.charts import chart_caption
