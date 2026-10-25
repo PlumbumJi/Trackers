@@ -4097,29 +4097,48 @@ jobs:
         
         
         def combined_caption(prepared, default_caption):
-            """Fit whole event cards; deferred events stay eligible for the next report."""
-            if prepared is None or not prepared[1]:
-                return default_caption, '', []
+            """Always report scan outcome; mark only event cards actually delivered."""
+            prefix = default_caption.removesuffix(BOT_NAME).strip()
+            heading = '⚡ <b>РЕЗКИЕ ДВИЖЕНИЯ</b>'
+        
+            def assemble(supplement):
+                return '\n\n'.join(part for part in (prefix, supplement, BOT_NAME) if part)
+        
+            if prepared is None:
+                supplement = heading + '\nОбзор недоступен: данные не удалось проверить.'
+                return assemble(supplement), supplement, []
             state, selected = prepared
-            header = (f'⚡ <b>РЕЗКИЕ ДВИЖЕНИЯ</b> · {datetime.now(TZ):%d.%m}\n'
-                      f'Отбор из {state["last_scan"]["readable_funds"]} фондов · от ±10%')
-            if state['last_scan']['status'] == 'partial':
-                header += '\nЧасть кандидатов не проверена.'
+            scan = state.get('last_scan') or {}
+            if not selected:
+                if scan.get('status') == 'partial':
+                    summary = 'Проверка неполная — новых подтверждённых событий нет.'
+                elif scan.get('status') != 'ok':
+                    summary = 'Обзор недоступен: результат проверки не получен.'
+                elif scan.get('validated', 0):
+                    summary = 'Новых событий нет: найденные движения уже показаны.'
+                else:
+                    summary = f'Среди {scan["readable_funds"]} фондов движений от ±10% не найдено.'
+                supplement = heading + '\n' + summary
+                return assemble(supplement), supplement, []
+            header = heading + f'\nОтбор из {scan["readable_funds"]} фондов · от ±10%'
+            if scan['status'] == 'partial':
+                header += '\nПроверка данных неполная.'
             cards, included = [], []
             for item in selected:
                 candidate = cards + [event_caption(item[1])]
                 remaining = len(selected) - len(candidate)
-                tail = f'\nЕщё событий: {remaining} · в следующем обзоре.' if remaining else ''
-                caption = header + '\n\n' + '\n\n'.join(candidate) + tail + '\n\n' + BOT_NAME
-                if message_length('💼 МОЙ ПОРТФЕЛЬ\n\n' + caption) > 1024:
+                tail = f'\nЕщё проверенных событий: {remaining}.' if remaining else ''
+                supplement = header + '\n\n' + '\n\n'.join(candidate) + tail
+                if message_length('💼 МОЙ ПОРТФЕЛЬ\n\n' + assemble(supplement)) > 1024:
                     break
                 cards, included = candidate, included + [item]
             if not cards:
-                return default_caption, '', []
+                supplement = heading + f'\nПодтверждённых событий: {len(selected)}; карточки не поместились в подпись.'
+                return assemble(supplement), supplement, []
             remaining = len(selected) - len(included)
-            tail = f'\nЕщё событий: {remaining} · в следующем обзоре.' if remaining else ''
+            tail = f'\nЕщё проверенных событий: {remaining}.' if remaining else ''
             supplement = header + '\n\n' + '\n\n'.join(cards) + tail
-            return supplement + '\n\n' + BOT_NAME, supplement, included
+            return assemble(supplement), supplement, included
         
         
         def commit_movers(prepared, included):
@@ -4306,7 +4325,20 @@ jobs:
                 event = movers.validated_event(row, points, quote, today)
                 key = event['fund_id']+':'+event['date']
                 initial = {'schema': 1, 'events': {}, 'last_scan': {'readable_funds':1000,'status':'ok'}}
-                self.assertEqual(movers.combined_caption((initial, []), 'portfolio'), ('portfolio', '', []))
+                for prepared, expected in (
+                    (None, 'данные не удалось проверить'),
+                    ((initial, []), 'Среди 1000 фондов'),
+                    ((dict(initial, last_scan={'status':'partial'}), []), 'Проверка неполная'),
+                    ((dict(initial, last_scan={'status':'ok','validated':2}), []), 'уже показаны'),
+                ):
+                    caption, supplement, included = movers.combined_caption(prepared, 'portfolio\n\n'+movers.BOT_NAME)
+                    self.assertIn('РЕЗКИЕ ДВИЖЕНИЯ', caption)
+                    self.assertIn(expected, caption)
+                    self.assertIn('portfolio', caption)
+                    self.assertEqual(caption.count(movers.BOT_NAME), 1)
+                    self.assertEqual(included, [])
+                    if prepared is None:
+                        self.assertNotIn('не найдено', caption)
                 with tempfile.TemporaryDirectory() as d, patch.object(movers, 'STATE', Path(d)/'state.json'), \
                      patch.dict(movers.os.environ, {'DRY_RUN':'false'}):
                     prepared = (copy.deepcopy(initial), [(key,event,None)])
@@ -4323,7 +4355,8 @@ jobs:
                 event['context'] = {'title':'Новость о фонде ' * 4, 'url':'https://example.com/?a=1&b=2'}
                 state = {'events':{}, 'last_scan': {'readable_funds':2500,'status':'partial'}}
                 prepared = state, [(str(i),event,None) for i in range(3)]
-                caption, supplement, included = movers.combined_caption(prepared, 'portfolio')
+                caption, supplement, included = movers.combined_caption(prepared, 'Стоимость: 12 061.67 ₪\nС покупки: -601.20 ₪ (-4.75%)\n⚠️ Meitav Sky: 58.3% портфеля\n\n'+movers.BOT_NAME)
+                self.assertIn('12 061.67', caption)
                 self.assertGreater(len(included), 0)
                 self.assertLessEqual(telegram_sender.message_length('💼 МОЙ ПОРТФЕЛЬ\n\n'+caption), 1024)
                 self.assertEqual(caption.count(movers.BOT_NAME), 1)
@@ -4473,14 +4506,12 @@ jobs:
             action_rows = [r for r in data['rows'] if r.get('status') in {'add', 'reduce'}]
             if action_rows:
                 lines.extend(f'{escape(r["name"])}: {escape(r["decision"])}' for r in action_rows[:2])
-            else:
-                lines.append('Подтверждённой докупки по модели нет.')
             lines.extend(note for note in data['notes'] if note.startswith(('⚠️', '🔄')))
             lines.append('Курсы: ' + ' · '.join(f'<a href="https://www.funder.co.il/fund/{r["id"]}">{r["id"]}</a>'
                                              for r in data['rows']))
             if any(r.get('source_conflict') for r in data['rows']):
                 lines.append('Источники расходятся; сигналы по этим позициям отложены.')
-            lines.extend(['Паи заданы вручную · база покупки ≈ по скриншоту · до налога.', BOT_NAME])
+            lines.append(BOT_NAME)
             return '\n'.join(lines)
         EOF
 
@@ -4564,6 +4595,8 @@ jobs:
                 self.assertNotIn('N/A', message)
                 caption = '💼 МОЙ ПОРТФЕЛЬ\n\n' + portfolio_caption(view)
                 self.assertLessEqual(message_length(caption), 1024)
+                self.assertNotIn('Подтверждённой докупки по модели нет.', caption)
+                self.assertNotIn('Паи заданы вручную', caption)
                 with Image.open(BytesIO(render_portfolio_card(view))) as image:
                     self.assertEqual(image.size, (1560, 2132))
         EOF
