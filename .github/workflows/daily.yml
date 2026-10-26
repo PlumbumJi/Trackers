@@ -3759,19 +3759,16 @@ jobs:
             unittest.main()
         EOF
         cat << 'EOF' > modules/movers.py
-        """Morning fund discovery. Coverage is the readable Funder list, not all TASE.
-        
-        Funder screens; Bizportal's dated quote and price history independently check
-        the move. Failed checks never become buy/sell signals or zero-event successes.
-        """
+        """Rolling-month discovery: bulk screening, independent NAV checks, concise view."""
         import asyncio
         import copy
         import json
         import math
         import os
         import re
+        import traceback
         import xml.etree.ElementTree as ET
-        from datetime import date, datetime
+        from datetime import date, datetime, timedelta
         from email.utils import parsedate_to_datetime
         from html import escape
         from pathlib import Path
@@ -3787,16 +3784,117 @@ jobs:
         from modules.telegram_sender import message_length
         
         LIST_URL = 'https://funder.co.il/allInOne.aspx'
+        GRAPH_URL = 'https://www.funder.co.il/wsUnified.asmx/GetFundFewTickersPeriod'
         STATE = Path('fund_movers_state.json')
         TZ = ZoneInfo('Asia/Jerusalem')
         THRESHOLD = 10.0
         MAX_CHECKS = 30
         MAX_TRACKED = 30
         MIN_LIST_ROWS = 100  # A broken or tiny table must not count as a market scan.
+        GRAPH_BATCH = 40
+        WINDOW_DAYS = 30
+        REPEAT_CHANGE_PP = 5.0
         
         
         def number(value):
             return parse_optional_float(value)
+        
+        
+        def fund_name_key(value):
+            # Funder's chart endpoint replaces Hebrew abbreviation quotes with apostrophes.
+            return _clean_text(value).translate(str.maketrans('', '', '\"\'`׳״‘’“”'))
+        
+        
+        def ordered_prices(history, today):
+            points = {}
+            for point in history:
+                try:
+                    day = date.fromisoformat(point['date'])
+                    price = float(point['price'])
+                    if day > today or not math.isfinite(price) or price <= 0:
+                        continue
+                    if day in points and points[day] != price:
+                        return []
+                    points[day] = price
+                except (ValueError, KeyError, TypeError):
+                    continue
+            return sorted(points.items())
+        
+        
+        def month_window(ordered, today):
+            """Last NAV versus the last publication on/before NAV minus 30 calendar days."""
+            if len(ordered) < 15:
+                return None
+            last_day, current = ordered[-1]
+            target = last_day - timedelta(days=WINDOW_DAYS)
+            anchors = [(day, price) for day, price in ordered if day <= target]
+            if not anchors or not 0 <= (today - last_day).days <= 7:
+                return None
+            start, base = anchors[-1]
+            recent = [(day, price) for day, price in ordered if day >= start]
+            if ((target - start).days > 7 or len(recent) < 12
+                    or any((b[0] - a[0]).days > 7 for a, b in zip(recent, recent[1:]))
+                    or (last_day - ordered[-6][0]).days > 14):
+                return None
+            return {'monthly': (current / base - 1) * 100,
+                    'change_5': (current / ordered[-6][1] - 1) * 100,
+                    'start_date': start.isoformat(), 'date': last_day.isoformat(),
+                    'five_start': ordered[-6][0].isoformat(), 'base': base, 'price': current}
+        
+        
+        def parse_graph_batch(body, rows, today):
+            """Map by exact unique fund name, never column position; null dates stay missing.
+        
+            Public charts contain rounded cumulative percentages, not NAV prices.
+            Their ratios only screen candidates; publication cards use actual prices.
+            """
+            match = re.fullmatch(r'\s*fundMonth\((.*)\);?\s*', body, re.S)
+            try:
+                payload = json.loads(match.group(1) if match else body)
+                columns = payload['data']['columns']
+                axes = [c[1:] for c in columns if c and c[0] == 'x']
+                if len(axes) != 1:
+                    return {}
+                days = axes[0]
+                if len(days) != len(set(days)):
+                    return {}
+                for day in days:
+                    date.fromisoformat(day)
+                names, duplicates = {}, set()
+                for row in rows:
+                    name = fund_name_key(row['name'])
+                    if name in names:
+                        duplicates.add(name)
+                    names[name] = row
+                result, seen = {}, set()
+                for column in columns:
+                    if not column or column[0] == 'x':
+                        continue
+                    name = fund_name_key(column[0])
+                    if name not in names or name in duplicates or len(column) != len(days) + 1:
+                        continue
+                    row = names[name]
+                    fid = row['fund_id']
+                    if name in seen:
+                        result.pop(fid, None)
+                        duplicates.add(name)
+                        continue
+                    seen.add(name)
+                    history = []
+                    for day, change in zip(days, column[1:]):
+                        value = number(change)
+                        if value is not None and value > -100:
+                            history.append({'date': day, 'price': 100 + value})
+                    window = month_window(ordered_prices(history, today), today)
+                    if not window:
+                        continue
+                    # Include uncertain threshold cases: each chart value is rounded to .01.
+                    low = ((window['price'] - .005) / (window['base'] + .005) - 1) * 100
+                    high = ((window['price'] + .005) / max(window['base'] - .005, 1e-9) - 1) * 100
+                    result[fid] = {**row, **window, 'screen_low': low, 'screen_high': high}
+                return result
+            except (ValueError, KeyError, TypeError, AttributeError):
+                return {}
         
         
         def parse_listing(body):
@@ -3835,19 +3933,7 @@ jobs:
         
         def verified_publication(history, quote, reported_change, today):
             """Require same last price/date plus agreement of both published daily returns."""
-            points = {}
-            for point in history:
-                try:
-                    day = date.fromisoformat(point['date'])
-                    price = float(point['price'])
-                    if day > today or not math.isfinite(price) or price <= 0:
-                        continue
-                    if day in points and points[day] != price:
-                        return None
-                    points[day] = price
-                except (ValueError, KeyError, TypeError):
-                    continue
-            ordered = sorted(points.items())
+            ordered = ordered_prices(history, today)
             if len(ordered) < 2:
                 return None
             (previous_day, previous), (last_day, current) = ordered[-2:]
@@ -3871,28 +3957,23 @@ jobs:
         
         def validated_event(row, history, quote, today):
             ordered = verified_publication(history, quote, row['daily'], today)
-            if not ordered or len(ordered) < 15:
+            window = month_window(ordered or [], today)
+            if not window:
                 return None
-            (previous_day, previous), (last_day, current) = ordered[-2:]
+            (_, previous), (_, current) = ordered[-2:]
             change = (current / previous - 1) * 100
-            if round(abs(change), 6) < THRESHOLD:
+            if row.get('date') and row['date'] != window['date']:
                 return None
-            # Very large jumps require corporate-action review outside this model.
-            if abs(change) >= 60:
+            if row.get('start_date') and row['start_date'] != window['start_date']:
                 return None
-            prior_changes = [abs(b[1] / a[1] - 1) * 100
-                             for a, b in zip(ordered[:-2], ordered[1:-1])
-                             if (b[0] - a[0]).days <= 4]
-            rare = len(prior_changes) >= 30 and abs(change) > max(prior_changes)
-            prior = ordered[-3][1]
-            if change < 0:
-                conclusion = 'Резкое снижение; разворот не подтверждён.'
-            elif previous < prior:
-                conclusion = 'Первый рост после падения; одного повышения мало.'
-            elif previous > prior:
-                conclusion = 'Рост продолжается; скачок сам по себе не сигнал входа.'
-            else:
-                conclusion = 'Рост после неизменной цены; подтверждения входа нет.'
+            if ('screen_low' in row and not
+                    row['screen_low'] - .15 <= window['monthly'] <= row['screen_high'] + .15):
+                return None
+            # Corporate actions or inconsistent series need review, never a synthetic opportunity.
+            recent = [p for p in ordered if p[0].isoformat() >= window['start_date']]
+            if any(abs(b[1] / a[1] - 1) >= .6 for a, b in zip(recent, recent[1:])):
+                return None
+            regime, conclusion = analyst_view(window['monthly'], window['change_5'])
             name = row['name']
             leverage = re.search(r'(?<!\w)פי\s*(\d{1,2}(?:\.\d+)?)(?![\w.])', name)
             if leverage:
@@ -3903,16 +3984,43 @@ jobs:
                 risk = ''
             if 'שורט' in name:
                 risk = (risk + ' · шорт') if risk else 'стратегия шорт'
-            return {**row, 'daily': round(change, 2), 'date': last_day.isoformat(),
-                    'previous_date': previous_day.isoformat(), 'price': current,
+            return {**row, **window, 'daily': round(change, 2), 'kind': 'monthly',
+                    'monthly': round(window['monthly'], 6), 'change_5': round(window['change_5'], 4),
                     'history': [{'date': d.isoformat(), 'price': p} for d, p in ordered],
-                    'rare': rare, 'risk': risk, 'conclusion': conclusion}
+                    'regime': regime, 'risk': risk, 'conclusion': conclusion}
+        
+        
+        def analyst_view(monthly, five):
+            direction = 'up' if monthly >= 0 else 'down'
+            impulse = 'up' if five > .5 else 'down' if five < -.5 else 'flat'
+            regime = direction + '_' + impulse
+            return regime, {
+                'up_up': 'Рост продолжается; ждать отката, не догонять цену.',
+                'up_down': 'Месячный рост сменился откатом; ждать стабилизации.',
+                'up_flat': 'После роста — пауза; нового импульса пока нет.',
+                'down_up': 'Есть отскок; разворот требует устойчивого роста фонда.',
+                'down_down': 'Снижение продолжается; усреднять пока рискованно.',
+                'down_flat': 'Падение замедлилось; подтверждения разворота нет.',
+            }[regime]
+        
+        
+        def fresh_event(event, state):
+            previous = [e for e in state['events'].values() if e.get('kind') == 'monthly'
+                        and e.get('fund_id') == event['fund_id'] and e.get('sent_at')]
+            if not previous:
+                return True
+            last = max(previous, key=lambda e: e['date'])
+            if event['date'] <= last['date']:
+                return False
+            reset = state.get('monthly_resets', {}).get(event['fund_id'], '')
+            return (reset > last['date'] or event['regime'] != last.get('regime')
+                    or abs(event['monthly'] - last['monthly']) >= REPEAT_CHANGE_PP)
         
         
         async def fund_context(session, event, now):
             """Only exact fund mentions; a headline is context, never proof of causality."""
             try:
-                params = {'q': f'"{event["name"]}" when:2d', 'hl': 'he', 'gl': 'IL', 'ceid': 'IL:he'}
+                params = {'q': f'"{event["name"]}" when:37d', 'hl': 'he', 'gl': 'IL', 'ceid': 'IL:he'}
                 async with session.get('https://news.google.com/rss/search', params=params) as response:
                     if response.status != 200:
                         return None
@@ -3922,8 +4030,8 @@ jobs:
                     if event['name'] not in title and not re.search(rf'\b{event["fund_id"]}\b', title):
                         continue
                     published = parsedate_to_datetime(item.findtext('pubDate') or '')
-                    age = (now - published).total_seconds()
-                    if not 0 <= age <= 48 * 3600:
+                    if (published.tzinfo is None or published > now
+                            or not event['start_date'] <= published.astimezone(TZ).date().isoformat() <= event['date']):
                         continue
                     link = item.findtext('link') or ''
                     if urlparse(link).scheme != 'https':
@@ -3931,7 +4039,8 @@ jobs:
                     translated = await translate_to_russian(session, title)
                     if not translated or not re.search('[А-Яа-я]', translated):
                         continue
-                    return {'title': shorten_title(translated, 65), 'url': link}
+                    return {'title': shorten_title(translated, 65), 'url': link,
+                            'date': published.astimezone(TZ).strftime('%d.%m')}
             except (aiohttp.ClientError, asyncio.TimeoutError, ET.ParseError, ValueError, TypeError):
                 pass
             return None
@@ -3956,6 +4065,12 @@ jobs:
                         event['price'] = price
                         if not isinstance(event.get('checked_at'), str):
                             event['checked_at'] = ''
+                        if event.get('kind') == 'monthly' and not math.isfinite(float(event['monthly'])):
+                            raise ValueError('invalid monthly return')
+                    if not isinstance(state.get('monthly_resets'), dict):
+                        state['monthly_resets'] = {}
+                    state['monthly_resets'] = {k: v for k, v in state['monthly_resets'].items()
+                                               if isinstance(v, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', v)}
                     return state
             except (OSError, ValueError, TypeError, KeyError, AttributeError):
                 pass
@@ -3996,21 +4111,100 @@ jobs:
             name = shorten_title(event['name'], 32)
             link = f'https://funder.co.il/fund/{fid}'
             source = f'https://www.bizportal.co.il/mutualfunds/quote/generalview/{fid}'
-            marker = '🟩▲' if event['daily'] > 0 else '🟥▼'
-            start = date.fromisoformat(event['previous_date']).strftime('%d.%m')
+            marker = '🟩▲' if event['monthly'] > 0 else '🟥▼'
+            start = date.fromisoformat(event['start_date']).strftime('%d.%m')
             end = date.fromisoformat(event['date']).strftime('%d.%m')
             risk = ' · ' + event['risk'] if event['risk'] else ''
             lines = [f'<a href="{link}">{escape(name)}</a> · {fid}',
-                     f'{marker} {event["daily"]:+.1f}% · NAV {start}→{end}{escape(risk)}']
-            if event['rare']:
-                lines.append('Самое резкое движение за доступную историю.')
+                     f'{marker} {event["monthly"]:+.1f}% · {start}→{end} · 5 сессий {event["change_5"]:+.1f}%{escape(risk)}']
             context = event.get('context')
             if context:
-                lines.append(f'Контекст: <a href="{escape(context["url"], quote=True)}">{escape(shorten_title(context["title"], 45))}</a>')
-            else:
-                lines.append('Причина не установлена.')
+                lines.append(f'📰 <a href="{escape(context["url"], quote=True)}">{escape(shorten_title(context["title"], 45))}</a> · {context.get("date", "")}')
             lines.append(f'<a href="{source}">Вывод:</a> {escape(event["conclusion"])}')
             return '\n'.join(lines)
+        
+        
+        class DiscoveryUnavailable(RuntimeError):
+            def __init__(self, code, detail):
+                super().__init__(detail)
+                self.code = code
+        
+        
+        async def fetch_listing(session, previous_count):
+            """Retry transient failures only; retain coverage and access checks."""
+            required = max(MIN_LIST_ROWS, previous_count * 0.7)
+            error = None
+            for attempt in range(1, 4):
+                try:
+                    timeout = aiohttp.ClientTimeout(total=45, sock_connect=10, sock_read=30)
+                    async with session.get(LIST_URL, timeout=timeout) as response:
+                        status = response.status
+                        if status in {401, 403, 429}:
+                            code = 'list_rate_limit' if status == 429 else 'list_access'
+                            raise DiscoveryUnavailable(code, f'Funder list HTTP {status}')
+                        if status != 200:
+                            raise DiscoveryUnavailable('list_http', f'Funder list HTTP {status}')
+                        body = await response.text(errors='ignore')
+                    if is_access_challenge(body):
+                        raise DiscoveryUnavailable('list_access', 'Funder access challenge')
+                    listing = parse_listing(body)
+                    print(f'Fund list: HTTP 200; attempt={attempt}/3; bytes={len(body)}; '
+                          f'rows={len(listing)}; required={required:g}')
+                    if len(listing) < required:
+                        raise DiscoveryUnavailable('list_incomplete',
+                            f'Funder list incomplete: rows={len(listing)}, required={required:g}, previous={previous_count}')
+                    return listing
+                except asyncio.TimeoutError:
+                    error = DiscoveryUnavailable('list_timeout', 'Funder list request timed out')
+                except aiohttp.ClientError as exc:
+                    error = DiscoveryUnavailable('list_network', f'Funder list {type(exc).__name__}: {exc}')
+                except DiscoveryUnavailable as exc:
+                    error = exc
+                    if exc.code in {'list_access', 'list_rate_limit'}:
+                        raise
+                    # A missing page or other client error needs a configuration fix, not retries.
+                    if exc.code == 'list_http' and 400 <= status < 500:
+                        raise
+                print(f'::warning::Discovery {error.code}; attempt={attempt}/3; {error}')
+                if attempt < 3:
+                    await asyncio.sleep(attempt * 2)
+            raise error
+        
+        
+        async def screen_monthly(session, listing, today):
+            limiter, denied = asyncio.Semaphore(3), asyncio.Event()
+            async def fetch(rows):
+                for attempt in range(2):
+                    if denied.is_set():
+                        return {}
+                    try:
+                        async with limiter:
+                            if denied.is_set():
+                                return {}
+                            params = {'ids': ','.join(r['fund_id'] for r in rows),
+                                      'period': '3m', 'callback': 'fundMonth'}
+                            async with session.get(GRAPH_URL, params=params,
+                                    timeout=aiohttp.ClientTimeout(total=35)) as response:
+                                status = response.status
+                                body = await response.text()
+                        if status in {401, 403, 429} or is_access_challenge(body):
+                            denied.set()
+                            print(f'::warning::Monthly graph access restricted: HTTP {status}')
+                            return {}
+                        if status == 200:
+                            parsed = parse_graph_batch(body, rows, today)
+                            print(f'Monthly graphs: {len(parsed)}/{len(rows)} complete periods')
+                            return parsed
+                        if status < 500:
+                            return {}
+                    except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+                        print(f'::warning::Monthly graph batch: {type(error).__name__}')
+                    if attempt == 0:
+                        await asyncio.sleep(2)
+                return {}
+            batches = await asyncio.gather(*(fetch(listing[i:i + GRAPH_BATCH])
+                                            for i in range(0, len(listing), GRAPH_BATCH)))
+            return {fid: row for batch in batches for fid, row in batch.items()}
         
         
         async def prepare_movers():
@@ -4018,34 +4212,35 @@ jobs:
             now = datetime.now(TZ)
             timeout = aiohttp.ClientTimeout(total=25)
             async with aiohttp.ClientSession(timeout=timeout, headers=HEADERS, trust_env=True) as session:
-                async with session.get(LIST_URL) as response:
-                    if response.status != 200:
-                        raise RuntimeError(f'Funder list HTTP {response.status}')
-                    body = await response.text(errors='ignore')
-                if is_access_challenge(body):
-                    raise RuntimeError('Funder access restricted')
-                listing = parse_listing(body)
                 previous_count = state.get('last_scan', {}).get('readable_funds', 0)
-                if len(listing) < max(MIN_LIST_ROWS, previous_count * 0.7):
-                    raise RuntimeError(f'Incomplete list: {len(listing)} readable funds')
-                candidates = sorted((r for r in listing if abs(r['daily']) >= THRESHOLD),
-                                    key=lambda r: abs(r['daily']), reverse=True)
+                listing = await fetch_listing(session, previous_count)
+                screened = await screen_monthly(session, listing, now.date())
+                if not screened:
+                    raise DiscoveryUnavailable('monthly_history', 'No complete rolling-month series received')
+                candidates = sorted((r for r in screened.values()
+                                     if r['screen_low'] <= -THRESHOLD or r['screen_high'] >= THRESHOLD),
+                                    key=lambda r: abs(r['monthly']), reverse=True)
+                # Re-arm only after a verified fresh chart clearly leaves the threshold zone.
+                resets = state.setdefault('monthly_resets', {})
+                for fid, row in screened.items():
+                    if -9 < row['screen_low'] <= row['screen_high'] < 9:
+                        resets[fid] = row['date']
                 active = sorted((e for e in state['events'].values() if e.get('tracking') == 'open'),
                                 key=lambda e: e.get('checked_at', ''))
-                # Check a few non-candidates too: a readable but stale list is not success.
-                probes = sorted((r for r in listing if abs(r['daily']) < THRESHOLD),
-                                key=lambda r: abs(r['daily']), reverse=True)[:3]
+                # Check the closest non-candidates against independent dated prices as well.
+                candidate_ids = {r['fund_id'] for r in candidates}
+                probes = sorted((r for r in screened.values() if r['fund_id'] not in candidate_ids),
+                                key=lambda r: abs(r['monthly']), reverse=True)[:3]
                 ids = list(dict.fromkeys([r['fund_id'] for r in candidates[:MAX_CHECKS]] +
                                         [r['fund_id'] for r in active[:MAX_TRACKED]] +
                                         [r['fund_id'] for r in probes]))
-                history_ids = {r['fund_id'] for r in candidates[:MAX_CHECKS]} | {r['fund_id'] for r in active[:MAX_TRACKED]}
                 limiter, denied = asyncio.Semaphore(3), asyncio.Event()
                 async def fetch(fid):
                     async with limiter:
                         # Limit whole-fund jobs, not just individual requests.
                         try:
                             return await fetch_portfolio_fund(session, fid, asyncio.Semaphore(1), denied,
-                                                              history_pages=12 if fid in history_ids else 1)
+                                                              history_pages=5)
                         except Exception as error:
                             print(f'::warning::Fund {fid} unavailable: {type(error).__name__}')
                             return [], {}
@@ -4058,25 +4253,31 @@ jobs:
                 healthy_probes = 0
                 for row in probes:
                     history, quote = data[row['fund_id']]
-                    healthy_probes += int(bool(verified_publication(history, quote, row['daily'], now.date())))
-                selected, validated = [], 0
+                    healthy_probes += int(bool(validated_event(row, history, quote, now.date())))
+                selected, verified, validated = [], 0, 0
                 for row in candidates[:MAX_CHECKS]:
                     history, quote = data[row['fund_id']]
                     event = validated_event(row, history, quote, now.date())
                     if not event:
+                        print(f'::warning::Monthly candidate {row["fund_id"]}: prices/dates not verified')
+                        continue
+                    verified += 1
+                    if round(abs(event['monthly']), 6) < THRESHOLD:
                         continue
                     validated += 1
-                    key = f'{event["fund_id"]}:{event["date"]}'
-                    if state['events'].get(key, {}).get('sent_at') or len(selected) >= 3:
+                    key = f'month30:{event["fund_id"]}:{event["date"]}'
+                    if not fresh_event(event, state) or len(selected) >= 3:
                         continue
                     event['context'] = await fund_context(session, event, now)
                     selected.append((key, event, None))
                 state['last_scan'] = {
                     'at': now.isoformat(), 'readable_funds': len(listing),
+                    'monthly_coverage': len(screened), 'period_days': WINDOW_DAYS,
                     'candidates': len(candidates), 'checked': min(len(candidates), MAX_CHECKS),
-                    'validated': validated,
+                    'validated': validated, 'verified': verified,
                     'freshness_checks': healthy_probes,
-                    'status': 'partial' if (len(candidates) > MAX_CHECKS or validated < len(candidates)
+                    'status': 'partial' if (len(screened) < len(listing)
+                                            or len(candidates) > MAX_CHECKS or verified < len(candidates)
                                             or healthy_probes < len(probes)) else 'ok',
                     'scope': 'Funder readable rows; full-market coverage not asserted',
                 }
@@ -4088,18 +4289,39 @@ jobs:
         
         async def prepare_safely():
             try:
-                async with asyncio.timeout(240):
+                async with asyncio.timeout(480):
                     return await prepare_movers()
+            except DiscoveryUnavailable as error:
+                code, detail = error.code, str(error)
+            except asyncio.TimeoutError:
+                code, detail = 'scan_timeout', 'Monthly fund verification exceeded 480 seconds'
             except Exception as error:
-                # Preserve prior successful scan and delivery markers on any failure.
-                print(f'::warning::Fund discovery unavailable: {type(error).__name__}: {error}')
-                return None
+                code, detail = 'scan_error', f'{type(error).__name__}: {error}'
+                traceback.print_exc(limit=5)
+            print(f'::warning::Fund discovery unavailable [{code}]: {detail}')
+            # An unsuccessful scan has no events and must never replace the saved journal.
+            return ({'last_scan': {'status': 'unavailable', 'error_code': code,
+                                  'at': datetime.now(TZ).isoformat()}}, [])
+        
+        
+        def unavailable_summary(scan):
+            return {
+                'list_timeout': 'Funder не ответил вовремя после 3 попыток.',
+                'list_network': 'Не удалось соединиться с Funder после 3 попыток.',
+                'list_access': 'Funder ограничил доступ к списку фондов.',
+                'list_rate_limit': 'Funder временно ограничил частоту запросов.',
+                'list_http': 'Funder не смог отдать список фондов.',
+                'list_incomplete': 'Funder вернул неполный список фондов; обзор не рассчитан.',
+                'monthly_history': 'История за месяц не получена; расчёт недоступен.',
+                'scan_timeout': 'Проверка котировок не завершилась за отведённое время.',
+                'scan_error': 'Ошибка обработки данных. Причина записана в журнале GitHub Actions.',
+            }.get(scan.get('error_code'), 'Результат проверки данных не получен.')
         
         
         def combined_caption(prepared, default_caption):
             """Always report scan outcome; mark only event cards actually delivered."""
             prefix = default_caption.removesuffix(BOT_NAME).strip()
-            heading = '⚡ <b>РЕЗКИЕ ДВИЖЕНИЯ</b>'
+            heading = '⚡ <b>ДВИЖЕНИЯ ЗА МЕСЯЦ</b>'
         
             def assemble(supplement):
                 return '\n\n'.join(part for part in (prefix, supplement, BOT_NAME) if part)
@@ -4111,16 +4333,17 @@ jobs:
             scan = state.get('last_scan') or {}
             if not selected:
                 if scan.get('status') == 'partial':
-                    summary = 'Проверка неполная — новых подтверждённых событий нет.'
+                    summary = (f'Проверка неполная: история {scan.get("monthly_coverage", 0)}/'
+                               f'{scan.get("readable_funds", 0)}. Новых проверенных событий нет.')
                 elif scan.get('status') != 'ok':
-                    summary = 'Обзор недоступен: результат проверки не получен.'
+                    summary = 'Обзор недоступен: ' + unavailable_summary(scan)
                 elif scan.get('validated', 0):
                     summary = 'Новых событий нет: найденные движения уже показаны.'
                 else:
-                    summary = f'Среди {scan["readable_funds"]} фондов движений от ±10% не найдено.'
+                    summary = f'Среди {scan["readable_funds"]} фондов движений от ±10% за 30д не найдено.'
                 supplement = heading + '\n' + summary
                 return assemble(supplement), supplement, []
-            header = heading + f'\nОтбор из {scan["readable_funds"]} фондов · от ±10%'
+            header = heading + f'\n30д · от ±10% · история {scan.get("monthly_coverage", 0)}/{scan["readable_funds"]}'
             if scan['status'] == 'partial':
                 header += '\nПроверка данных неполная.'
             cards, included = [], []
@@ -4145,6 +4368,8 @@ jobs:
             if prepared is None or os.getenv('DRY_RUN', '').lower() == 'true':
                 return
             state, _ = prepared
+            if (state.get('last_scan') or {}).get('status') == 'unavailable':
+                return
             for key, event, _ in included:
                 state['events'][key] = {k: v for k, v in event.items() if k != 'history'}
                 state['events'][key].update(sent_at=datetime.now(TZ).isoformat(),
@@ -4204,9 +4429,10 @@ jobs:
             today = date(2026, 10, 16)
             points = [{'date': (today - timedelta(days=90-i)).isoformat(), 'price': 100.0}
                       for i in range(91)]
-            points[-1]['price'] = 112.0
-            row = {'fund_id': '5101183', 'name': 'בדיקה פי 3', 'daily': 12.0}
-            quote = {'price': '112', 'date': today.isoformat(), 'daily': 12.0}
+            for point, price in zip(points[-6:], (106, 107, 108, 109, 110, 112)):
+                point['price'] = price
+            row = {'fund_id': '5101183', 'name': 'בדיקה פי 3', 'daily': 1.82}
+            quote = {'price': '112', 'date': today.isoformat(), 'daily': 1.82}
             return row, points, quote, today
         
         
@@ -4224,13 +4450,17 @@ jobs:
             def test_verified_move_and_bad_data_rejection(self):
                 row, points, quote, today = fixture()
                 event = movers.validated_event(row, points, quote, today)
-                self.assertEqual(event['daily'], 12)
+                self.assertEqual(event['monthly'], 12)
+                self.assertEqual(event['daily'], 1.82)
+                self.assertAlmostEqual(event['change_5'], (112 / 106 - 1) * 100, places=4)
                 self.assertEqual(event['risk'], 'плечо ×3')
-                self.assertTrue(event['rare'])
                 exact = copy.deepcopy(points)
                 exact[-1]['price'] = 110
-                self.assertIsNotNone(movers.validated_event(dict(row,daily=10), exact,
-                    dict(quote,price=110,daily=10),today))
+                self.assertEqual(movers.validated_event(dict(row,daily=0), exact,
+                    dict(quote,price=110,daily=0),today)['monthly'], 10)
+                exact[-1]['price'] = 90
+                self.assertEqual(movers.validated_event(dict(row,daily=-18.18), exact,
+                    dict(quote,price=90,daily=-18.18),today)['monthly'], -10)
                 self.assertIsNotNone(movers.validated_event(row, points, dict(quote,date=None), today))
                 for bad in (dict(quote, price='200'), dict(quote, date='2026-10-15'), dict(quote, daily=1)):
                     self.assertIsNone(movers.validated_event(row, points, bad, today))
@@ -4239,7 +4469,75 @@ jobs:
                 self.assertIsNone(movers.validated_event(row, gapped, quote, today))
                 self.assertIsNone(movers.validated_event(row, points+[dict(points[-1],price=113)], quote, today))
                 points[-1]['price'] = 200
-                self.assertIsNone(movers.validated_event(dict(row,daily=100), points, dict(quote,price=200,daily=100),today))
+                self.assertIsNone(movers.validated_event(dict(row,daily=81.82), points, dict(quote,price=200,daily=81.82),today))
+        
+            def test_month_window_and_normalized_chart_mapping(self):
+                row, points, quote, today = fixture()
+                ordered = movers.ordered_prices(points, today)
+                window = movers.month_window(ordered, today)
+                self.assertEqual(window['start_date'], '2026-09-16')
+                # Last available publication on/before the calendar boundary; never MTD.
+                holiday = [p for p in ordered if p[0] != date(2026,9,16)]
+                self.assertEqual(movers.month_window(holiday, today)['start_date'], '2026-09-15')
+                self.assertIsNone(movers.month_window(ordered[-30:], today))
+                self.assertIsNone(movers.month_window(ordered, today+timedelta(days=8)))
+                days = [p['date'] for p in points]
+                # Reordered columns and nulls must never shift identities or publication dates.
+                payload = {'data': {'columns': [['other', *([None]*len(points))],
+                    [row['name'], *[(p['price']-100) for p in points]], ['x', *days]]}}
+                rows = [row, {'fund_id':'5200000','name':'other','daily':0}]
+                screened = movers.parse_graph_batch('fundMonth('+json.dumps(payload)+');', rows, today)
+                self.assertEqual(set(screened), {'5101183'})
+                self.assertAlmostEqual(screened['5101183']['monthly'], 12)
+                self.assertLess(screened['5101183']['screen_low'], 12)
+                self.assertGreater(screened['5101183']['screen_high'], 12)
+                quoted = copy.deepcopy(payload)
+                quoted['data']['columns'][1][0] = "קרן אג'ח"
+                self.assertIn('5101183', movers.parse_graph_batch(json.dumps(quoted),
+                              [dict(row,name='קרן אג"ח')],today))
+                self.assertEqual(movers.parse_graph_batch(json.dumps(payload), rows+[dict(row,fund_id='5200001')],today), {})
+                # A duplicated output series is a conflict, not a second fund.
+                payload['data']['columns'].append(payload['data']['columns'][1])
+                self.assertEqual(movers.parse_graph_batch(json.dumps(payload),rows,today), {})
+        
+            def test_monthly_repeat_policy_and_old_daily_journal(self):
+                row, points, quote, today = fixture()
+                event = movers.validated_event(row, points, quote, today)
+                state = {'events': {'old_daily': {'fund_id':row['fund_id'],'date':'2026-10-15','sent_at':'yes'}}}
+                self.assertTrue(movers.fresh_event(event,state))
+                state['events']['month'] = dict(event,sent_at='yes')
+                self.assertFalse(movers.fresh_event(event,state))
+                tomorrow = dict(event,date='2026-10-19',monthly=13)
+                self.assertFalse(movers.fresh_event(tomorrow,state))
+                self.assertTrue(movers.fresh_event(dict(tomorrow,monthly=17),state))
+                self.assertTrue(movers.fresh_event(dict(tomorrow,regime='up_down'),state))
+                state['monthly_resets'] = {row['fund_id']:'2026-10-18'}
+                self.assertTrue(movers.fresh_event(tomorrow,state))
+                for month,five,regime in ((12,2,'up_up'),(12,-2,'up_down'),(-12,2,'down_up'),(-12,-2,'down_down')):
+                    self.assertEqual(movers.analyst_view(month,five)[0],regime)
+        
+            async def test_graph_batches_recover_and_stop_on_access_restriction(self):
+                import asyncio
+                row, points, quote, today = fixture()
+                payload = {'data':{'columns':[['x',*[p['date'] for p in points]],
+                           [row['name'],*[p['price']-100 for p in points]]]}}
+                class Response:
+                    def __init__(self,status): self.status=status
+                    async def __aenter__(self): return self
+                    async def __aexit__(self,*args): pass
+                    async def text(self): return 'fundMonth('+json.dumps(payload)+')'
+                session=MagicMock()
+                session.get.side_effect=[asyncio.TimeoutError(),Response(200)]
+                with patch.object(movers.asyncio,'sleep',new=AsyncMock()):
+                    result=await movers.screen_monthly(session,[row],today)
+                self.assertIn(row['fund_id'],result)
+                self.assertEqual(session.get.call_count,2)
+                session.reset_mock()
+                session.get.side_effect=None
+                session.get.return_value=Response(429)
+                result=await movers.screen_monthly(session,[row],today)
+                self.assertEqual(result,{})
+                session.get.assert_called_once()
         
             def test_followup_starts_after_discovery_not_old_nav(self):
                 event = {'price': 100, 'date': '2026-10-01', 'detected_on': '2026-10-05'}
@@ -4288,7 +4586,7 @@ jobs:
         
             async def test_scan_validates_candidates_and_suppresses_sent_event(self):
                 row, points, quote, today = fixture()
-                body = listing('12') + ''.join(listing('0.1', str(5200000+i)) for i in range(100))
+                body = listing('1.82') + ''.join(listing('0.1', str(5200000+i)) for i in range(100))
                 class Clock(datetime):
                     @classmethod
                     def now(cls, tz=None): return cls(2026,10,17,8,20,tzinfo=movers.TZ)
@@ -4303,13 +4601,19 @@ jobs:
                 manager.__aenter__.return_value = session
                 async def fetch(session, fid, *args, **kwargs):
                     if fid == '5101183': return points, quote
-                    probe = copy.deepcopy(points)
+                    probe = [dict(p,price=100) for p in points]
                     probe[-1]['price'] = 100.1
                     return probe, dict(quote,price=100.1,daily=0.1)
+                screened = {r['fund_id']: dict(r,monthly=12 if r['fund_id']=='5101183' else .1,
+                            screen_low=11.99 if r['fund_id']=='5101183' else .09,
+                            screen_high=12.01 if r['fund_id']=='5101183' else .11,
+                            start_date='2026-09-16',date='2026-10-16')
+                            for r in movers.parse_listing(body)}
                 cache = {'schema':1,'events':{}}
                 with patch.object(movers, 'datetime', Clock), \
                      patch.object(movers.aiohttp, 'ClientSession',return_value=manager), \
                      patch.object(movers,'fetch_portfolio_fund',new=fetch), \
+                     patch.object(movers,'screen_monthly',new=AsyncMock(return_value=screened)), \
                      patch.object(movers,'load_state',return_value=cache), \
                      patch.object(movers,'fund_context',new=AsyncMock(return_value=None)):
                     state, selected = await movers.prepare_movers()
@@ -4332,7 +4636,7 @@ jobs:
                     ((dict(initial, last_scan={'status':'ok','validated':2}), []), 'уже показаны'),
                 ):
                     caption, supplement, included = movers.combined_caption(prepared, 'portfolio\n\n'+movers.BOT_NAME)
-                    self.assertIn('РЕЗКИЕ ДВИЖЕНИЯ', caption)
+                    self.assertIn('ДВИЖЕНИЯ ЗА МЕСЯЦ', caption)
                     self.assertIn(expected, caption)
                     self.assertIn('portfolio', caption)
                     self.assertEqual(caption.count(movers.BOT_NAME), 1)
@@ -4380,10 +4684,59 @@ jobs:
                 fields = session.post.call_args.kwargs['data']._fields
                 self.assertEqual(next(v for f,_,v in fields if f['name']=='chat_id'), 'private')
         
+            async def test_listing_recovers_from_timeout_and_server_error(self):
+                import asyncio
+                body = ''.join(listing('0.1', str(5200000+i)) for i in range(101))
+                class Response:
+                    def __init__(self, status): self.status = status
+                    async def __aenter__(self): return self
+                    async def __aexit__(self, *args): pass
+                    async def text(self, **kwargs): return body
+                session = MagicMock()
+                session.get.side_effect = [asyncio.TimeoutError(), Response(503), Response(200)]
+                with patch.object(movers.asyncio, 'sleep', new=AsyncMock()):
+                    rows = await movers.fetch_listing(session, 100)
+                self.assertEqual(len(rows), 101)
+                self.assertEqual(session.get.call_count, 3)
+                session.get.side_effect = asyncio.TimeoutError()
+                session.get.reset_mock()
+                with patch.object(movers.asyncio, 'sleep', new=AsyncMock()):
+                    with self.assertRaises(movers.DiscoveryUnavailable) as failure:
+                        await movers.fetch_listing(session, 100)
+                self.assertEqual(failure.exception.code, 'list_timeout')
+                self.assertEqual(session.get.call_count, 3)
+        
+            async def test_listing_denial_and_incomplete_results_never_count_as_zero(self):
+                class Response:
+                    def __init__(self, status, body=''): self.status, self.body = status, body
+                    async def __aenter__(self): return self
+                    async def __aexit__(self, *args): pass
+                    async def text(self, **kwargs): return self.body
+                for status, code in ((403, 'list_access'), (429, 'list_rate_limit'), (404, 'list_http')):
+                    session = MagicMock()
+                    session.get.return_value = Response(status)
+                    with self.assertRaises(movers.DiscoveryUnavailable) as failure:
+                        await movers.fetch_listing(session, 100)
+                    self.assertEqual(failure.exception.code, code)
+                    session.get.assert_called_once()
+                session = MagicMock()
+                session.get.return_value = Response(200, listing('0.1'))
+                with patch.object(movers.asyncio, 'sleep', new=AsyncMock()):
+                    with self.assertRaises(movers.DiscoveryUnavailable) as failure:
+                        await movers.fetch_listing(session, 100)
+                self.assertEqual(failure.exception.code, 'list_incomplete')
+                self.assertEqual(session.get.call_count, 3)
+        
             async def test_access_error_stays_failure(self):
-                with patch.object(movers,'prepare_movers',new=AsyncMock(side_effect=RuntimeError('HTTP 403'))), \
+                with patch.object(movers,'prepare_movers',new=AsyncMock(
+                        side_effect=movers.DiscoveryUnavailable('list_access', 'HTTP 403'))), \
                      patch.object(movers,'save_state') as save:
-                    self.assertIsNone(await movers.prepare_safely())
+                    failed = await movers.prepare_safely()
+                    self.assertEqual(failed[0]['last_scan']['error_code'], 'list_access')
+                    caption, _, included = movers.combined_caption(failed, 'portfolio')
+                    self.assertIn('ограничил доступ', caption)
+                    self.assertNotIn('не найдено', caption)
+                    movers.commit_movers(failed, included)
                     save.assert_not_called()
         
         
