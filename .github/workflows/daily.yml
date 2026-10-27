@@ -829,12 +829,12 @@ jobs:
         import urllib.parse
         from datetime import datetime, timezone
         from zoneinfo import ZoneInfo
-
+        
         import aiohttp
-
+        
         from modules.config import HEADERS, HTTP_TIMEOUT
         MAX_NEWS_AGE_HOURS = 48
-
+        
         SECTOR_QUERIES = {
             "Oil": "crude oil OPEC", "AI": "artificial intelligence semiconductor",
             "Cyber": "cybersecurity CrowdStrike", "Game": "gaming Nintendo Roblox",
@@ -843,7 +843,7 @@ jobs:
             "Bank": "Bank Leumi Hapoalim", "Cloud": "cloud security software",
             "EV": "electric vehicles Tesla",
         }
-
+        
         SECTOR_KEYWORDS = {
             "Oil": ["oil", "crude", "wti", "brent", "opec", "refinery"],
             "AI": ["ai", "artificial intelligence", "chip", "gpu", "semiconductor", "data center"],
@@ -861,7 +861,7 @@ jobs:
             "Cloud": ["cloud", "software", "saas", "data center", "cybersecurity"],
             "EV": ["ev", "electric vehicle", "battery", "tesla"],
         }
-
+        
         SECTOR_COMPANY_ANCHORS = {
             "Oil": ["exxon", "chevron", "valero", "shell", "conocophillips"],
             "AI": [
@@ -896,29 +896,29 @@ jobs:
             ],
             "EV": ["tesla", "rivian", "lucid", "nio", "xpeng", "li auto", "byd"],
         }
-
+        
         LOW_VALUE_PHRASES = (
             "stocks to watch", "should you buy", "could dominate", "here's what",
             "biggest risk", "street calls", "top stocks", "best stocks", "stock picks",
         )
         TRANSLATION_LIMITER = asyncio.Semaphore(3)
-
-
+        
+        
         def normalize_title(title: str) -> str:
             value = re.sub(r"\s+", " ", html.unescape(str(title or ""))).strip()
             value = re.sub(r"\)(?=[A-Za-zА-Яа-яЁё])", ") ", value)
             return re.sub(r"\$\s+(?=\d)", "$", value)
-
-
+        
+        
         def news_age_limit() -> int:
             # Weekend editions may include Friday morning headlines; dates are shown.
             return 96 if datetime.now(ZoneInfo("America/New_York")).weekday() >= 5 else MAX_NEWS_AGE_HOURS
-
-
+        
+        
         def headline_matches(term: str, title: str) -> bool:
             return bool(re.search(rf"(?<!\w){re.escape(term)}(?:s|ing)?(?!\w)", title, re.I))
-
-
+        
+        
         def shorten_title(title: str, width: int = 120) -> str:
             normalized = normalize_title(title)
             if len(normalized) <= width:
@@ -930,12 +930,12 @@ jobs:
                 break_long_words=False,
                 break_on_hyphens=False,
             )
-
-
+        
+        
         def unique(values: list[str]) -> list[str]:
             return list(dict.fromkeys(value for value in values if value))
-
-
+        
+        
         async def translate_to_russian(session: aiohttp.ClientSession, text: str) -> str:
             if not text:
                 return text
@@ -958,12 +958,13 @@ jobs:
                             print(f"⚠️ Google Translate: HTTP {response.status}")
                 except Exception as error:
                     print(f"⚠️ Google Translate: {type(error).__name__}")
-
+        
                 # Free, keyless fallback documented by MyMemory. It is used only when
                 # the primary endpoint did not return a Russian translation.
                 try:
                     url = "https://api.mymemory.translated.net/get"
-                    params = {"q": source, "langpair": "en|ru", "mt": "1"}
+                    language = "he" if re.search(r"[\u0590-\u05ff]", source) else "en"
+                    params = {"q": source, "langpair": f"{language}|ru", "mt": "1"}
                     async with session.get(url, params=params, timeout=10) as response:
                         if response.status == 200:
                             data = await response.json()
@@ -978,10 +979,10 @@ jobs:
                             print(f"⚠️ MyMemory Translate: HTTP {response.status}")
                 except Exception as error:
                     print(f"⚠️ MyMemory Translate: {type(error).__name__}")
-
+        
             return ""
-
-
+        
+        
         def news_score(item: dict, candidate_tickers: list[str], sector_name: str) -> int:
             title = normalize_title(item.get("title") or item.get("headline"))
             if len(title) < 20:
@@ -989,7 +990,7 @@ jobs:
             lower_title = title.lower()
             if any(phrase in lower_title for phrase in LOW_VALUE_PHRASES):
                 return -50
-
+        
             published = item.get("providerPublishTime") or item.get("datetime")
             if published:
                 try:
@@ -998,7 +999,7 @@ jobs:
                         return -40
                 except (TypeError, ValueError, OSError):
                     return -40
-
+        
             related = item.get("relatedTickers") or item.get("related") or []
             if isinstance(related, str):
                 related = re.split(r"[,\s]+", related.upper())
@@ -1028,8 +1029,8 @@ jobs:
             if any(word in lower_title for word in ("earnings", "guidance", "forecast", "contract", "approval", "tariff")):
                 score += 8
             return score
-
-
+        
+        
         async def fetch_yahoo_news(session: aiohttp.ClientSession, ticker: str) -> list[dict]:
             url = f"https://query1.finance.yahoo.com/v1/finance/search?q={urllib.parse.quote(ticker)}&newsCount=20&quotesCount=0"
             try:
@@ -1040,8 +1041,8 @@ jobs:
             except Exception as error:
                 print(f"⚠️ Yahoo News {ticker}: {error}")
             return []
-
-
+        
+        
         async def fetch_sector_news(
             session: aiohttp.ClientSession,
             query_ticker: str,
@@ -2747,6 +2748,490 @@ jobs:
             journal_temporary.replace(JOURNAL_FILE)
         EOF
 
+        cat << 'EOF' > modules/fund_news.py
+        """Direct, dated fund mentions. Editorial coverage is not a popularity ranking."""
+        import asyncio
+        import re
+        import xml.etree.ElementTree as ET
+        from datetime import datetime
+        from email.utils import parsedate_to_datetime, format_datetime
+        from html import escape, unescape
+        from urllib.parse import urlparse, urljoin
+        
+        import aiohttp
+        
+        from modules.market import _FundHTML, _clean_text, is_access_challenge
+        from modules.news import shorten_title, translate_to_russian
+        
+        FEED = 'https://www.funder.co.il/rssNews.aspx'
+        CATEGORY = 'https://funder.co.il/'
+        MAX_CANDIDATES = 6
+        REVIEW_DAYS = (7, 14, 21, 30)
+        
+        
+        def watch_jobs(state, now):
+            watches = state.get('news_watch', {})
+            if not isinstance(watches, dict):
+                return []
+            jobs = []
+            for fid, record in watches.items():
+                try:
+                    elapsed = (now.date() - datetime.fromisoformat(record['registered']).date()).days
+                    sent = record.get('sent_stages', [])
+                    if 30 in sent or elapsed < 0:
+                        continue
+                    due = max((d for d in REVIEW_DAYS if d <= elapsed and d not in sent), default=0)
+                    if due or not record.get('base_price'):
+                        jobs.append({'fund_id':fid,'stage':due,'elapsed':elapsed, 'registered':record['registered']})
+                except (ValueError,TypeError,KeyError):
+                    continue
+            return sorted(jobs,key=lambda j:(not bool(j['stage']),j['registered']))[:12]
+        
+        
+        def build_reviews(state, jobs, data, now, verify):
+            reviews = []
+            for job in jobs:
+                fid = job['fund_id']
+                record = state['news_watch'][fid]
+                history, quote = data.get(fid,([],{}))
+                try:
+                    daily = float(quote['daily'])
+                    points = verify(history,quote,daily,now.date())
+                except (KeyError,ValueError,TypeError):
+                    points = None
+                if points:
+                    day, price = points[-1]
+                    if not record.get('base_price'):
+                        record.update(base_price=price,base_date=day.isoformat(),last_report_nav=day.isoformat())
+                    if day.isoformat() < record['base_date']:
+                        points = None
+                if not job['stage']:
+                    continue
+                item = {**job,'name':record['name'],'line':'Нет свежей подтверждённой цены.'}
+                if points:
+                    item['nav_date'] = day.isoformat()
+                    if day.isoformat() <= record.get('last_report_nav',record['base_date']):
+                        item['line'] = f'Нового NAV нет · {day:%d.%m}'
+                    else:
+                        pct = (price / record['base_price'] - 1)*100
+                        direction = '🟩▲' if pct > 0 else '🟥▼' if pct < 0 else '⬜•'
+                        start = datetime.fromisoformat(record['base_date']).strftime('%d.%m')
+                        item['line'] = f'{direction} {pct:+.1f}% · {start}→{day:%d.%m}'
+                reviews.append(item)
+            return reviews
+        
+        
+        def register_delivered(state, now):
+            if not isinstance(state.get('news_watch'),dict):
+                state['news_watch'] = {}
+            watches = state['news_watch']
+            for item in state.get('_delivered_focus',[]):
+                fid = item['fund_id']
+                if fid in watches and 30 not in watches[fid].get('sent_stages',[]):
+                    continue  # A new headline must not reset an active observation period.
+                analysis = item.get('analysis') or item.get('baseline') or {}
+                watches[fid] = {'name':item['name'],'registered':now.isoformat(),'sent_stages':[],
+                                'base_price':analysis.get('price'),'base_date':analysis.get('date'),
+                                'last_report_nav':analysis.get('date'), 'source':item['news']['url']}
+            for item in state.get('_delivered_reviews',[]):
+                record = watches[item['fund_id']]
+                record['sent_stages'] = sorted(set(record.get('sent_stages',[])) |
+                                              {d for d in REVIEW_DAYS if d <= item['stage']})
+                if item.get('nav_date'):
+                    record['last_report_nav'] = item['nav_date']
+            closed = sorted((fid for fid,r in watches.items() if 30 in r.get('sent_stages',[])),
+                            key=lambda fid:watches[fid]['registered'])
+            for fid in closed[:-100]:
+                del watches[fid]
+        
+        
+        def review_card(item):
+            label = 'итог' if item['stage'] == 30 else 'наблюдение'
+            fid = item['fund_id']
+            name = escape(shorten_title(item['name'],18))
+            return (f'<a href="https://funder.co.il/fund/{fid}">{name}</a> · {fid} · {label} {item["elapsed"]}д: '
+                    + item['line'])
+        
+        
+        def canonical(text):
+            text = unescape(str(text or '')).replace('quot;', '"')
+            text = _clean_text(_FundHTML(text).root.text())
+            text = re.sub(r'\([0-6][0-6A-Fa-fא-ו]\)', ' ', text)
+            text = text.translate(str.maketrans('', '', '\"\'`׳״‘’“”'))
+            return re.sub(r'\s+', ' ', text).strip().casefold()
+        
+        
+        def evidence_excerpt(text, start, end):
+            # Preserve a source sentence around the actual fund mention, not an unrelated headline.
+            boundaries = list(re.finditer(r'[.!?]\s+', text))
+            left = max((m.end() for m in boundaries if m.end() <= start), default=0)
+            right = min((m.start()+1 for m in boundaries if m.start() >= end), default=len(text))
+            if right-left > 350:
+                left = max(left,start-80)
+                left = text.find(' ',left)+1 if left else 0
+                right = min(right,end+220)
+            return shorten_title(text[left:right],300)
+        
+        
+        def parse_mentions(body, listing, now):
+            root = ET.fromstring(body)
+            if root.tag != 'rss' or root.find('channel') is None:
+                raise ValueError('not a news feed')
+            names = {}
+            for row in listing:
+                key = canonical(row['name'])
+                if len(key) >= 8:
+                    names.setdefault(key, []).append(row)
+            names = {key: rows[0] for key, rows in names.items() if len(rows) == 1}
+            found, seen_urls = {}, set()
+            for item in root.findall('./channel/item'):
+                try:
+                    published = parsedate_to_datetime(item.findtext('pubDate') or '')
+                    if published.tzinfo is None or not 0 <= (now - published).total_seconds() <= 86400:
+                        continue
+                except (ValueError, TypeError, OverflowError):
+                    continue
+                url = item.findtext('link') or ''
+                parsed = urlparse(url)
+                if (parsed.scheme != 'https' or parsed.hostname not in {'funder.co.il', 'www.funder.co.il'}
+                        or not re.fullmatch(r'/article/\d+/?', parsed.path)):
+                    continue
+                article_key = parsed.path.rstrip('/')
+                if article_key in seen_urls:
+                    continue
+                seen_urls.add(article_key)
+                title = _clean_text(unescape(item.findtext('title') or '').replace('quot;', '"'))
+                description = item.findtext('description') or ''
+                text = canonical(title + '\n' + description)
+                if any(label in text for label in ('תוכן שיווקי', 'תוכן ממומן', 'כתבה פרסומית')):
+                    continue
+                # Use longest literal names first: a short name must not identify a longer fund.
+                matches = []
+                for name, row in names.items():
+                    for match in re.finditer(r'(?<!\w)' + re.escape(name) + r'(?!\w)', text):
+                        matches.append((match.start(), match.end(), row))
+                matches.sort(key=lambda m: (-(m[1] - m[0]), m[0]))
+                occupied, identified, evidence = [], {}, {}
+                for start, end, row in matches:
+                    if any(start < b and end > a for a, b in occupied):
+                        continue
+                    occupied.append((start, end))
+                    identified[row['fund_id']] = row
+                    evidence.setdefault(row['fund_id'],evidence_excerpt(text,start,end))
+                # Explicit labelled security numbers are safe even when the name has changed.
+                id_matches = list(re.finditer(r'(?:מספר(?:\s+(?:ה?קרן|נייר))?|מס[׳\x27]?\s*קרן)\s*[:：]?\s*(\d{6,8})\b', text))
+                ids = {m.group(1) for m in id_matches}
+                for m in id_matches:
+                    evidence.setdefault(m.group(1),evidence_excerpt(text,m.start(),m.end()))
+                identified.update((r['fund_id'], r) for r in listing if r['fund_id'] in ids)
+                for fid, row in identified.items():
+                    headline_match = canonical(row['name']) in canonical(title)
+                    excerpt = evidence.get(fid,title)
+                    # RSS descriptions may include quote widgets. A price-table mention alone
+                    # is not editorial discussion of a fund.
+                    if not headline_match and fid not in ids:
+                        prose = canonical(excerpt).replace(canonical(row['name']),'')
+                        if ('לרשימה' in prose or 'לרשימת' in prose or not re.search(
+                                r'מחזיק|החזיק|משקיעה|השקיעה|מנוהלת|מנהל השקעות|מנהל ההשקעות|'
+                                r'דמי ניהול|הניבה|השיגה|רשמה|גייסה|פדיונות|חשיפה|מדיניות|תשואת הקרן', prose)):
+                            continue
+                    mention = {'title': title, 'url': url, 'published': published.isoformat(),
+                               'news_date': published.astimezone(now.tzinfo).strftime('%d.%m'),
+                               'headline_match':headline_match, 'evidence':excerpt}
+                    entry = found.setdefault(fid, {**row, 'mentions': []})
+                    entry['mentions'].append(mention)
+            ranked = []
+            for entry in found.values():
+                entry['mentions'].sort(key=lambda m: (m['headline_match'], m['published']), reverse=True)
+                entry['news'] = entry['mentions'][0]
+                ranked.append(entry)
+            ranked.sort(key=lambda e: (e['news']['headline_match'], len(e['mentions']),
+                                      e['news']['published']), reverse=True)
+            # One story must not occupy all three slots with the same headline.
+            unique, used_stories = [], set()
+            for entry in ranked:
+                path = urlparse(entry['news']['url']).path
+                if path not in used_stories:
+                    unique.append(entry)
+                    used_stories.add(path)
+            seen_evidence = {(e['news']['url'],e['news']['evidence']) for e in unique}
+            for entry in ranked:
+                key = (entry['news']['url'],entry['news']['evidence'])
+                if key not in seen_evidence:
+                    unique.append(entry)
+                    seen_evidence.add(key)
+            return unique[:MAX_CANDIDATES]
+        
+        
+        async def fetch_mentions(session, listing, now):
+            limiter, blocked = asyncio.Semaphore(3), asyncio.Event()
+            async def get(url):
+                async with limiter:
+                    if blocked.is_set():
+                        return ''
+                    try:
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                            if response.status in {401,403,429}:
+                                blocked.set()
+                                return ''
+                            if response.status != 200:
+                                return ''
+                            body = await response.text()
+                        if is_access_challenge(body):
+                            blocked.set()
+                            return ''
+                        return body
+                    except (aiohttp.ClientError, asyncio.TimeoutError):
+                        return ''
+            try:
+                body, category = await asyncio.gather(get(FEED),get(CATEGORY))
+                root = ET.fromstring(body) if body else ET.fromstring('<rss><channel/></rss>')
+                channel = root.find('channel')
+                if root.tag != 'rss' or channel is None:
+                    return {'status':'unavailable','items':[]}
+                seen = {urlparse(item.findtext('link') or '').path for item in channel.findall('item')}
+                urls = []
+                category_root = _FundHTML(category).root
+                section = next((node for node in category_root.walk('div')
+                                if 'newarticleSec2' in node.attrs.get('class','').split()
+                                and any(urlparse(a.attrs.get('href','')).path.strip('/') == 'articleList/f'
+                                        for a in node.walk('a'))), None)
+                for link in (section.walk('a') if section else []):
+                    url = urljoin(CATEGORY, link.attrs.get('href',''))
+                    parsed = urlparse(url)
+                    if (parsed.scheme == 'https' and parsed.hostname in {'funder.co.il','www.funder.co.il'}
+                            and re.fullmatch(r'/article/\d+',parsed.path) and parsed.path not in seen):
+                        urls.append(url)
+                        seen.add(parsed.path)
+                pages = await asyncio.gather(*(get(url) for url in urls[:10]))
+                appended = 0
+                for url, page in zip(urls, pages):
+                    item = article_item(page, url)
+                    if item is not None:
+                        channel.append(item)
+                        appended += 1
+                status = 'ok' if body and section and appended == len(pages) else 'partial'
+                if not body and not appended:
+                    status = 'unavailable'
+                return {'status':status,'items':parse_mentions(ET.tostring(root,encoding='unicode'),listing,now)}
+            except (aiohttp.ClientError, asyncio.TimeoutError, ET.ParseError, ValueError):
+                return {'status': 'unavailable', 'items': []}
+        
+        
+        def article_item(body, url):
+            """Read only the article body, not sidebar fund links or recommendations."""
+            root = _FundHTML(body).root
+            meta = {n.attrs.get('property'):n.attrs.get('content','') for n in root.walk('meta')}
+            content = next((n for n in root.walk() if n.attrs.get('id') == 'articleDesc'), None)
+            try:
+                published = datetime.fromisoformat(meta.get('article:published_time','').replace('Z','+00:00'))
+            except ValueError:
+                return None
+            if not meta.get('og:title') or content is None or published.tzinfo is None:
+                return None
+            item = ET.Element('item')
+            for key, value in {'title':meta['og:title'], 'description':content.text(),
+                               'pubDate':format_datetime(published),'link':url}.items():
+                ET.SubElement(item,key).text = value
+            return item
+        
+        
+        async def prepare_focus(session, mentions, data, screened, now, validate, verify=None):
+            items = []
+            for row in mentions['items'][:3]:
+                history, quote = data.get(row['fund_id'], ([], {}))
+                screen = screened.get(row['fund_id'])
+                analysis = validate(screen, history, quote, now.date()) if screen else None
+                baseline = None
+                if verify:
+                    try:
+                        points = verify(history,quote,float(quote['daily']),now.date())
+                        if points:
+                            baseline = {'price':points[-1][1],'date':points[-1][0].isoformat()}
+                    except (ValueError,TypeError,KeyError):
+                        pass
+                news = dict(row['news'])
+                reason = news['title'] if news['headline_match'] else news['evidence']
+                source_text = canonical(reason)
+                manager_change = ('מנהל' in source_text and re.search(r'יחליף|תחליף|מחליף|מחליפה',source_text))
+                if source_text.startswith('קרן נאמנות במוקד'):
+                    translated = 'Обзор инвестиционной стратегии фонда.'
+                elif manager_change:
+                    translated = 'Смена управляющего инвестициями фонда.'
+                else:
+                    translated = await translate_to_russian(session, reason)
+                # Never replace source content with a translation failure placeholder.
+                news['display_title'] = translated if translated else reason
+                operational = any(word in source_text for word in ('מפרקת', 'פירוק', 'מיזוג', 'משבש', 'פדיון', 'תשיק'))
+                watch = ('Следить за изменениями стратегии.' if manager_change else
+                         'Проверить условия и сроки у управляющего.' if operational else
+                         analysis['conclusion'] if analysis else 'Ждать сверки свежих цен фонда.')
+                items.append({'fund_id': row['fund_id'], 'name': row['name'], 'news': news,
+                              'analysis': analysis, 'baseline':baseline, 'watch': watch})
+            return {'status': mentions['status'], 'items': items}
+        
+        
+        def focus_card(item):
+            fid, news = item['fund_id'], item['news']
+            name = escape(shorten_title(item['name'], 22))
+            title = escape(shorten_title(news['display_title'], 55))
+            lines = [f'<a href="https://funder.co.il/fund/{fid}">{name}</a> · {fid}',
+                     f'📰 <a href="{escape(news["url"], quote=True)}">{title}</a> · {news["news_date"]}']
+            analysis = item.get('analysis')
+            if analysis:
+                from datetime import date
+                start = date.fromisoformat(analysis['start_date']).strftime('%d.%m')
+                end = date.fromisoformat(analysis['date']).strftime('%d.%m')
+                risk = f' · {analysis["risk"]}' if analysis.get('risk') else ''
+                if item.get('show_monthly'):
+                    lines.append(f'{start}→{end}: {analysis["monthly"]:+.1f}% · 5с {analysis["change_5"]:+.1f}%{escape(risk)}')
+                else:
+                    lines.append(f'NAV {end} · 5с {analysis["change_5"]:+.1f}%{escape(risk)}')
+            lines.append('Следить: ' + escape(item['watch']))
+            return '\n'.join(lines)
+        EOF
+
+        cat << 'EOF' > tests/test_fund_news.py
+        import copy
+        import unittest
+        from datetime import datetime, timedelta
+        from email.utils import format_datetime
+        from html import escape
+        from unittest.mock import AsyncMock, patch
+        
+        from modules import fund_news, movers
+        
+        
+        NOW = datetime(2026,10,27,8,20,tzinfo=movers.TZ)
+        ROWS = [{'fund_id':str(5100000+i),'name':name,'daily':1}
+                for i,name in enumerate(('קרן מניות ישראל', 'קרן מניות ישראל פלוס', 'קרן אג"ח ישראל', 'קרן מניות עולם'))]
+        
+        
+        def item(title, text='', hours=1, article=100, stamp=None):
+            published = stamp or format_datetime(NOW-timedelta(hours=hours))
+            return (f'<item><title>{escape(title)}</title><description>{escape(text)}</description>'
+                    f'<link>https://www.funder.co.il/article/{article}</link><pubDate>{published}</pubDate></item>')
+        
+        
+        def rss(*items):
+            return '<rss><channel>'+''.join(items)+'</channel></rss>'
+        
+        
+        class FundNewsTests(unittest.IsolatedAsyncioTestCase):
+            def test_identity_freshness_and_article_dedup(self):
+                body=rss(item('קרן מניות ישראל פלוס במוקד',article=101),
+                         item('קרן מניות ישראל פלוס במוקד',article=101),
+                         item('קרן אג\'ח ישראל',article=102),
+                         item('כלכלה','מספר קרן: 5100003',article=103),
+                         item('קרן מניות ישראל',hours=25,article=104),
+                         item('קרן מניות ישראל',hours=-1,article=105),
+                         item('קרן מניות ישראל','תוכן שיווקי',article=106),
+                         item('קרן מניות ישראל',stamp='unknown',article=107))
+                found=fund_news.parse_mentions(body,ROWS,NOW)
+                self.assertEqual({r['fund_id'] for r in found},{'5100001','5100002','5100003'})
+                self.assertEqual(len(next(r for r in found if r['fund_id']=='5100001')['mentions']),1)
+                self.assertEqual(fund_news.parse_mentions(rss(item('מנהל קרנות ישראל')) ,ROWS,NOW),[])
+                widget_rows=[{'fund_id':'5199999','name':'מור מניות ישראל','daily':1}]
+                widget=rss(item('עסקה בחברת נדלן','מדד 60 0.64% 92283.2 מור מניות ישראל 0.44% 10549000'))
+                self.assertEqual(fund_news.parse_mentions(widget,widget_rows,NOW),[])
+                widget=rss(item('כותרת כלכלית','לרשימה המלאה קרן נאמנות מור מניות ישראל 8.97% 5428118.1'))
+                self.assertEqual(fund_news.parse_mentions(widget,widget_rows,NOW),[])
+                self.assertEqual(fund_news.parse_mentions(rss(item('קרן מניות ישראל')).replace('www.funder.co.il','evil.example'),ROWS,NOW),[])
+                page = ('<meta property="og:title" content="כתבה על קרנות">'
+                        '<meta property="article:published_time" content="2026-10-27T07:20:00+02:00">'
+                        '<div id="articleDesc">קרן חדשה, מספר 5100002</div>'
+                        '<aside>קרן מניות ישראל פלוס</aside>')
+                import xml.etree.ElementTree as ET
+                article=fund_news.article_item(page,'https://funder.co.il/article/108')
+                found=fund_news.parse_mentions(rss(ET.tostring(article,encoding='unicode')),ROWS,NOW)
+                self.assertEqual([r['fund_id'] for r in found],['5100002'])
+        
+            async def test_no_fabricated_prices_and_translation_fallback(self):
+                found=fund_news.parse_mentions(rss(item('קרן מניות ישראל')),ROWS,NOW)
+                with patch.object(fund_news,'translate_to_russian',new=AsyncMock(return_value='')):
+                    focus=await fund_news.prepare_focus(None,{'status':'ok','items':found},{},{},NOW,movers.validated_event)
+                card=focus['items'][0]
+                self.assertIsNone(card['analysis'])
+                self.assertEqual(card['news']['display_title'],found[0]['news']['title'])
+                self.assertIn('Ждать сверки',fund_news.focus_card(card))
+                self.assertNotIn('+0.0%',fund_news.focus_card(card))
+        
+            def test_caption_limits_merge_duplicates_and_preserve_monthly_output(self):
+                event={'fund_id':'5100000','name':'Фонд тестовый','monthly':12,'change_5':2,
+                       'start_date':'2026-09-26','date':'2026-10-26','risk':'плечо ×3',
+                       'conclusion':'Рост продолжается; ждать отката, не догонять цену.'}
+                focus=[]
+                for i in range(3):
+                    e=dict(event,fund_id=str(5100000+i))
+                    focus.append({'fund_id':e['fund_id'],'name':e['name'],'analysis':e,
+                                  'watch':e['conclusion'],'news':{'display_title':'Свежая публикация о конкретном фонде',
+                                  'url':f'https://funder.co.il/article/{100+i}','news_date':'26.10'}})
+                state={'events':{},'news_focus':{'status':'ok','items':focus},
+                       'last_scan':{'status':'ok','readable_funds':1000,'monthly_coverage':1000,'validated':3}}
+                selected=[(str(i),dict(event,fund_id=str(5100000+i)),None) for i in range(3)]
+                prefix='Стоимость: 12 061.67 ₪\nС покупки: -601.20 ₪\n⚠️ Meitav Sky: 58.3% портфеля\n'+movers.BOT_NAME
+                caption, supplement, included=movers.combined_caption((state,selected),prefix)
+                self.assertEqual(len(included),3)
+                self.assertEqual(caption.count(movers.BOT_NAME),1)
+                self.assertEqual(caption.count('5100000</a>'),0)  # No repeated monthly-only card.
+                self.assertLessEqual(movers.message_length('💼 МОЙ ПОРТФЕЛЬ\n\n'+caption),1024)
+                self.assertIn('ФОНДЫ В НОВОСТЯХ',caption)
+                other=[('other',dict(event,fund_id='5200000'),None)]
+                caption,_,included=movers.combined_caption((state,other),prefix)
+                self.assertLessEqual(movers.message_length('💼 МОЙ ПОРТФЕЛЬ\n\n'+caption),1024)
+                self.assertIn('ДВИЖЕНИЯ ЗА МЕСЯЦ',caption)
+                empty=copy.deepcopy(state);empty['news_focus']={'status':'ok','items':[]}
+                caption,_,_=movers.combined_caption((empty,other),prefix)
+                self.assertIn('упоминаний',caption)
+                self.assertIn('5200000',caption)
+        
+            def test_weekly_tracking_delivery_baseline_and_final_month(self):
+                first=datetime(2026,10,2,8,20,tzinfo=movers.TZ)
+                focus={'fund_id':'5100000','name':'Фонд','news':{'url':'https://funder.co.il/article/100'},
+                       'analysis':{'price':100,'date':'2026-10-01'}}
+                state={'events':{},'_delivered_focus':[focus]}
+                fund_news.register_delivered(state,first)
+                record=state['news_watch']['5100000']
+                # Another headline must not reset either the clock or the acquisition-free baseline.
+                focus['analysis']={'price':105,'date':'2026-10-03'}
+                fund_news.register_delivered(state,first+timedelta(days=2))
+                self.assertEqual(record['base_price'],100)
+                state['_delivered_focus']=[]
+                now=first+timedelta(days=7)
+                jobs=fund_news.watch_jobs(state,now)
+                history=[{'date':'2026-10-08','price':100},{'date':'2026-10-09','price':110}]
+                data={'5100000':(history,{'price':110,'daily':10,'date':'2026-10-09'})}
+                reviews=fund_news.build_reviews(state,jobs,data,now,movers.verified_publication)
+                self.assertIn('+10.0%',reviews[0]['line'])
+                self.assertEqual(record['sent_stages'],[])  # Preview is not delivery.
+                state['_delivered_reviews']=reviews
+                fund_news.register_delivered(state,now)
+                self.assertEqual(record['sent_stages'],[7])
+                self.assertEqual(fund_news.watch_jobs(state,now),[])
+                now=first+timedelta(days=14)
+                reviews=fund_news.build_reviews(state,fund_news.watch_jobs(state,now),data,now,movers.verified_publication)
+                self.assertIn('Нового NAV нет',reviews[0]['line'])
+                self.assertNotIn('0.0%',reviews[0]['line'])
+                now=first+timedelta(days=30)
+                reviews=fund_news.build_reviews(state,fund_news.watch_jobs(state,now),{},now,movers.verified_publication)
+                self.assertEqual(reviews[0]['stage'],30)
+                self.assertIn('Нет свежей',reviews[0]['line'])
+                state['_delivered_reviews']=reviews
+                fund_news.register_delivered(state,now)
+                self.assertEqual(record['sent_stages'],[7,14,21,30])
+                self.assertEqual(fund_news.watch_jobs(state,now+timedelta(days=1)),[])
+                # A crowded caption cannot prematurely consume a weekly report.
+                state.update(news_focus={'status':'ok','items':[]},news_reviews=reviews,
+                             last_scan={'status':'ok','readable_funds':1000})
+                caption,_,_=movers.combined_caption((state,[]),'Стоимость: 1000 ₪\n'+movers.BOT_NAME)
+                self.assertIn('ИТОГИ НАБЛЮДЕНИЯ',caption)
+                self.assertLessEqual(movers.message_length('💼 МОЙ ПОРТФЕЛЬ\n\n'+caption),1024)
+        
+        
+        if __name__=='__main__':
+            unittest.main()
+        EOF
+
         cat << 'EOF' > tests/test_bot.py
         import asyncio
         import unittest
@@ -3782,6 +4267,8 @@ jobs:
         from modules.portfolio import fetch_portfolio_fund
         from modules.news import translate_to_russian, shorten_title
         from modules.telegram_sender import message_length
+        from modules.fund_news import (fetch_mentions, prepare_focus, focus_card, watch_jobs,
+                                       build_reviews, register_delivered, review_card)
         
         LIST_URL = 'https://funder.co.il/allInOne.aspx'
         GRAPH_URL = 'https://www.funder.co.il/wsUnified.asmx/GetFundFewTickersPeriod'
@@ -4214,9 +4701,9 @@ jobs:
             async with aiohttp.ClientSession(timeout=timeout, headers=HEADERS, trust_env=True) as session:
                 previous_count = state.get('last_scan', {}).get('readable_funds', 0)
                 listing = await fetch_listing(session, previous_count)
-                screened = await screen_monthly(session, listing, now.date())
-                if not screened:
-                    raise DiscoveryUnavailable('monthly_history', 'No complete rolling-month series received')
+                review_jobs = watch_jobs(state, now)
+                screened, mentions = await asyncio.gather(
+                    screen_monthly(session, listing, now.date()), fetch_mentions(session, listing, now))
                 candidates = sorted((r for r in screened.values()
                                      if r['screen_low'] <= -THRESHOLD or r['screen_high'] >= THRESHOLD),
                                     key=lambda r: abs(r['monthly']), reverse=True)
@@ -4233,7 +4720,9 @@ jobs:
                                 key=lambda r: abs(r['monthly']), reverse=True)[:3]
                 ids = list(dict.fromkeys([r['fund_id'] for r in candidates[:MAX_CHECKS]] +
                                         [r['fund_id'] for r in active[:MAX_TRACKED]] +
-                                        [r['fund_id'] for r in probes]))
+                                        [r['fund_id'] for r in probes] +
+                                        [r['fund_id'] for r in mentions['items'][:3]] +
+                                        [r['fund_id'] for r in review_jobs]))
                 limiter, denied = asyncio.Semaphore(3), asyncio.Event()
                 async def fetch(fid):
                     async with limiter:
@@ -4246,6 +4735,9 @@ jobs:
                             return [], {}
                 results = await asyncio.gather(*(fetch(fid) for fid in ids))
                 data = dict(zip(ids, results))
+                state['news_focus'] = await prepare_focus(session, mentions, data, screened, now,
+                                                          validated_event, verified_publication)
+                state['news_reviews'] = build_reviews(state, review_jobs, data, now, verified_publication)
                 for event in active:
                     if event['fund_id'] in data:
                         track(event, data[event['fund_id']][0], now.date())
@@ -4318,7 +4810,7 @@ jobs:
             }.get(scan.get('error_code'), 'Результат проверки данных не получен.')
         
         
-        def combined_caption(prepared, default_caption):
+        def monthly_caption(prepared, default_caption, compact=False):
             """Always report scan outcome; mark only event cards actually delivered."""
             prefix = default_caption.removesuffix(BOT_NAME).strip()
             heading = '⚡ <b>ДВИЖЕНИЯ ЗА МЕСЯЦ</b>'
@@ -4348,7 +4840,16 @@ jobs:
                 header += '\nПроверка данных неполная.'
             cards, included = [], []
             for item in selected:
-                candidate = cards + [event_caption(item[1])]
+                event = item[1]
+                card = event_caption(event)
+                if compact:
+                    end = date.fromisoformat(event['date']).strftime('%d.%m')
+                    start = date.fromisoformat(event['start_date']).strftime('%d.%m')
+                    risk = f' · {event["risk"]}' if event.get('risk') else ''
+                    card = (f'<a href="https://funder.co.il/fund/{event["fund_id"]}">{event["fund_id"]}</a>'
+                            f' · {event["monthly"]:+.1f}% · {start}→{end} · 5с {event["change_5"]:+.1f}%{escape(risk)}'
+                            f'\n{escape(event["conclusion"])}')
+                candidate = cards + [card]
                 remaining = len(selected) - len(candidate)
                 tail = f'\nЕщё проверенных событий: {remaining}.' if remaining else ''
                 supplement = header + '\n\n' + '\n\n'.join(candidate) + tail
@@ -4362,6 +4863,59 @@ jobs:
             tail = f'\nЕщё проверенных событий: {remaining}.' if remaining else ''
             supplement = header + '\n\n' + '\n\n'.join(cards) + tail
             return assemble(supplement), supplement, included
+        
+        
+        def combined_caption(prepared, default_caption):
+            focus = (prepared[0].get('news_focus') or {}) if prepared else {}
+            reviews = prepared[0].get('news_reviews',[]) if prepared else []
+            if not focus and not reviews:
+                return monthly_caption(prepared, default_caption)
+            prefix = default_caption.removesuffix(BOT_NAME).strip()
+            heading = '📰 <b>ФОНДЫ В НОВОСТЯХ · 24ч</b>'
+            monthly_ids = {event['fund_id'] for _,event,_ in prepared[1]}
+            shown = [dict(item,show_monthly=item['fund_id'] in monthly_ids) for item in focus.get('items', [])[:3]]
+            shown_reviews = list(reviews[:3])
+        
+            def focus_text():
+                if shown:
+                    return heading + '\n\n' + '\n\n'.join(focus_card(item) for item in shown)
+                if focus.get('items'):
+                    return heading + f'\nСвежих упоминаний: {len(focus["items"])}; приоритет — итоги наблюдения.'
+                line = ('Прямых упоминаний в свежей ленте FUNDER не найдено.' if focus.get('status') == 'ok'
+                        else 'Лента проверена частично; прямых упоминаний не найдено.' if focus.get('status') == 'partial'
+                        else 'Новостная лента временно недоступна.')
+                return heading + '\n' + line
+        
+            def reviews_text():
+                return ('📒 <b>ИТОГИ НАБЛЮДЕНИЯ</b>\n' + '\n'.join(review_card(item) for item in shown_reviews)
+                        if shown_reviews else '')
+        
+            def blocks():
+                return '\n\n'.join(s for s in (reviews_text(),focus_text()) if s)
+        
+            # Reserve room for the monthly summary and Telegram's UTF-16 caption limit.
+            budget = 1024 - message_length('💼 МОЙ ПОРТФЕЛЬ\n\n' + BOT_NAME) - 180
+            if message_length(prefix + blocks()) > budget:
+                prefix = '\n'.join(line for line in prefix.splitlines() if not line.startswith('Курсы:'))
+            while message_length(prefix + blocks()) > budget and (shown or shown_reviews):
+                if shown:
+                    shown.pop()
+                else:
+                    shown_reviews.pop()
+            news_block = blocks()
+            focus_ids = {item['fund_id'] for item in shown if item.get('analysis')}
+            state, selected = prepared
+            state['_delivered_focus'] = shown
+            state['_delivered_reviews'] = shown_reviews
+            merged = [item for item in selected if item[1]['fund_id'] in focus_ids]
+            remaining = [item for item in selected if item[1]['fund_id'] not in focus_ids]
+            composed = prefix + '\n\n' + news_block + '\n\n' + BOT_NAME
+            caption, monthly, included = monthly_caption((state, remaining), composed, compact=True)
+            if not remaining and merged:
+                # Monthly metrics and conclusion already appear in the news cards.
+                caption = composed
+                monthly = ''
+            return caption, '\n\n'.join(s for s in (news_block, monthly) if s), included + merged
         
         
         def commit_movers(prepared, included):
@@ -4378,7 +4932,11 @@ jobs:
                             key=lambda k: state['events'][k]['detected_on'])
             for key in closed[:-200]:
                 del state['events'][key]
-            save_state(state)
+            register_delivered(state, datetime.now(TZ))
+            saved = dict(state)
+            for key in ('news_focus','news_reviews','_delivered_focus','_delivered_reviews'):
+                saved.pop(key,None)
+            save_state(saved)
         
         
         async def run_morning_reports():
