@@ -1494,10 +1494,6 @@ jobs:
                     plt.close(fig)
         
         
-        def render_fund_chart(row):
-            return render_radar_card([row])
-        
-        
         def chart_caption(row):
             """Explain the plotted fund prices, then the existing model's conclusion."""
             marker, _, _ = _radar_verdict(row)
@@ -1759,7 +1755,7 @@ jobs:
             if not BOT_TOKEN or not destination:
                 raise RuntimeError("BOT_TOKEN or CHAT_ID is missing")
             charts = charts[:3]
-            captions = [caption for _, caption in charts]
+            captions = [caption for _, caption in charts if caption.strip()]
             album_caption = title + "\n\n" + "\n\n".join(captions)
             from html import unescape
             visible = unescape(re.sub(r'<[^>]*>', '', album_caption)) if parse_mode == 'HTML' else album_caption
@@ -2667,7 +2663,7 @@ jobs:
                                     daily=total_day)
             return '\n'.join(lines), current_snapshot, journal
         
-        async def run_portfolio(caption_builder=None, on_delivered=None):
+        async def run_portfolio(caption_builder=None, on_delivered=None, extra_images=None):
             destination = os.getenv('PORTFOLIO_CHAT_ID')
             dry_run = os.getenv('DRY_RUN', '').lower() == 'true'
             if not destination and not dry_run:
@@ -2728,7 +2724,7 @@ jobs:
                 except Exception as error:
                     print(f'Portfolio image unavailable: {type(error).__name__}; using text')
             if png is not None:
-                await send_chart_photos([(png, caption)], title='💼 МОЙ ПОРТФЕЛЬ',
+                await send_chart_photos([(png, caption), *(extra_images or [])], title='💼 МОЙ ПОРТФЕЛЬ',
                                         chat_id=destination, parse_mode='HTML')
             else:
                 await send_to_telegram(message, chat_id=destination)
@@ -2765,6 +2761,7 @@ jobs:
         
         FEED = 'https://www.funder.co.il/rssNews.aspx'
         CATEGORY = 'https://funder.co.il/'
+        BIZ_NEWS = 'https://www.bizportal.co.il/mutualfunds/news'
         MAX_CANDIDATES = 6
         REVIEW_DAYS = (7, 14, 21, 30)
         
@@ -2893,8 +2890,11 @@ jobs:
                     continue
                 url = item.findtext('link') or ''
                 parsed = urlparse(url)
-                if (parsed.scheme != 'https' or parsed.hostname not in {'funder.co.il', 'www.funder.co.il'}
-                        or not re.fullmatch(r'/article/\d+/?', parsed.path)):
+                allowed = ((parsed.hostname in {'funder.co.il', 'www.funder.co.il'}
+                            and re.fullmatch(r'/article/\d+/?', parsed.path))
+                           or (parsed.hostname == 'www.bizportal.co.il'
+                               and re.fullmatch(r'/mutualfunds/news/article/\d+/?', parsed.path)))
+                if parsed.scheme != 'https' or not allowed:
                     continue
                 article_key = parsed.path.rstrip('/')
                 if article_key in seen_urls:
@@ -2963,7 +2963,7 @@ jobs:
             return unique[:MAX_CANDIDATES]
         
         
-        async def fetch_mentions(session, listing, now):
+        async def _fetch_funder_mentions(session, listing, now):
             limiter, blocked = asyncio.Semaphore(3), asyncio.Event()
             async def get(url):
                 async with limiter:
@@ -3018,11 +3018,60 @@ jobs:
                 return {'status': 'unavailable', 'items': []}
         
         
+        async def fetch_mentions(session, listing, now, *, skip_funder=False):
+            result = ({'status':'unavailable','items':[]} if skip_funder else
+                      await _fetch_funder_mentions(session, listing, now))
+            if result['status'] == 'ok' and len(result['items']) >= 3:
+                return result
+            limiter, blocked = asyncio.Semaphore(2), asyncio.Event()
+            async def get(url):
+                async with limiter:
+                    if blocked.is_set():
+                        return ''
+                    try:
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                            body = await response.text()
+                            if response.status in {401,403,429} or is_access_challenge(body):
+                                blocked.set()
+                                return ''
+                            return body if response.status == 200 else ''
+                    except (aiohttp.ClientError, asyncio.TimeoutError):
+                        return ''
+            page = await get(BIZ_NEWS)
+            root = _FundHTML(page).root
+            section = next((n for n in root.walk('ul') if 'articles_rows' in n.attrs.get('class','').split()), None)
+            urls = []
+            for node in (section.walk('a') if section else []):
+                url = urljoin(BIZ_NEWS, node.attrs.get('href',''))
+                parsed = urlparse(url)
+                if (parsed.scheme == 'https' and parsed.hostname == 'www.bizportal.co.il'
+                        and re.fullmatch(r'/mutualfunds/news/article/\d+',parsed.path) and url not in urls):
+                    urls.append(url)
+            pages = await asyncio.gather(*(get(url) for url in urls[:6]))
+            rss = ET.fromstring('<rss><channel/></rss>')
+            read = 0
+            for url, body in zip(urls, pages):
+                item = article_item(body, url)
+                if item is not None:
+                    rss.find('channel').append(item)
+                    read += 1
+            found = parse_mentions(ET.tostring(rss, encoding='unicode'), listing, now)
+            by_id = {r['fund_id']:r for r in result['items']}
+            for row in found:
+                existing = by_id.get(row['fund_id'])
+                if not existing or row['news']['published'] > existing['news']['published']:
+                    by_id[row['fund_id']] = row
+            status = 'partial' if read or result['status'] != 'unavailable' else 'unavailable'
+            return {'status':status, 'items':sorted(by_id.values(),
+                    key=lambda r:(r['news']['headline_match'],r['news']['published']), reverse=True)[:MAX_CANDIDATES]}
+        
+        
         def article_item(body, url):
             """Read only the article body, not sidebar fund links or recommendations."""
             root = _FundHTML(body).root
             meta = {n.attrs.get('property'):n.attrs.get('content','') for n in root.walk('meta')}
-            content = next((n for n in root.walk() if n.attrs.get('id') == 'articleDesc'), None)
+            content_id = 'div_article_body' if urlparse(url).hostname == 'www.bizportal.co.il' else 'articleDesc'
+            content = next((n for n in root.walk() if n.attrs.get('id') == content_id), None)
             try:
                 published = datetime.fromisoformat(meta.get('article:published_time','').replace('Z','+00:00'))
             except ValueError:
@@ -3072,8 +3121,10 @@ jobs:
         
         
         def focus_card(item):
+            from modules.fund_profile import describe_fund
             fid, news = item['fund_id'], item['news']
-            name = escape(shorten_title(item['name'], 22))
+            profile = describe_fund(item['name']) if item.get('show_monthly') else None
+            name = escape(profile['label'] if profile else shorten_title(item['name'], 22))
             title = escape(shorten_title(news['display_title'], 55))
             lines = [f'<a href="https://funder.co.il/fund/{fid}">{name}</a> · {fid}',
                      f'📰 <a href="{escape(news["url"], quote=True)}">{title}</a> · {news["news_date"]}']
@@ -3087,6 +3138,8 @@ jobs:
                     lines.append(f'{start}→{end}: {analysis["monthly"]:+.1f}% · 5с {analysis["change_5"]:+.1f}%{escape(risk)}')
                 else:
                     lines.append(f'NAV {end} · 5с {analysis["change_5"]:+.1f}%{escape(risk)}')
+            if profile:
+                lines.append('Факторы: ' + escape(profile['factors']) + '.')
             lines.append('Следить: ' + escape(item['watch']))
             return '\n'.join(lines)
         EOF
@@ -3184,6 +3237,11 @@ jobs:
                 caption,_,_=movers.combined_caption((empty,other),prefix)
                 self.assertIn('упоминаний',caption)
                 self.assertIn('5200000',caption)
+                # A monthly fund merged into a news card must keep its explanation.
+                merged = dict(focus[0], name='ברק (6D) אולטרה נפט WTI פי 3', show_monthly=True)
+                rendered = fund_news.focus_card(merged)
+                self.assertIn('Barak · нефть WTI', rendered)
+                self.assertIn('Факторы: спрос на нефть', rendered)
         
             def test_weekly_tracking_delivery_baseline_and_final_month(self):
                 first=datetime(2026,10,2,8,20,tzinfo=movers.TZ)
@@ -3868,12 +3926,12 @@ jobs:
         
             def test_chart_image_and_caption(self):
                 from datetime import date, timedelta
-                from modules.charts import render_fund_chart, chart_caption
+                from modules.charts import render_radar_card, chart_caption
                 row = MessageTests().rows()[0]
                 row['il_fund_data']['price_stats']['chart_history'] = [
                     {'date': (date(2025, 1, 1)+timedelta(days=i)).isoformat(), 'price': 100+(i%20)}
                     for i in range(100)]
-                png = render_fund_chart(row)
+                png = render_radar_card([row])
                 self.assertTrue(png.startswith(bytes.fromhex('89504e470d0a1a0a')))
                 self.assertLess(len(png), 10_000_000)
                 caption = chart_caption(row)
@@ -4243,6 +4301,259 @@ jobs:
         if __name__ == '__main__':
             unittest.main()
         EOF
+        cat << 'EOF' > modules/fund_profile.py
+        """Brief explanations of a fund's declared focus, not attributed causes of a move."""
+        import re
+        
+        
+        # Recognise explicit subjects in the published name; never infer current holdings
+        # or currency exposure from a return, manager, ticker of another fund, or headline.
+        PROFILES = (
+            (r'\bwti\b', 'нефть WTI', 'спрос на нефть, добыча и запасы'),
+            (r'\bsemicon\w*|מוליכים למחצה|שבבים', 'полупроводники',
+             'спрос на чипы, результаты производителей'),
+            (r'\bindxx\s+blockchain\s+ecosystem\b', 'компании блокчейна',
+             'акции отрасли, активность крипторынка'),
+            (r'\bbitcoin\b|ביטקוין', 'биткоин', 'цена биткоина и условия стратегии'),
+            (r'\b(?:clean|renewable|green)\s+energy\b|אנרגיה (?:ירוקה|מתחדשת)',
+             'зелёная энергетика', 'спрос на энергию, ставки и субсидии'),
+            (r'\bcyber\w*|סייבר', 'кибербезопасность', 'расходы на защиту, результаты компаний'),
+            (r'\bbiotech\w*|ביוטכנולוגיה', 'биотехнологии', 'испытания лекарств, решения регуляторов'),
+            (r'\bartificial intelligence\b|\bAI\b|בינה מלאכותית', 'ИИ',
+             'расходы на ИИ, результаты компаний'),
+            (r'\bbanks?\b|בנקים', 'банки', 'ставки, кредитование и просрочки'),
+            (r'\binsurance\b|ביטוח', 'страхование', 'убытки по страхованию, доходность инвестиций'),
+            (r'\bS\s*&\s*P\s*500\b', 'акции S&P 500', 'прибыль компаний США и процентные ставки'),
+            (r'\bNasdaq[\s-]*100\b', 'акции Nasdaq-100', 'результаты компаний индекса и ставки'),
+        )
+        MANAGERS = (
+            ('ברק', 'Barak'), ('תכלית', 'Tachlit'), ('מיטב', 'Meitav'),
+            ('איילון', 'Ayalon'), ('אילים', 'Eylim'), ('מגדל', 'Migdal'),
+            ('מור', 'More'), ('קסם', 'KSM'), ('הראל', 'Harel'), ('אלטשולר', 'Altshuler'),
+            ('MTF', 'MTF'), ('IBI', 'IBI'),
+        )
+        
+        
+        def describe_fund(name):
+            name = re.sub(r'\s+', ' ', str(name or '')).strip()
+            matches = [(label, factors) for pattern, label, factors in PROFILES
+                       if re.search(pattern, name, re.I)]
+            # Mixed mandates cannot be presented as a pure exposure to either subject.
+            if len(matches) != 1:
+                return None
+            label, factors = matches[0]
+            manager = next((english for hebrew, english in MANAGERS
+                            if re.match(r'(?:' + re.escape(hebrew) + '|' + re.escape(english)
+                                        + r')(?!\w)', name, re.I)), '')
+            return {'label': f'{manager} · {label}' if manager else label, 'factors': factors}
+        
+        
+        def short_conclusion(event):
+            return {
+                'up_up': 'Рост сохраняется; не догонять цену.',
+                'up_down': 'Идёт откат; ждать стабилизации.',
+                'up_flat': 'После роста пауза; нового импульса нет.',
+                'down_up': 'Есть отскок; разворот ещё не подтверждён.',
+                'down_down': 'Снижение продолжается; усреднение рискованно.',
+                'down_flat': 'Падение замедлилось; разворот не подтверждён.',
+            }.get(event.get('regime'), event.get('conclusion', ''))
+        EOF
+
+        cat << 'EOF' > modules/mover_charts.py
+        """Six-month charts of delivered monthly movers, independent of portfolio holdings."""
+        import asyncio
+        import calendar
+        import csv
+        import json
+        import math
+        from datetime import date
+        from io import BytesIO
+        
+        import aiohttp
+        
+        from modules.config import HEADERS
+        from modules.fund_profile import describe_fund
+        from modules.fund_sources import PublicFundSources, MAYA, parse_maya_history
+        
+        
+        def six_month_start(today):
+            year, month = divmod(today.year * 12 + today.month - 1 - 6, 12)
+            month += 1
+            return date(year, month, min(today.day, calendar.monthrange(year, month)[1]))
+        
+        
+        def verified_chart(history, detail, event, today):
+            """Never attach a different NAV date/price to the monthly card."""
+            try:
+                if str(detail['fundId']) != event['fund_id']:
+                    return []
+                points = sorted((date.fromisoformat(p['date']), float(p['price'])) for p in history)
+                if len(points) < 2 or len({d for d, _ in points}) != len(points):
+                    return []
+                if any(not math.isfinite(p) or p <= 0 or d > today for d, p in points):
+                    return []
+                last_day, last_price = points[-1]
+                quote_price = float(detail['redemptionPrice'])
+                event_price = float(event['price'])
+                if not all(math.isfinite(p) and p > 0 for p in (quote_price, event_price)):
+                    return []
+                if (last_day.isoformat() != str(detail['ratesAsOf'])[:10]
+                        or last_day.isoformat() != event['date']
+                        or abs(last_price - quote_price) > .011
+                        or abs(last_price - event_price) > .011):
+                    return []
+                return [(d, p) for d, p in points if d >= six_month_start(today)]
+            except (KeyError, ValueError, TypeError):
+                return []
+        
+        
+        async def build_mover_charts(selected, today):
+            if not selected:
+                return None
+            async with aiohttp.ClientSession(headers=HEADERS, trust_env=True,
+                                            timeout=aiohttp.ClientTimeout(total=25)) as session:
+                api = PublicFundSources(session, {}, today)
+                async def fetch(item):
+                    event = item[1]
+                    fid = event['fund_id']
+                    try:
+                        body = await api.text('MAYA', f'{MAYA}/mutual/{fid}/history/file', {
+                            'period': 4, 'fromDate': six_month_start(today).isoformat(),
+                            'toDate': today.isoformat(), 'pageSize': 200, 'pageNumber': 1})
+                        history = parse_maya_history(body, fid, today) if body else []
+                        if not history:
+                            return None
+                        raw = await api.text('MAYA', f'{MAYA}/mutual/{fid}')
+                        points = verified_chart(history, json.loads(raw), event, today)
+                        if len(points) < 2:
+                            print(f'::warning::Mover chart {fid}: history and published NAV not aligned')
+                            return None
+                        return event, points
+                    except (ValueError, TypeError, KeyError, csv.Error):
+                        return None
+                rows = [r for r in await asyncio.gather(*(fetch(item) for item in selected[:3])) if r]
+            if not rows:
+                print('::warning::Monthly mover charts unavailable; retaining verified text report')
+                return None
+            return render_mover_charts(rows, today)
+        
+        
+        def render_mover_charts(rows, today):
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            from matplotlib.patches import FancyBboxPatch
+        
+            count = len(rows)
+            start = six_month_start(today)
+            # Fixed row height keeps one or two available charts readable as well.
+            with plt.rc_context({'font.family': 'DejaVu Sans', 'font.size': 11,
+                                 'text.color': '#e8edf5', 'xtick.color': '#8398b1',
+                                 'ytick.color': '#8398b1'}):
+                fig = plt.figure(figsize=(9, 1.9 + 3.35 * count), dpi=180, facecolor='#09121f')
+                try:
+                    fig.text(.055, .965, 'ФОНДЫ В ФОКУСЕ', fontsize=23, weight='bold')
+                    fig.text(.055, .932, f'6 месяцев / {start:%d.%m.%Y} — {today:%d.%m.%Y}',
+                             fontsize=11, color='#9fb1c8')
+                    row_height = .82 / count
+                    for i, (event, points) in enumerate(rows):
+                        top = .90 - i * row_height
+                        h = row_height
+                        profile = describe_fund(event['name'])
+                        name = profile['label'] if profile else event['fund_id']
+                        if event.get('risk'):
+                            name += ' · ' + event['risk']
+                        first, last = points[0], points[-1]
+                        low, high = min(points, key=lambda p: p[1]), max(points, key=lambda p: p[1])
+                        change = (last[1] / first[1] - 1) * 100
+                        color = '#42d4ad' if change >= 0 else '#ff798a'
+                        fig.add_artist(FancyBboxPatch((.035, top - h + .013), .93, h - .018,
+                            boxstyle='round,pad=0.006,rounding_size=0.012', transform=fig.transFigure,
+                            facecolor='#111e2e', edgecolor='#24364b', linewidth=.7, zorder=0))
+                        fig.text(.058, top - .10*h, name, fontsize=13, weight='bold')
+                        fig.text(.058, top - .18*h, f"{event['fund_id']} · {len(points)} опубликованных цен",
+                                 fontsize=9, color='#8fa3bc')
+                        for x, label, (day, value) in zip([.06, .28, .50],
+                                ['ПОСЛЕДНЯЯ ЦЕНА', 'МИНИМУМ', 'МАКСИМУМ'], [last, low, high]):
+                            fig.text(x, top - .28*h, label, fontsize=7.5, color='#91a4bc')
+                            fig.text(x, top - .36*h, f'{value:.2f}', fontsize=17, weight='bold')
+                            fig.text(x, top - .42*h, f'{day:%d.%m}', fontsize=8, color='#91a4bc')
+                        fig.text(.73, top - .28*h, 'ИЗМЕНЕНИЕ КУРСА', fontsize=7.5, color='#91a4bc')
+                        fig.text(.73, top - .36*h, f'{change:+.1f}%', fontsize=17, color=color, weight='bold')
+                        fig.text(.73, top - .42*h, f'{first[0]:%d.%m} → {last[0]:%d.%m}',
+                                 fontsize=8, color='#91a4bc')
+                        ax = fig.add_axes([.085, top - .85*h, .82, .36*h], facecolor='#111e2e')
+                        ds, ys = zip(*points)
+                        pad = max((high[1] - low[1]) * .15, last[1] * .01)
+                        ax.set_ylim(low[1] - pad, high[1] + pad)
+                        ax.set_xlim(start, today)
+                        ax.plot(ds, ys, color=color, lw=1.7)
+                        ax.fill_between(ds, ys, low[1] - pad, color=color, alpha=.07)
+                        ax.scatter([last[0]], [last[1]], color=color, s=17, zorder=3)
+                        ax.grid(axis='y', color='#2a3c52', alpha=.6, lw=.5)
+                        ax.yaxis.set_major_locator(plt.MaxNLocator(3))
+                        import matplotlib.dates as md
+                        ax.xaxis.set_major_locator(md.MonthLocator())
+                        ax.xaxis.set_major_formatter(md.DateFormatter('%m.%y'))
+                        ax.tick_params(labelsize=7, length=0, pad=5)
+                        for spine in ax.spines.values():
+                            spine.set_visible(False)
+                        if (first[0] - start).days > 7:
+                            ax.axvspan(start, first[0], color='#829bb9', alpha=.035)
+                            ax.text(.02, .55, f'История доступна\nс {first[0]:%d.%m}',
+                                    transform=ax.transAxes, color='#8195ac', fontsize=8, va='center')
+                        fig.text(.058, top - .94*h, 'Цена погашения · МАЙЯ / Тель-Авивская биржа',
+                                 fontsize=8, color='#738ba7')
+                    fig.text(.055, .035, 'Проценты — изменение курса за доступный период на графике.',
+                             fontsize=8, color='#9fb1c8')
+                    output = BytesIO()
+                    fig.savefig(output, format='png', dpi=180, facecolor=fig.get_facecolor())
+                    return output.getvalue()
+                finally:
+                    plt.close(fig)
+        EOF
+
+        cat << 'EOF' > tests/test_mover_charts.py
+        import unittest
+        from datetime import date
+        from unittest.mock import AsyncMock, patch
+        from modules import mover_charts, movers, portfolio
+        
+        
+        class MoverChartTests(unittest.IsolatedAsyncioTestCase):
+            def test_date_window_and_conflicting_nav_rejection(self):
+                self.assertEqual(mover_charts.six_month_start(date(2026, 8, 31)), date(2026, 2, 28))
+                self.assertEqual(mover_charts.six_month_start(date(2026, 3, 31)), date(2025, 9, 30))
+                event = {'fund_id':'5141841','date':'2026-10-26','price':540.57}
+                detail = {'fundId':5141841,'ratesAsOf':'2026-10-26','redemptionPrice':540.57}
+                history = [{'date':'2026-04-29','price':483.37},{'date':'2026-10-26','price':540.57}]
+                today = date(2026,10,29)
+                self.assertEqual(len(mover_charts.verified_chart(history,detail,event,today)),2)
+                for bad in (dict(detail,fundId=5138623),dict(detail,redemptionPrice=540),
+                            dict(detail,ratesAsOf='2026-10-25'),dict(detail,redemptionPrice=float('nan'))):
+                    self.assertEqual(mover_charts.verified_chart(history,bad,event,today),[])
+                self.assertEqual(mover_charts.verified_chart(history,detail,dict(event,price=530),today),[])
+                self.assertEqual(mover_charts.verified_chart(history+history[-1:],detail,event,today),[])
+        
+            async def test_graph_attaches_to_portfolio_and_failure_keeps_text(self):
+                selected = [('key',{'fund_id':'5141841'},None)]
+                async def deliver(caption_builder,on_delivered,extra_images):
+                    caption,_ = await caption_builder('portfolio')
+                    self.assertEqual(caption,'combined')
+                    self.assertEqual(extra_images, expected)
+                    on_delivered()
+                for result in (b'chart', RuntimeError('unavailable')):
+                    expected = [(b'chart','')] if isinstance(result,bytes) else []
+                    builder = AsyncMock(return_value=result) if expected else AsyncMock(side_effect=result)
+                    with patch.object(portfolio,'run_portfolio',new=deliver), \
+                         patch.object(movers,'prepare_safely',new=AsyncMock(return_value=({},selected))), \
+                         patch.object(movers,'combined_caption',return_value=('combined','supplement',selected)), \
+                         patch.object(mover_charts,'build_mover_charts',new=builder), \
+                         patch.object(movers,'commit_movers') as commit:
+                        await movers.run_morning_reports()
+                        commit.assert_called_once_with(({},selected),selected)
+        EOF
+
         cat << 'EOF' > modules/movers.py
         """Rolling-month discovery: bulk screening, independent NAV checks, concise view."""
         import asyncio
@@ -4269,6 +4580,8 @@ jobs:
         from modules.telegram_sender import message_length
         from modules.fund_news import (fetch_mentions, prepare_focus, focus_card, watch_jobs,
                                        build_reviews, register_delivered, review_card)
+        from modules.fund_sources import PublicFundSources
+        from modules.fund_profile import describe_fund, short_conclusion
         
         LIST_URL = 'https://funder.co.il/allInOne.aspx'
         GRAPH_URL = 'https://www.funder.co.il/wsUnified.asmx/GetFundFewTickersPeriod'
@@ -4432,8 +4745,11 @@ jobs:
             if quote.get('date') and quote['date'] != last_day.isoformat():
                 return None
             quote_price, quote_change = number(quote.get('price')), number(quote.get('daily'))
+            other_price = number((quote.get('other_quote') or {}).get('price'))
             change = (current / previous - 1) * 100
             if quote_price is None or quote_change is None:
+                return None
+            if other_price is not None and abs(other_price - quote_price) > max(.011, quote_price * .0001):
                 return None
             if abs(quote_price - current) > max(0.011, current * 0.0001):
                 return None
@@ -4593,21 +4909,27 @@ jobs:
                 event['tracking'] = 'expired'
         
         
-        def event_caption(event):
+        def event_caption(event, compact=False, shared_period=False):
             fid = event['fund_id']
-            name = shorten_title(event['name'], 32)
-            link = f'https://funder.co.il/fund/{fid}'
-            source = f'https://www.bizportal.co.il/mutualfunds/quote/generalview/{fid}'
+            profile = describe_fund(event['name'])
+            name = profile['label'] if profile else shorten_title(event['name'], 32)
+            source = (f'https://maya.tase.co.il/he/funds/mutual-funds/{fid}' if event.get('source') == 'MAYA'
+                      else f'https://www.bizportal.co.il/mutualfunds/quote/generalview/{fid}')
             marker = '🟩▲' if event['monthly'] > 0 else '🟥▼'
             start = date.fromisoformat(event['start_date']).strftime('%d.%m')
             end = date.fromisoformat(event['date']).strftime('%d.%m')
-            risk = ' · ' + event['risk'] if event['risk'] else ''
-            lines = [f'<a href="{link}">{escape(name)}</a> · {fid}',
-                     f'{marker} {event["monthly"]:+.1f}% · {start}→{end} · 5 сессий {event["change_5"]:+.1f}%{escape(risk)}']
+            risk = ' · ' + event['risk'] if event.get('risk') else ''
+            period = '' if shared_period else f' · {start}→{end}'
+            sessions = '5с' if compact else '5 сессий'
+            lines = [f'{marker} <a href="{source}">{escape(name)}</a> · {fid}',
+                     f'{event["monthly"]:+.1f}%{period} · {sessions} {event["change_5"]:+.1f}%{escape(risk)}']
+            if profile:
+                lines.append('Факторы: ' + escape(profile['factors']) + '.')
             context = event.get('context')
-            if context:
+            if context and not compact:
                 lines.append(f'📰 <a href="{escape(context["url"], quote=True)}">{escape(shorten_title(context["title"], 45))}</a> · {context.get("date", "")}')
-            lines.append(f'<a href="{source}">Вывод:</a> {escape(event["conclusion"])}')
+            conclusion = short_conclusion(event) if compact else event['conclusion']
+            lines.append('Вывод: ' + escape(conclusion))
             return '\n'.join(lines)
         
         
@@ -4658,7 +4980,7 @@ jobs:
             raise error
         
         
-        async def screen_monthly(session, listing, today):
+        async def screen_monthly(session, listing, today, blocked=None):
             limiter, denied = asyncio.Semaphore(3), asyncio.Event()
             async def fetch(rows):
                 for attempt in range(2):
@@ -4676,6 +4998,8 @@ jobs:
                                 body = await response.text()
                         if status in {401, 403, 429} or is_access_challenge(body):
                             denied.set()
+                            if blocked is not None:
+                                blocked.add('Funder')
                             print(f'::warning::Monthly graph access restricted: HTTP {status}')
                             return {}
                         if status == 200:
@@ -4700,10 +5024,38 @@ jobs:
             timeout = aiohttp.ClientTimeout(total=25)
             async with aiohttp.ClientSession(timeout=timeout, headers=HEADERS, trust_env=True) as session:
                 previous_count = state.get('last_scan', {}).get('readable_funds', 0)
-                listing = await fetch_listing(session, previous_count)
+                sources = PublicFundSources(session, state, now.date())
+                fallback, funder_blocked = False, set()
+                try:
+                    # Counts from different catalogs are not interchangeable coverage checks.
+                    if state.get('last_scan', {}).get('catalog_source', 'Funder') != 'Funder':
+                        previous_count = 0
+                    listing = await fetch_listing(session, previous_count)
+                except DiscoveryUnavailable as error:
+                    fallback = True
+                    if error.code in {'list_access', 'list_rate_limit'}:
+                        funder_blocked.add('Funder')
+                    print(f'::warning::Funder unavailable ({error.code}); switching public sources')
+                    listing = await sources.listing()
+                if not listing:
+                    # Keep due observations alive even if all universe lists fail.
+                    listing = [{'fund_id': fid, 'name': row['name'], 'daily': None, 'source': 'cache'}
+                               for fid, row in state.get('news_watch', {}).items() if row.get('name')]
+                    sources.catalog = {r['fund_id']: r for r in listing}
                 review_jobs = watch_jobs(state, now)
-                screened, mentions = await asyncio.gather(
-                    screen_monthly(session, listing, now.date()), fetch_mentions(session, listing, now))
+                if fallback:
+                    screened = await sources.screen(listing, month_window, verified_publication)
+                else:
+                    screened = await screen_monthly(session, listing, now.date(), funder_blocked)
+                    if len(screened) < len(listing) * .7:
+                        fallback = True
+                        alternative = await sources.listing()
+                        if alternative:
+                            listing = alternative
+                            screened.update(await sources.screen(listing, month_window, verified_publication))
+                            # Do not mix an old Funder daily snapshot with newer fallback quotes.
+                            screened = {fid: row for fid, row in screened.items() if fid in sources.catalog}
+                mentions = await fetch_mentions(session, listing, now, skip_funder='Funder' in funder_blocked)
                 candidates = sorted((r for r in screened.values()
                                      if r['screen_low'] <= -THRESHOLD or r['screen_high'] >= THRESHOLD),
                                     key=lambda r: abs(r['monthly']), reverse=True)
@@ -4728,6 +5080,8 @@ jobs:
                     async with limiter:
                         # Limit whole-fund jobs, not just individual requests.
                         try:
+                            if fallback:
+                                return await sources.series(fid)
                             return await fetch_portfolio_fund(session, fid, asyncio.Semaphore(1), denied,
                                                               history_pages=5)
                         except Exception as error:
@@ -4770,8 +5124,10 @@ jobs:
                     'freshness_checks': healthy_probes,
                     'status': 'partial' if (len(screened) < len(listing)
                                             or len(candidates) > MAX_CHECKS or verified < len(candidates)
-                                            or healthy_probes < len(probes)) else 'ok',
-                    'scope': 'Funder readable rows; full-market coverage not asserted',
+                                            or healthy_probes < len(probes)
+                                            or (fallback and not sources.source_names)) else 'ok',
+                    'catalog_source': ' + '.join(sources.source_names) if fallback else 'Funder',
+                    'scope': 'Readable open mutual funds; full-market coverage not asserted',
                 }
                 print('Fund discovery: ' + json.dumps(state['last_scan'], ensure_ascii=False))
                 if state['last_scan']['status'] == 'partial':
@@ -4835,20 +5191,25 @@ jobs:
                     summary = f'Среди {scan["readable_funds"]} фондов движений от ±10% за 30д не найдено.'
                 supplement = heading + '\n' + summary
                 return assemble(supplement), supplement, []
-            header = heading + f'\n30д · от ±10% · история {scan.get("monthly_coverage", 0)}/{scan["readable_funds"]}'
+            periods = {(event['start_date'], event['date']) for _, event, _ in selected}
+            shared_period = len(periods) == 1
+            period = '30д'
+            if shared_period:
+                start, end = next(iter(periods))
+                period = f'{date.fromisoformat(start):%d.%m}→{date.fromisoformat(end):%d.%m}'
+            header = heading + f'\n{period} · история {scan.get("monthly_coverage", 0)}/{scan["readable_funds"]}'
             if scan['status'] == 'partial':
-                header += '\nПроверка данных неполная.'
+                header += ' · частично'
+            if scan.get('catalog_source') and scan['catalog_source'] != 'Funder':
+                header += '\n' + escape(scan['catalog_source'].replace('MAYA','МАЙЯ'))
+            if not compact:
+                full = header + '\n\n' + '\n\n'.join(event_caption(e, shared_period=shared_period)
+                                                        for _, e, _ in selected)
+                compact = message_length('💼 МОЙ ПОРТФЕЛЬ\n\n' + assemble(full)) > 1024
             cards, included = [], []
             for item in selected:
                 event = item[1]
-                card = event_caption(event)
-                if compact:
-                    end = date.fromisoformat(event['date']).strftime('%d.%m')
-                    start = date.fromisoformat(event['start_date']).strftime('%d.%m')
-                    risk = f' · {event["risk"]}' if event.get('risk') else ''
-                    card = (f'<a href="https://funder.co.il/fund/{event["fund_id"]}">{event["fund_id"]}</a>'
-                            f' · {event["monthly"]:+.1f}% · {start}→{end} · 5с {event["change_5"]:+.1f}%{escape(risk)}'
-                            f'\n{escape(event["conclusion"])}')
+                card = event_caption(event, compact=compact, shared_period=shared_period)
                 candidate = cards + [card]
                 remaining = len(selected) - len(candidate)
                 tail = f'\nЕщё проверенных событий: {remaining}.' if remaining else ''
@@ -4881,8 +5242,8 @@ jobs:
                     return heading + '\n\n' + '\n\n'.join(focus_card(item) for item in shown)
                 if focus.get('items'):
                     return heading + f'\nСвежих упоминаний: {len(focus["items"])}; приоритет — итоги наблюдения.'
-                line = ('Прямых упоминаний в свежей ленте FUNDER не найдено.' if focus.get('status') == 'ok'
-                        else 'Лента проверена частично; прямых упоминаний не найдено.' if focus.get('status') == 'partial'
+                line = ('Прямых упоминаний в свежих публикациях не найдено.' if focus.get('status') == 'ok'
+                        else 'Ленты проверены частично; прямых упоминаний не найдено.' if focus.get('status') == 'partial'
                         else 'Новостная лента временно недоступна.')
                 return heading + '\n' + line
         
@@ -4941,13 +5302,22 @@ jobs:
         
         async def run_morning_reports():
             from modules.portfolio import run_portfolio
+            from modules.mover_charts import build_mover_charts
             task = asyncio.create_task(prepare_safely())
             prepared, included = None, []
+            extra_images = []
         
             async def caption_builder(default):
                 nonlocal prepared, included
                 prepared = await task
                 caption, supplement, included = combined_caption(prepared, default)
+                try:
+                    async with asyncio.timeout(70):
+                        chart = await build_mover_charts(included, datetime.now(TZ).date())
+                    if chart:
+                        extra_images.append((chart, ''))
+                except Exception as error:
+                    print(f'::warning::Monthly chart unavailable: {type(error).__name__}; keeping report')
                 return caption, supplement
         
             def delivered():
@@ -4957,7 +5327,8 @@ jobs:
                     print(f'::warning::Discovery journal save failed: {type(error).__name__}')
         
             try:
-                await run_portfolio(caption_builder=caption_builder, on_delivered=delivered)
+                await run_portfolio(caption_builder=caption_builder, on_delivered=delivered,
+                                    extra_images=extra_images)
             finally:
                 if not task.done():
                     task.cancel()
@@ -4974,6 +5345,7 @@ jobs:
         from unittest.mock import AsyncMock, MagicMock, patch
         
         from modules import movers, telegram_sender, portfolio
+        from modules.fund_profile import describe_fund
         
         
         def listing(change='12', fid='5101183'):
@@ -4995,6 +5367,18 @@ jobs:
         
         
         class MoverTests(unittest.IsolatedAsyncioTestCase):
+            def test_profiles_use_declared_subject_without_guessing_mixed_funds(self):
+                cases = (
+                    ('ברק (6D) אולטרה PHLX SEMICONDUTOR פי 3', 'Barak · полупроводники'),
+                    ('ברק (6D) אולטרה נפט WTI פי 3', 'Barak · нефть WTI'),
+                    ('תכלית TTF (4D) Indxx Blockchain Ecosystem', 'Tachlit · компании блокчейна'),
+                )
+                for name, label in cases:
+                    with self.subTest(name=name):
+                        self.assertEqual(describe_fund(name)['label'], label)
+                for unknown in ('קרן השקעות כללית', 'Thai equities', 'קרן AI וסייבר', ''):
+                    self.assertIsNone(describe_fund(unknown))
+        
             def test_header_selection_and_duplicate_conflicts(self):
                 self.assertEqual(movers.parse_listing(listing())[0]['daily'], 12)
                 self.assertEqual(len(movers.parse_listing(listing()*2)), 1)
@@ -5106,7 +5490,7 @@ jobs:
         
             async def test_sequence_portfolio_before_discovery(self):
                 order = []
-                async def portfolio_delivery(caption_builder, on_delivered):
+                async def portfolio_delivery(caption_builder, on_delivered, extra_images=None):
                     caption, extra = await caption_builder('portfolio')
                     order.append('sent')
                     on_delivered()
@@ -5115,7 +5499,7 @@ jobs:
                      patch.object(movers, 'commit_movers', side_effect=lambda *a: order.append('saved')):
                     await movers.run_morning_reports()
                 self.assertEqual(order, ['sent', 'saved'])
-                async def failed(caption_builder, on_delivered):
+                async def failed(caption_builder, on_delivered, extra_images=None):
                     await caption_builder('portfolio')
                     raise RuntimeError('Telegram failed')
                 with patch.object(portfolio, 'run_portfolio', new=failed), \
@@ -5223,6 +5607,19 @@ jobs:
                 self.assertLessEqual(telegram_sender.message_length('💼 МОЙ ПОРТФЕЛЬ\n\n'+caption), 1024)
                 self.assertEqual(caption.count(movers.BOT_NAME), 1)
                 self.assertIn('плечо ×3', caption)
+                names = ('ברק (6D) אולטרה PHLX SEMICONDUTOR פי 3',
+                         'ברק (6D) אולטרה נפט WTI פי 3',
+                         'תכלית TTF (4D) Indxx Blockchain Ecosystem')
+                described = [(str(i), dict(event, name=name, fund_id=str(5101183+i)), None)
+                             for i, name in enumerate(names)]
+                with_news = dict(state, news_focus={'status':'partial','items':[]})
+                result, _, sent = movers.combined_caption((with_news, described),
+                    '27.10 · 08:20 · Израиль\nСтоимость: 12 061.67 ₪\nС покупки: -601.20 ₪\n'
+                    '⚠️ Meitav Sky: 58.3% портфеля\n'+movers.BOT_NAME)
+                self.assertEqual(len(sent), 3)
+                self.assertEqual(result.count('Факторы:'), 3)
+                self.assertIn('компании блокчейна', result)
+                self.assertLessEqual(telegram_sender.message_length('💼 МОЙ ПОРТФЕЛЬ\n\n'+result), 1024)
                 class Response:
                     status=200
                     async def __aenter__(self): return self
@@ -5235,12 +5632,15 @@ jobs:
                 with patch.object(telegram_sender,'BOT_TOKEN','fake'), \
                      patch.object(telegram_sender,'CHAT_ID','public'), \
                      patch.object(telegram_sender.aiohttp,'ClientSession',return_value=manager):
-                    await telegram_sender.send_chart_photos([(b'png',caption)],
+                    await telegram_sender.send_chart_photos([(b'png',caption), (b'chart','')],
                         chat_id='private', title='💼 МОЙ ПОРТФЕЛЬ', parse_mode='HTML')
                 session.post.assert_called_once()
-                self.assertTrue(session.post.call_args.args[0].endswith('/sendPhoto'))
+                self.assertTrue(session.post.call_args.args[0].endswith('/sendMediaGroup'))
                 fields = session.post.call_args.kwargs['data']._fields
                 self.assertEqual(next(v for f,_,v in fields if f['name']=='chat_id'), 'private')
+                media = json.loads(next(v for f,_,v in fields if f['name']=='media'))
+                self.assertEqual(media[0]['caption'], '💼 МОЙ ПОРТФЕЛЬ\n\n'+caption)
+                self.assertNotIn('caption',media[1])
         
             async def test_listing_recovers_from_timeout_and_server_error(self):
                 import asyncio
@@ -5510,6 +5910,423 @@ jobs:
                 self.assertNotIn('Паи заданы вручную', caption)
                 with Image.open(BytesIO(render_portfolio_card(view))) as image:
                     self.assertEqual(image.size, (1560, 2132))
+        EOF
+
+        cat << 'EOF' > modules/fund_sources.py
+        """Public alternatives for fund discovery; cached identities never become live quotes."""
+        import asyncio
+        import csv
+        import io
+        import json
+        import re
+        from datetime import date, datetime, timedelta
+
+        import aiohttp
+
+        from modules.market import _clean_text, is_access_challenge, parse_optional_float
+        from modules.portfolio import fetch_portfolio_fund
+
+        BIZ_LIST = 'https://www.bizportal.co.il/mutualfunds'
+        MAYA = 'https://maya.tase.co.il/api/v1/funds'
+        HISTORY_LIMIT = 120
+
+
+        def fund_id(value):
+            value = str(value or '').lstrip('0')
+            return value if re.fullmatch(r'5\d{6}', value) else None
+
+
+        def source_date(value):
+            for fmt in ('%Y-%m-%d', '%d.%m.%Y', '%d/%m/%Y'):
+                try:
+                    return datetime.strptime(str(value)[:10], fmt).date().isoformat()
+                except ValueError:
+                    pass
+            return None
+
+
+        def parse_biz_catalog(body):
+            rows = json.loads(body)
+            if not isinstance(rows, list):
+                return []
+            result = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                fid = fund_id(row.get('a'))
+                # ETF exchange quotes and redemption NAV are different instruments.
+                if not fid or row.get('n') != '@^~' + fid:
+                    continue
+                price = parse_optional_float(row.get('d'))
+                daily = parse_optional_float(row.get('f'))
+                if not row.get('b') or price is None or price <= 0:
+                    continue
+                item = {'fund_id': fid, 'name': _clean_text(row['b']), 'daily': daily,
+                        'price': price, 'date': None, 'mtd': parse_optional_float(row.get('g')),
+                        'source': 'Bizportal'}
+                if fid in result and result[fid] != item:
+                    raise ValueError('conflicting Bizportal identities')
+                result[fid] = item
+            return list(result.values())
+
+
+        def parse_maya_catalog(body, today):
+            reader = csv.DictReader(io.StringIO(body.lstrip('\ufeff')))
+            required = {"מס' קרן", 'שם הקרן', 'מחיר פדיון', 'תאריך נכונות', 'שינוי יומי %'}
+            if not required <= set(reader.fieldnames or []):
+                return []
+            result = {}
+            for row in reader:
+                fid, day = fund_id(row.get("מס' קרן")), source_date(row.get('תאריך נכונות'))
+                price = parse_optional_float(row.get('מחיר פדיון'))
+                if not fid or not row['שם הקרן'] or not day or day > today.isoformat() or price is None or price <= 0:
+                    continue
+                item = {'fund_id': fid, 'name': _clean_text(row['שם הקרן']), 'price': price,
+                        'date': day, 'daily': parse_optional_float(row.get('שינוי יומי %')),
+                        'mtd': parse_optional_float(row.get('תשואות מתחילת החודש')), 'source': 'MAYA'}
+                if fid in result and result[fid] != item:
+                    raise ValueError('conflicting MAYA identities')
+                result[fid] = item
+            return list(result.values())
+
+
+        def parse_maya_history(body, fid, today):
+            reader = csv.DictReader(io.StringIO(body.lstrip('\ufeff')))
+            if not {"מס' קרן", 'תאריך', 'מחיר פדיון'} <= set(reader.fieldnames or []):
+                return []
+            points = {}
+            for row in reader:
+                if fund_id(row.get("מס' קרן")) != fid:
+                    return []
+                day, price = source_date(row.get('תאריך')), parse_optional_float(row.get('מחיר פדיון'))
+                if not day or day > today.isoformat() or price is None or price <= 0:
+                    continue
+                if day in points and points[day] != price:
+                    return []
+                points[day] = price
+            return [{'date': d, 'price': p} for d, p in sorted(points.items())]
+
+
+        class PublicFundSources:
+            def __init__(self, session, state, today):
+                self.session, self.state, self.today = session, state, today
+                self.blocked, self.catalog, self.data = set(), {}, {}
+                self.limiters = {s: asyncio.Semaphore(2) for s in ('Bizportal', 'MAYA')}
+                self.biz_denied = asyncio.Event()
+                self.source_names = []
+
+            async def text(self, source, url, payload=None):
+                async with self.limiters[source]:
+                    if source in self.blocked:
+                        return ''
+                    try:
+                        options = {'timeout': aiohttp.ClientTimeout(total=20)}
+                        if source == 'MAYA':
+                            options['headers'] = {'Accept-Language': 'he-IL'}
+                        request = (self.session.post(url, json=payload, **options) if payload is not None
+                                   else self.session.get(url, **options))
+                        async with request as response:
+                            body = await response.text(errors='ignore')
+                            if response.status in {401, 403, 429} or is_access_challenge(body):
+                                self.blocked.add(source)
+                                if source == 'Bizportal':
+                                    self.biz_denied.set()
+                                print(f'::warning::{source}: access restricted; no further requests this run')
+                                return ''
+                            if response.status != 200:
+                                return ''
+                        return body
+                    except (aiohttp.ClientError, asyncio.TimeoutError):
+                        return ''
+
+            async def biz_catalog(self):
+                body = await self.text('Bizportal', BIZ_LIST)
+                # Discover the live JSON filename from the page; it changes over time.
+                match = re.search(r'https://www\.bizportal\.co\.il/json/mutualfunds/[\w-]+\.json', body)
+                if not match:
+                    return []
+                data = await self.text('Bizportal', match[0])
+                try:
+                    return parse_biz_catalog(data)
+                except (ValueError, TypeError):
+                    return []
+
+            async def maya_catalog(self):
+                body = await self.text('MAYA', MAYA + '/mutual/file', {})
+                try:
+                    return parse_maya_catalog(body, self.today)
+                except (ValueError, TypeError, csv.Error):
+                    return []
+
+            async def listing(self):
+                biz, maya = await asyncio.gather(self.biz_catalog(), self.maya_catalog())
+                found = {}
+                for source, rows in (('Bizportal', biz), ('MAYA', maya)):
+                    if len(rows) < 100:
+                        continue
+                    self.source_names.append(source)
+                    for row in rows:
+                        previous = found.get(row['fund_id'])
+                        # Prefer the official dated NAV. Disagreement is kept and checked later.
+                        if previous:
+                            row = dict(row, other_quote=previous)
+                        found[row['fund_id']] = row
+                self.catalog = found
+                if found:
+                    self.state['source_catalog'] = {'at': self.today.isoformat(),
+                        'rows': [{'fund_id': r['fund_id'], 'name': r['name']} for r in found.values()]}
+                    return list(found.values())
+                cached = self.state.get('source_catalog') or {}
+                try:
+                    age = (self.today - date.fromisoformat(cached['at'])).days
+                    if 0 <= age <= 7:
+                        self.catalog = {r['fund_id']: dict(r, daily=None, source='cache') for r in cached['rows']
+                                        if fund_id(r.get('fund_id')) and r.get('name')}
+                except (KeyError, ValueError, TypeError):
+                    pass
+                return list(self.catalog.values())
+
+            def cached(self, row):
+                cached = self.state.get('source_history') or {}
+                record = cached.get(row['fund_id']) or {}
+                history = record.get('points', []) if record.get('source') == row.get('source') else []
+                cutoff = (self.today - timedelta(days=90)).isoformat()
+                history = [p for p in history if isinstance(p, dict) and cutoff <= str(p.get('date', '')) <= self.today.isoformat()]
+                if row.get('date') and row.get('price') and row.get('daily') is not None:
+                    price = parse_optional_float(row['price'])
+                    # A revised publication invalidates the old series until it is refetched.
+                    if any(p['date'] == row['date'] and parse_optional_float(p.get('price')) != price for p in history):
+                        history = []
+                    history = [p for p in history if p['date'] != row['date']]
+                    if price is not None and price > 0:
+                        history.append({'date': row['date'], 'price': price})
+                return sorted(history, key=lambda p: p['date'])
+
+            def remember(self, fid, history, source):
+                if history:
+                    cutoff = (self.today - timedelta(days=90)).isoformat()
+                    self.state.setdefault('source_history', {})[fid] = {'source': source,
+                        'points': [p for p in history if p['date'] >= cutoff][-100:]}
+
+            async def series(self, fid):
+                if fid in self.data:
+                    return self.data[fid]
+                row = self.catalog.get(fid, {})
+                body = await self.text('MAYA', f'{MAYA}/mutual/{fid}/history/file', {
+                    'period': 4, 'fromDate': (self.today - timedelta(days=70)).isoformat(),
+                    'toDate': self.today.isoformat(), 'pageSize': 30, 'pageNumber': 1})
+                try:
+                    history = parse_maya_history(body, fid, self.today) if body else []
+                except (csv.Error, ValueError, TypeError):
+                    history = []
+                quote = row if row.get('source') == 'MAYA' else {}
+                if history and not quote:
+                    # Detail endpoint supplies an independent dated quote; daily return is
+                    # still required from the fresh listing or a second source.
+                    raw = await self.text('MAYA', f'{MAYA}/mutual/{fid}')
+                    try:
+                        detail = json.loads(raw)
+                        if fund_id(detail['fundId']) == fid and row.get('daily') is not None:
+                            quote = {'price': detail['redemptionPrice'], 'date': source_date(detail['ratesAsOf']),
+                                     'daily': row['daily'], 'source': 'MAYA'}
+                    except (KeyError, TypeError, ValueError):
+                        pass
+                if not history or not quote:
+                    async with self.limiters['Bizportal']:
+                        history, quote = await fetch_portfolio_fund(self.session, fid, asyncio.Semaphore(1),
+                                                                    self.biz_denied, history_pages=5)
+                    quote = dict(quote, source='Bizportal') if quote else {}
+                if history and quote:
+                    self.remember(fid, history, quote.get('source'))
+                self.data[fid] = history, quote
+                return history, quote
+
+            async def screen(self, listing, window_fn, verify_fn):
+                screened, pending = {}, []
+
+                def evaluate(row, history, quote):
+                    daily = row.get('daily')
+                    if daily is None:
+                        daily = quote.get('daily')
+                    if daily is None:
+                        return
+                    points = verify_fn(history, quote, float(daily), self.today)
+                    window = window_fn(points or [], self.today)
+                    if window:
+                        screened[row['fund_id']] = {**row, **window, 'daily': daily,
+                            'screen_low': window['monthly'], 'screen_high': window['monthly'],
+                            'source': quote.get('source', row.get('source'))}
+                        self.data[row['fund_id']] = history, quote
+
+                for row in listing:
+                    history = self.cached(row)
+                    self.remember(row['fund_id'], history, row.get('source'))
+                    evaluate(row, history, row)
+                    if (row['fund_id'] not in screened and
+                            (not row.get('date') or (self.today - date.fromisoformat(row['date'])).days <= 7)):
+                        pending.append(row)
+                # MTD only orders backfill work. It never substitutes for a rolling 30d return.
+                leaders = sorted(pending, key=lambda r: abs(r.get('mtd') or 0), reverse=True)[:HISTORY_LIMIT // 2]
+                leaders_ids = {r['fund_id'] for r in leaders}
+                remaining = sorted((r for r in pending if r['fund_id'] not in leaders_ids), key=lambda r: r['fund_id'])
+                cursor = int(self.state.get('history_cursor') or 0) % max(1, len(remaining))
+                rotated = remaining[cursor:] + remaining[:cursor]
+                jobs = leaders + rotated[:HISTORY_LIMIT - len(leaders)]
+                self.state['history_cursor'] = (cursor + HISTORY_LIMIT - len(leaders)) % max(1, len(remaining))
+                queue = asyncio.Queue()
+                for row in jobs:
+                    queue.put_nowait(row)
+                async def worker():
+                    while not queue.empty():
+                        row = queue.get_nowait()
+                        try:
+                            history, quote = await self.series(row['fund_id'])
+                            evaluate(row, history, quote)
+                        except (ValueError, TypeError, KeyError, aiohttp.ClientError, asyncio.TimeoutError) as error:
+                            print(f'::warning::History {row["fund_id"]}: {type(error).__name__}; skipped')
+                try:
+                    async with asyncio.timeout(220):
+                        await asyncio.gather(worker(), worker())
+                except asyncio.TimeoutError:
+                    print('::warning::History backfill budget reached; keeping verified partial results')
+                # Drop histories for funds removed from the current readable universe.
+                cache = self.state.get('source_history', {})
+                self.state['source_history'] = {fid: record for fid, record in cache.items() if fid in self.catalog}
+                print(f'Fallback monthly history: {len(screened)}/{len(listing)}; sources={self.source_names}')
+                return screened
+        EOF
+
+        cat << 'EOF' > tests/test_fund_sources.py
+        import csv
+        import io
+        import json
+        import unittest
+        from datetime import date, datetime
+        from unittest.mock import AsyncMock, MagicMock, patch
+        
+        from modules import fund_sources as sources, fund_news, movers
+        from test_movers import fixture
+        
+        
+        def csv_text(headers, rows):
+            stream = io.StringIO()
+            writer = csv.writer(stream)
+            writer.writerow(headers)
+            writer.writerows(rows)
+            return '\ufeff' + stream.getvalue()
+        
+        
+        class SourceTests(unittest.IsolatedAsyncioTestCase):
+            def test_catalog_semantics_and_official_history_identity(self):
+                biz = sources.parse_biz_catalog(json.dumps([
+                    {'a':'5101183','b':'Fund','n':'@^~5101183','d':112,'e':115,'f':1.82,'g':99},
+                    {'a':'1146620','b':'ETF','n':'$^~1146620','d':112,'f':1,'g':10},
+                    {'a':'5101184','b':'Wrong URL','n':'@^~5101185','d':112}]))
+                self.assertEqual(len(biz), 1)
+                self.assertEqual(biz[0]['price'], 112)  # Redemption, not the buy price.
+                self.assertEqual(biz[0]['mtd'], 99)
+                self.assertNotIn('monthly', biz[0])
+                body = csv_text(["מס' קרן",'שם הקרן','מחיר פדיון','תאריך נכונות','שינוי יומי %',
+                                 'תשואות מתחילת החודש'],
+                                [['05101183','Fund','112','16.10.2026','1.82','99'],
+                                 ['5101184','Future','120','01.11.2026','1','10']])
+                maya = sources.parse_maya_catalog(body, date(2026,10,17))
+                self.assertEqual(len(maya), 1)
+                self.assertEqual(maya[0]['fund_id'], '5101183')
+                self.assertEqual(maya[0]['date'], '2026-10-16')
+                history = csv_text(["מס' קרן",'תאריך','מחיר פדיון'],
+                                   [['05101183','15.10.2026','110'],['05101183','16.10.2026','112']])
+                self.assertEqual(len(sources.parse_maya_history(history,'5101183',date(2026,10,17))),2)
+                self.assertEqual(sources.parse_maya_history(history,'5101184',date(2026,10,17)),[])
+                self.assertEqual(sources.parse_maya_catalog('<html>Denied</html>',date(2026,10,17)),[])
+        
+            async def test_access_restriction_isolated_and_catalog_cache_has_no_prices(self):
+                class Response:
+                    def __init__(self,status,body): self.status,self.body = status,body
+                    async def __aenter__(self): return self
+                    async def __aexit__(self,*args): pass
+                    async def text(self,**kwargs): return self.body
+                session = MagicMock()
+                session.get.side_effect = [Response(403,'Forbidden'), Response(200,'official')]
+                api = sources.PublicFundSources(session,{},date(2026,10,17))
+                self.assertEqual(await api.text('Bizportal',sources.BIZ_LIST),'')
+                self.assertEqual(await api.text('Bizportal',sources.BIZ_LIST),'')
+                self.assertEqual(await api.text('MAYA',sources.MAYA),'official')
+                self.assertEqual(session.get.call_count,2)
+                api.state = {'source_catalog':{'at':'2026-10-16','rows':[{'fund_id':'5101183','name':'Fund'}]}}
+                with patch.object(api,'biz_catalog',new=AsyncMock(return_value=[])), \
+                     patch.object(api,'maya_catalog',new=AsyncMock(return_value=[])):
+                    rows = await api.listing()
+                self.assertIsNone(rows[0]['daily'])
+                self.assertNotIn('price',rows[0])
+                api.today = date(2026,10,25)
+                with patch.object(api,'biz_catalog',new=AsyncMock(return_value=[])), \
+                     patch.object(api,'maya_catalog',new=AsyncMock(return_value=[])):
+                    self.assertEqual(await api.listing(),[])
+        
+            async def test_cached_prices_compute_rolling_month_and_reject_conflicts(self):
+                row,history,quote,today = fixture()
+                row.update(quote,source='MAYA',mtd=99)
+                state = {'source_history':{row['fund_id']:{'source':'MAYA','points':history}}}
+                api = sources.PublicFundSources(MagicMock(),state,today)
+                api.catalog = {row['fund_id']:row}
+                with patch.object(api,'series',new=AsyncMock()) as download:
+                    screened = await api.screen([row],movers.month_window,movers.verified_publication)
+                download.assert_not_awaited()
+                self.assertAlmostEqual(screened[row['fund_id']]['monthly'],12)
+                bad = dict(row,other_quote={'price':99})
+                self.assertIsNone(movers.verified_publication(history,bad,1.82,today))
+                revised = dict(row,price=113)
+                self.assertEqual(len(api.cached(revised)),1)
+                self.assertIsNone(movers.month_window(movers.ordered_prices(api.cached(revised),today),today))
+        
+            async def test_funder_denial_switches_source_without_losing_observations(self):
+                row,history,quote,today = fixture()
+                row.update(quote,source='MAYA',mtd=99)
+                now = datetime(2026,10,16,8,20,tzinfo=movers.TZ)
+                baseline = {'name':row['name'],'registered':'2026-10-09T08:20:00+03:00',
+                            'base_date':'2026-10-09','base_price':100,'sent_stages':[]}
+                cache = {'schema':1,'events':{},'news_watch':{row['fund_id']:baseline}}
+                class Clock(datetime):
+                    @classmethod
+                    def now(cls,tz=None): return now
+                api = sources.PublicFundSources(MagicMock(),cache,today)
+                api.source_names = ['MAYA']
+                api.catalog = {row['fund_id']:row}
+                window = movers.month_window(movers.ordered_prices(history,today),today)
+                screened = {row['fund_id']:{**row,**window,'screen_low':12,'screen_high':12}}
+                with patch.object(movers,'datetime',Clock),patch.object(movers,'load_state',return_value=cache), \
+                     patch.object(movers,'fetch_listing',new=AsyncMock(side_effect=movers.DiscoveryUnavailable('list_access','403'))), \
+                     patch.object(movers,'PublicFundSources',return_value=api), \
+                     patch.object(api,'listing',new=AsyncMock(return_value=[row])), \
+                     patch.object(api,'screen',new=AsyncMock(return_value=screened)), \
+                     patch.object(api,'series',new=AsyncMock(return_value=(history,row))), \
+                     patch.object(movers,'fetch_mentions',new=AsyncMock(return_value={'status':'partial','items':[]})) as news, \
+                     patch.object(movers,'fund_context',new=AsyncMock(return_value=None)):
+                    prepared = await movers.prepare_movers()
+                self.assertTrue(news.call_args.kwargs['skip_funder'])
+                self.assertEqual(prepared[0]['last_scan']['catalog_source'],'MAYA')
+                self.assertEqual(len(prepared[1]),1)
+                self.assertEqual(prepared[1][0][1]['monthly'],12)
+                self.assertIn('+12.0%',prepared[0]['news_reviews'][0]['line'])
+                self.assertEqual(prepared[0]['news_watch'][row['fund_id']]['sent_stages'],[])
+        
+            def test_biz_news_reads_only_dated_article_body(self):
+                body = ('<meta property="og:title" content="Fund report">'
+                        '<meta property="article:published_time" content="2026-10-27T06:00:00Z">'
+                        '<div id="div_article_body">קרן בדיקה מנוהלת בהצלחה</div>'
+                        '<aside>קרן לא קשורה</aside>')
+                item = fund_news.article_item(body,'https://www.bizportal.co.il/mutualfunds/news/article/123')
+                self.assertNotIn('לא קשורה',item.findtext('description'))
+                root = fund_news.ET.fromstring('<rss><channel/></rss>')
+                root.find('channel').append(item)
+                rows = fund_news.parse_mentions(fund_news.ET.tostring(root,encoding='unicode'),
+                        [{'name':'קרן בדיקה','fund_id':'5101183'}],datetime(2026,10,27,12,tzinfo=movers.TZ))
+                self.assertEqual(rows[0]['fund_id'],'5101183')
+        
+        
+        if __name__ == '__main__':
+            unittest.main()
         EOF
 
     - name: Install Python Dependencies
