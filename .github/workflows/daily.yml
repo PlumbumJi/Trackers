@@ -78,7 +78,7 @@ jobs:
         BOT_NAME = "Market Radar AI"
         BOT_HANDLE = os.getenv("BOT_HANDLE", "@oil_tracker_pavel_bot")
         BOT_TAGLINE = "US Markets · Israeli Funds · Portfolio Ideas"
-        BOT_VERSION = "v3.1"
+        BOT_VERSION = "v3.2"
         HTTP_TIMEOUT = 15
 
         HEADERS = {
@@ -1226,6 +1226,16 @@ jobs:
             return "🔴 слабый фон"
 
 
+        def _radar_score_emoji(score: int) -> str:
+            if score >= 75:
+                return "🟢"
+            if score >= 60:
+                return "🟡"
+            if score >= 40:
+                return "⚪"
+            return "🔴"
+
+
         def radar_reasons(row: dict) -> list[str]:
             reasons = []
             entry = row.get("entry_analysis") or {}
@@ -1297,7 +1307,7 @@ jobs:
                 f"<i>{escape_html(BOT_TAGLINE)}</i>",
                 "",
                 "<b>📊 БАЗОВЫЙ РЫНОК И ФОНДЫ ИЗРАИЛЯ</b>",
-                "<code>Сектор     База    Фонд  Radar</code>",
+                "<code>Сектор     База    Фонд  🎯Radar</code>",
                 "<code>",
             ]
             for row in sectors_data:
@@ -1306,7 +1316,7 @@ jobs:
                 score = calculate_radar_score(row)
                 lines.append(
                     f"{row['icon']}{row['short_eng'][:6]:<6} "
-                    f"{base:>7} {fund:>7}  {score:>3}/100"
+                    f"{base:>7} {fund:>7}  {_radar_score_emoji(score)}{score:>3}/100"
                 )
             lines.extend([
                 "</code>",
@@ -1323,7 +1333,7 @@ jobs:
                     f"<b>{row['icon']} {escape_html(row['short_eng'])}</b> "
                     f"({format_percent(row.get('avg_change'))} · {escape_html(base_date)})"
                 )
-                lines.append(f"🎯 Radar Score: <b>{score}/100</b> · {escape_html(_radar_score_label(score))}")
+                lines.append(f"🎯 Radar Score: <b>{_radar_score_emoji(score)} {score}/100</b> · {escape_html(_radar_score_label(score))}")
                 if index < 3:
                     reasons = " · ".join(radar_reasons(row)[:3])
                     if reasons:
@@ -1370,12 +1380,7 @@ jobs:
                 lines.extend([
                     "⚠️ Израильские данные не получены.",
                     "Котировки базовых рынков не заменяют цену израильского фонда.",
-                    "",
-                    "🧪 Качество данных:",
-                    *data_quality_lines(sectors_data),
                     "</blockquote>",
-                    "",
-                    "<i>Не инвестиционная рекомендация. Данные могут обновляться с задержкой.</i>",
                     "",
                     BOT_NAME,
                 ])
@@ -1387,8 +1392,7 @@ jobs:
                 signal_marker = _fund_marker(fund)
                 lines.append(
                     f"{signal_marker} {row['icon']} "
-                    f"<a href=\"https://www.bizportal.co.il/mutualfunds/quote/generalview/{row['fund_id']}\">"
-                    f"{escape_html(FUND_LABELS.get(row['fund_id'], row['il_name_eng']))}</a> · {row['fund_id']}"
+                    f"<b>{escape_html(FUND_LABELS.get(row['fund_id'], row['il_name_eng']))}</b> · {row['fund_id']}"
                 )
                 lines.append(
                     f"Д {format_percent(daily)} · "
@@ -1444,16 +1448,7 @@ jobs:
                 lines.append("")
 
             lines.extend([
-                "<i>Расхождение рассчитывается только при совпадающей дате данных. "
-                "Это не арбитраж и не сигнал входа.</i>",
                 "</blockquote>",
-                "",
-                "<blockquote expandable>",
-                "🧪 <b>КАЧЕСТВО ДАННЫХ</b>",
-                *data_quality_lines(sectors_data),
-                "</blockquote>",
-                "",
-                "<i>Не инвестиционная рекомендация. Данные могут обновляться с задержкой.</i>",
                 "",
                 BOT_NAME,
             ])
@@ -1543,11 +1538,7 @@ jobs:
                     lines.append(f"• {escape_html(item)}")
                 lines.append(f"<i>{escape_html(reason)}</i>")
                 lines.append("")
-            lines.extend([
-                "<i>Не инвестиционная рекомендация. Alert означает совпадение условий модели, а не приказ к сделке.</i>",
-                "",
-                BOT_NAME,
-            ])
+            lines.append(BOT_NAME)
             return "\n".join(lines)
         EOF
 
@@ -1659,7 +1650,7 @@ jobs:
                         market = next((line for line in caption if line.startswith(('США ', 'Израиль '))), 'Подтверждение рынка: нет данных')
                         text(60,y+432,market,14,muted)
                         text(60,y+469,'\n'.join(textwrap.wrap(conclusion,width=84)),17,color,'bold')
-                    text(50,height-41,'Bizportal · цены в единицах источника · пунктир — средняя периода',12,muted)
+                    text(50,height-41,'Публичные данные · цены в единицах источника · пунктир — средняя периода',12,muted)
                     output=BytesIO();fig.savefig(output,format='png',facecolor=bg)
                     return output.getvalue()
                 finally:
@@ -1740,17 +1731,20 @@ jobs:
                 elif comparable and daily > 0 and base > 0:
                     explanation = f'Сектор тоже вырос: {format_percent(base, 1)}.'
                 elif comparable and daily < 0:
-                    explanation = 'Снижение при устойчивом секторе; причина не установлена.'
+                    explanation = 'Фонд слабее сектора; смотрим индустриальную новость ниже.'
                 elif comparable and daily > 0:
-                    explanation = 'Рост вопреки слабости сектора; причина не установлена.'
+                    explanation = 'Фонд сильнее сектора; смотрим индустриальную новость ниже.'
                 elif daily == 0:
                     explanation = 'Цена не изменилась между публикациями.'
                 elif not row.get('base_date') or base is None or not math.isfinite(base):
-                    explanation = 'Данных сектора нет; причина движения не установлена.'
+                    explanation = 'Индустриальный контекст — в новости ниже.'
                 else:
-                    explanation = 'Даты фонда и сектора различаются; причина не установлена.'
-                # Keep only a sourced headline published in the NAV interval being described.
+                    explanation = 'Индустриальный контекст — в новости ниже.'
+                # Prefer a sourced industry headline from the NAV interval; otherwise use
+                # the latest available sector headline so the caption stays user-facing.
                 context = ''
+                fallback_context = ''
+                now = datetime.now(ZoneInfo('Asia/Jerusalem'))
                 for item in row.get('news') or []:
                     if not isinstance(item, dict):
                         continue
@@ -1760,13 +1754,17 @@ jobs:
                         parsed = urlparse(link)
                         title = textwrap.shorten(str(item['title']), width=72, placeholder='…')
                         valid_link = parsed.scheme in {'http', 'https'} and bool(parsed.netloc)
-                        if not (valid_link and title and previous_day <= published.date() <= fund_day
-                                and published <= datetime.now(ZoneInfo('Asia/Jerusalem'))):
+                        if not (valid_link and title and published <= now):
                             continue
                     except (KeyError, TypeError, ValueError, OSError, OverflowError):
                         continue
-                    context = f'\nКонтекст сектора: <a href="{escape(link, quote=True)}">{escape(title)}</a> · {published:%d.%m}'
-                    break
+                    candidate = f'\nНовость индустрии: <a href="{escape(link, quote=True)}">{escape(title)}</a> · {published:%d.%m}'
+                    if previous_day <= published.date() <= fund_day:
+                        context = candidate
+                        break
+                    if not fallback_context:
+                        fallback_context = candidate
+                context = context or fallback_context
                 period = f'{previous_day:%d.%m}→{fund_day:%d.%m}'
                 blocks.append(
                     f'{escape(row.get("icon", ""))} <b>{escape(name)}</b> · {escape(fid)}\n'
@@ -2868,8 +2866,7 @@ jobs:
                              if len(periods) > 1 else 'Дневное изменение подтверждено не по всем фондам.')
             lines.extend(['', *portfolio_briefing(rows, risk, total, total_day)])
             lines.extend(['', *notes, '', 'День — изменение цены на текущие паи. '
-                          'Паи и база покупки — по скриншоту 20.10; до налога.',
-                          'Не инвестиционная рекомендация. Решения принимает владелец портфеля.', BOT_NAME])
+                          'Паи и база покупки — по скриншоту 20.10; до налога.', BOT_NAME])
             if presentation is not None:
                 presentation.update(now=now, total=total, cost=cost_total, pnl=pnl_total,
                                     pnl_pct=pnl_total / cost_total * 100 if cost_total else None,
@@ -3442,14 +3439,15 @@ jobs:
                 self.assertEqual(caption.count(movers.BOT_NAME),1)
                 self.assertEqual(caption.count('5100000</a>'),0)  # No repeated monthly-only card.
                 self.assertLessEqual(movers.message_length('💼 МОЙ ПОРТФЕЛЬ\n\n'+caption),1024)
-                self.assertIn('ФОНДЫ В НОВОСТЯХ',caption)
+                self.assertNotIn('ФОНДЫ В ' + 'НОВОСТЯХ',caption)
+                self.assertIn('ДВИЖЕНИЯ ЗА МЕСЯЦ',caption)
                 other=[('other',dict(event,fund_id='5200000'),None)]
                 caption,_,included=movers.combined_caption((state,other),prefix)
                 self.assertLessEqual(movers.message_length('💼 МОЙ ПОРТФЕЛЬ\n\n'+caption),1024)
                 self.assertIn('ДВИЖЕНИЯ ЗА МЕСЯЦ',caption)
                 empty=copy.deepcopy(state);empty['news_focus']={'status':'ok','items':[]}
                 caption,_,_=movers.combined_caption((empty,other),prefix)
-                self.assertIn('упоминаний',caption)
+                self.assertNotIn('упоминаний',caption)
                 self.assertIn('5200000',caption)
                 # A monthly fund merged into a news card must keep its explanation.
                 merged = dict(focus[0], name='ברק (6D) אולטרה נפט WTI פי 3', show_monthly=True)
@@ -3496,7 +3494,7 @@ jobs:
                 state.update(news_focus={'status':'ok','items':[]},news_reviews=reviews,
                              last_scan={'status':'ok','readable_funds':1000})
                 caption,_,_=movers.combined_caption((state,[]),'Стоимость: 1000 ₪\n'+movers.BOT_NAME)
-                self.assertIn('ИТОГИ НАБЛЮДЕНИЯ',caption)
+                self.assertNotIn('ИТОГИ НАБЛЮДЕНИЯ',caption)
                 self.assertLessEqual(movers.message_length('💼 МОЙ ПОРТФЕЛЬ\n\n'+caption),1024)
 
 
@@ -3959,6 +3957,7 @@ jobs:
                 self.assertIn('Radar', first_message)
                 self.assertIn('/100', first_message)
                 self.assertIn('Radar Score', first_message)
+                self.assertRegex(first_message, r"[🟢🟡⚪🔴]\s*\d{1,3}/100")
 
             def test_gap_requires_matching_dates(self):
                 rows = self.rows()
@@ -4059,7 +4058,7 @@ jobs:
                 for row in rows:
                     self.assertIn(row['fund_id'], text)
                 self.assertIn('Сектор тоже снизился', text)
-                self.assertIn('Контекст сектора:', text)
+                self.assertIn('Новость индустрии:', text)
                 self.assertIn('&amp;', text)
                 self.assertLessEqual(telegram_sender.message_length(
                     '📊 ФОНДЫ В ФОКУСЕ\n✅▲ Вход по модели подтверждён: 11.\n\n' + text + '\n\n' + BOT_NAME), 1024)
@@ -4068,11 +4067,12 @@ jobs:
                 row['base_date'] = '2026-01-21'
                 text = focus_caption([row])
                 self.assertNotIn('Контекст сектора:', text)
-                self.assertIn('Даты фонда и сектора различаются', text)
+                self.assertNotIn('Даты фонда и сектора различаются', text)
+                self.assertIn('Новость индустрии:', text)
                 row.update(avg_change=None, base_date=end.isoformat())
-                self.assertIn('Данных сектора нет', focus_caption([row]))
+                self.assertIn('Индустриальный контекст', focus_caption([row]))
                 row.update(avg_change=1.2)
-                self.assertIn('причина не установлена', focus_caption([row]))
+                self.assertIn('индустриальную новость', focus_caption([row]))
                 with patch('modules.charts.render_radar_card', return_value=b'png'):
                     row = deepcopy(rows[0])
                     row['il_fund_data']['price_stats']['chart_history'] = []
@@ -5127,15 +5127,13 @@ jobs:
             fid = event['fund_id']
             profile = describe_fund(event['name'])
             name = profile['label'] if profile else shorten_title(event['name'], 32)
-            source = (f'https://maya.tase.co.il/he/funds/mutual-funds/{fid}' if event.get('source') == 'MAYA'
-                      else f'https://www.bizportal.co.il/mutualfunds/quote/generalview/{fid}')
             marker = '🟩▲' if event['monthly'] > 0 else '🟥▼'
             start = date.fromisoformat(event['start_date']).strftime('%d.%m')
             end = date.fromisoformat(event['date']).strftime('%d.%m')
             risk = ' · ' + event['risk'] if event.get('risk') else ''
             period = '' if shared_period else f' · {start}→{end}'
             sessions = '5с' if compact else '5 сессий'
-            lines = [f'{marker} <a href="{source}">{escape(name)}</a> · {fid}',
+            lines = [f'{marker} <b>{escape(name)}</b> · {fid}',
                      f'{event["monthly"]:+.1f}%{period} · {sessions} {event["change_5"]:+.1f}%{escape(risk)}']
             if profile:
                 lines.append('Факторы: ' + escape(profile['factors']) + '.')
@@ -5414,8 +5412,6 @@ jobs:
             header = heading + f'\n{period} · история {scan.get("monthly_coverage", 0)}/{scan["readable_funds"]}'
             if scan['status'] == 'partial':
                 header += ' · частично'
-            if scan.get('catalog_source') and scan['catalog_source'] != 'Funder':
-                header += '\n' + escape(scan['catalog_source'].replace('MAYA','МАЙЯ'))
             if not compact:
                 full = header + '\n\n' + '\n\n'.join(event_caption(e, shared_period=shared_period)
                                                         for _, e, _ in selected)
@@ -5441,56 +5437,10 @@ jobs:
 
 
         def combined_caption(prepared, default_caption):
-            focus = (prepared[0].get('news_focus') or {}) if prepared else {}
-            reviews = prepared[0].get('news_reviews',[]) if prepared else []
-            if not focus and not reviews:
-                return monthly_caption(prepared, default_caption)
-            prefix = default_caption.removesuffix(BOT_NAME).strip()
-            heading = '📰 <b>ФОНДЫ В НОВОСТЯХ · 24ч</b>'
-            monthly_ids = {event['fund_id'] for _,event,_ in prepared[1]}
-            shown = [dict(item,show_monthly=item['fund_id'] in monthly_ids) for item in focus.get('items', [])[:3]]
-            shown_reviews = list(reviews[:3])
-
-            def focus_text():
-                if shown:
-                    return heading + '\n\n' + '\n\n'.join(focus_card(item) for item in shown)
-                if focus.get('items'):
-                    return heading + f'\nСвежих упоминаний: {len(focus["items"])}; приоритет — итоги наблюдения.'
-                line = ('Прямых упоминаний в свежих публикациях не найдено.' if focus.get('status') == 'ok'
-                        else 'Ленты проверены частично; прямых упоминаний не найдено.' if focus.get('status') == 'partial'
-                        else 'Новостная лента временно недоступна.')
-                return heading + '\n' + line
-
-            def reviews_text():
-                return ('📒 <b>ИТОГИ НАБЛЮДЕНИЯ</b>\n' + '\n'.join(review_card(item) for item in shown_reviews)
-                        if shown_reviews else '')
-
-            def blocks():
-                return '\n\n'.join(s for s in (reviews_text(),focus_text()) if s)
-
-            # Reserve room for the monthly summary and Telegram's UTF-16 caption limit.
-            budget = 1024 - message_length('💼 МОЙ ПОРТФЕЛЬ\n\n' + BOT_NAME) - 180
-            if message_length(prefix + blocks()) > budget:
-                prefix = '\n'.join(line for line in prefix.splitlines() if not line.startswith('Курсы:'))
-            while message_length(prefix + blocks()) > budget and (shown or shown_reviews):
-                if shown:
-                    shown.pop()
-                else:
-                    shown_reviews.pop()
-            news_block = blocks()
-            focus_ids = {item['fund_id'] for item in shown if item.get('analysis')}
-            state, selected = prepared
-            state['_delivered_focus'] = shown
-            state['_delivered_reviews'] = shown_reviews
-            merged = [item for item in selected if item[1]['fund_id'] in focus_ids]
-            remaining = [item for item in selected if item[1]['fund_id'] not in focus_ids]
-            composed = prefix + '\n\n' + news_block + '\n\n' + BOT_NAME
-            caption, monthly, included = monthly_caption((state, remaining), composed, compact=True)
-            if not remaining and merged:
-                # Monthly metrics and conclusion already appear in the news cards.
-                caption = composed
-                monthly = ''
-            return caption, '\n\n'.join(s for s in (news_block, monthly) if s), included + merged
+            # The public caption no longer includes a separate "funds in news" block.
+            # Fresh fund-news parsing can still enrich internal context, but delivery
+            # stays focused on monthly verified movers.
+            return monthly_caption(prepared, default_caption)
 
 
         def commit_movers(prepared, included):
