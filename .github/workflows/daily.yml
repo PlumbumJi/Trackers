@@ -5,13 +5,15 @@ name: Market Radar AI
     timezone: Asia/Jerusalem
   - cron: 15 23 * * *
     timezone: Asia/Jerusalem
+  - cron: 30 8 1,10 * *
+    timezone: Asia/Jerusalem
   workflow_dispatch:
     inputs:
       report_type:
         description: Report to send
         type: choice
         default: market
-        options: [market, portfolio, alert]
+        options: [market, portfolio, alert, salary]
 permissions:
   contents: read
 concurrency:
@@ -30,6 +32,7 @@ jobs:
       run: |
         mode="${MANUAL_MODE:-market}"
         if [[ "$SCHEDULE" == '20 8 * * *' ]]; then mode=portfolio; fi
+        if [[ "$SCHEDULE" == '30 8 1,10 * *' ]]; then mode=salary; fi
         echo "mode=$mode" >> "$GITHUB_OUTPUT"
     - name: Restore Portfolio History
       if: steps.report.outputs.mode == 'portfolio'
@@ -45,7 +48,7 @@ jobs:
       with:
         python-version: '3.11'
     - name: Restore Fund Discovery Journal
-      if: steps.report.outputs.mode == 'portfolio'
+      if: steps.report.outputs.mode == 'portfolio' || steps.report.outputs.mode == 'salary'
       uses: actions/cache/restore@v5
       with:
         path: fund_movers_state.json
@@ -78,7 +81,7 @@ jobs:
         BOT_NAME = "Market Radar AI"
         BOT_HANDLE = os.getenv("BOT_HANDLE", "@oil_tracker_pavel_bot")
         BOT_TAGLINE = "US Markets · Israeli Funds · Portfolio Ideas"
-        BOT_VERSION = "v3.2"
+        BOT_VERSION = "v3.4"
         HTTP_TIMEOUT = 15
 
         HEADERS = {
@@ -1390,9 +1393,17 @@ jobs:
                 fund = row["il_fund_data"]
                 daily = fund.get("daily")
                 signal_marker = _fund_marker(fund)
+                fund_url = (
+                    "https://www.bizportal.co.il/mutualfunds/quote/generalview/"
+                    f"{escape_html(row['fund_id'])}"
+                )
+                fund_title = escape_html(FUND_LABELS.get(row['fund_id'], row['il_name_eng']))
+                fund_id = escape_html(row['fund_id'])
+                linked_title = f'<a href="{fund_url}"><b>{fund_title}</b></a>'
+                linked_id = f'<a href="{fund_url}">{fund_id}</a>'
                 lines.append(
                     f"{signal_marker} {row['icon']} "
-                    f"<b>{escape_html(FUND_LABELS.get(row['fund_id'], row['il_name_eng']))}</b> · {row['fund_id']}"
+                    f"{linked_title} · {linked_id}"
                 )
                 lines.append(
                     f"Д {format_percent(daily)} · "
@@ -1428,24 +1439,12 @@ jobs:
             ]
             for row in unavailable:
                 lines.extend([
-                    f"⬜• <b>{escape_html(row['il_name_eng'])}</b> "
+                    f"⬜• <a href=\"https://www.bizportal.co.il/mutualfunds/quote/generalview/{escape_html(row['fund_id'])}\"><b>{escape_html(row['il_name_eng'])}</b></a> "
                     f"({row['icon']} {escape_html(row['short_eng'])})",
-                    f"└ <code>{escape_html(row['fund_id'])}</code> · Д — · М — · Г N/A",
+                    f"└ <a href=\"https://www.bizportal.co.il/mutualfunds/quote/generalview/{escape_html(row['fund_id'])}\">{escape_html(row['fund_id'])}</a> · Д — · М — · Г N/A",
                     "   Данные фонда не получены.",
                     "",
                 ])
-
-            gaps = _directional_gaps(sectors_data)
-            if gaps:
-                lines.append("<b>⚡ Расхождения при совпадающей дате данных</b>")
-                for gap, row in gaps[:5]:
-                    lines.append(
-                        f"{row['icon']} {escape_html(row['short_eng'])}: "
-                        f"база {format_percent(row.get('avg_change'), 1)} · "
-                        f"фонд {format_percent(row['il_fund_data'].get('daily'), 1)} · "
-                        f"разрыв {gap:+.1f} п.п."
-                    )
-                lines.append("")
 
             lines.extend([
                 "</blockquote>",
@@ -1621,8 +1620,9 @@ jobs:
                         conclusion = caption[-1].split(' ',1)[-1]
                         marker = caption[-1].split(' ',1)[0]
                         status, color = ('ПОДТВЕРЖДЕНО',up) if marker=='✅▲' else ('НЕ ПОДТВЕРЖДЕНО',down) if marker=='🔻▼' else ('НЕТ ОЦЕНКИ',muted) if marker=='▫️—' else ('НАБЛЮДАТЬ',amber)
-                        text(60,y+20,textwrap.shorten(row.get('il_name_eng','Фонд'),width=48,placeholder='…'),21,ink,'bold')
-                        text(60,y+59,f'{row["fund_id"]} · {dates[0]:%d.%m.%Y} — {dates[-1]:%d.%m.%Y}',13,muted)
+                        title = f"{FUND_LABELS.get(str(row['fund_id']), row.get('il_name_eng','Фонд'))} · {row['fund_id']}"
+                        text(60,y+20,textwrap.shorten(title,width=62,placeholder='…'),21,ink,'bold')
+                        text(60,y+59,f'Период: {dates[0]:%d.%m.%Y} — {dates[-1]:%d.%m.%Y}',13,muted)
                         text(1138,y+25,status,13,color,'bold',ha='right')
                         daily = (row.get('entry_analysis') or {}).get('daily')
                         text(60,y+100,f'{current:.2f}',30,ink,'bold')
@@ -1663,7 +1663,9 @@ jobs:
             entry = row.get("entry_analysis") or {}
             stats = (row.get("il_fund_data") or {}).get("price_stats") or {}
             window = chart_window(stats.get("chart_history") or [])
-            lines = [f'{row.get("icon", "")} {row.get("short_eng", "")} · {row["fund_id"]}']
+            fund_id = str(row["fund_id"])
+            fund_name = FUND_LABELS.get(fund_id, row.get("il_name_eng", "Фонд"))
+            lines = [f'{row.get("icon", "")} {fund_name} · {fund_id}']
             if not window:
                 return "\n".join(lines + ["▫️— Истории недостаточно для вывода."])
             points, partial = window
@@ -1766,8 +1768,11 @@ jobs:
                         fallback_context = candidate
                 context = context or fallback_context
                 period = f'{previous_day:%d.%m}→{fund_day:%d.%m}'
+                fund_url = f'https://www.bizportal.co.il/mutualfunds/quote/generalview/{escape(fid)}'
+                linked_name = f'<a href="{escape(fund_url, quote=True)}"><b>{escape(name)}</b></a>'
+                linked_id = f'<a href="{escape(fund_url, quote=True)}">{escape(fid)}</a>'
                 blocks.append(
-                    f'{escape(row.get("icon", ""))} <b>{escape(name)}</b> · {escape(fid)}\n'
+                    f'{escape(row.get("icon", ""))} {linked_name} · {linked_id}\n'
                     f'{format_percent(daily, 1)} · {period}. {escape(explanation)}{context}'
                 )
             return '\n\n'.join(blocks)
@@ -2136,9 +2141,13 @@ jobs:
 
 
         if __name__ == "__main__":
-            if os.getenv("RUN_MODE", "market") == "portfolio":
+            mode = os.getenv("RUN_MODE", "market")
+            if mode == "portfolio":
                 from modules.movers import run_morning_reports
                 asyncio.run(run_morning_reports())
+            elif mode == "salary":
+                from modules.movers import run_salary_report
+                asyncio.run(run_salary_report())
             else:
                 asyncio.run(run_market_analytics())
         EOF
@@ -3909,7 +3918,7 @@ jobs:
                 text = formatter.build_telegram_message(rows)
                 chunks = telegram_sender.split_message(text)
                 self.assertGreaterEqual(len(chunks), 2)
-                self.assertTrue(all(len(chunk) <= 3900 for chunk in chunks))
+                self.assertTrue(all(telegram_sender.message_length(chunk) <= 3900 for chunk in chunks))
                 for chunk in chunks:
                     self.assertEqual(chunk.count('<blockquote expandable>'), chunk.count('</blockquote>'))
                 self.assertEqual(sum('Тестовая новость' in line for line in chunks[0].splitlines()), len(rows))
@@ -5145,6 +5154,118 @@ jobs:
             return '\n'.join(lines)
 
 
+        def salary_pick_score(event):
+            """Rank verified monthly events for the 1st/10th contribution report."""
+            monthly = float(event.get('monthly') or 0)
+            five = float(event.get('change_5') or 0)
+            daily = float(event.get('daily') or 0)
+            regime = event.get('regime', '')
+            score = 50.0
+            if monthly > 0:
+                score += min(monthly, 30) * 0.8
+            else:
+                score += max(monthly, -30) * 0.35
+            score += max(-12, min(12, five * 2.0))
+            score += max(-6, min(6, daily * 1.5))
+            score += {'up_up': 18, 'down_up': 14, 'up_flat': 6, 'down_flat': 2,
+                      'up_down': -4, 'down_down': -12}.get(regime, 0)
+            risk = str(event.get('risk') or '')
+            if 'шорт' in risk:
+                score -= 18
+            if 'плеч' in risk or '×' in risk:
+                score -= 8
+            if monthly > 35:
+                score -= min(12, (monthly - 35) * 0.4)
+            return round(score, 2)
+
+
+        def lean_salary_event(event):
+            keep = (
+                'fund_id', 'name', 'monthly', 'change_5', 'daily', 'date', 'start_date',
+                'price', 'risk', 'regime', 'conclusion', 'salary_score',
+            )
+            return {key: event[key] for key in keep if key in event}
+
+
+        def salary_candidate_card(event, rank):
+            fid = str(event['fund_id'])
+            profile = describe_fund(event.get('name', ''))
+            name = profile['label'] if profile else shorten_title(event.get('name', 'Фонд'), 42)
+            url = f'https://www.bizportal.co.il/mutualfunds/quote/generalview/{escape(fid)}'
+            linked = f'<a href="{escape(url, quote=True)}"><b>{escape(name)}</b></a> · <a href="{escape(url, quote=True)}">{escape(fid)}</a>'
+            risk = f" · {escape(event['risk'])}" if event.get('risk') else ''
+            score = event.get('salary_score')
+            score_text = f"🎯 {score:.0f}/100 · " if isinstance(score, (int, float)) else ""
+            lines = [
+                f'{rank}. {linked}',
+                f'{score_text}30д {event.get("monthly", 0):+.1f}% · 5с {event.get("change_5", 0):+.1f}% · день {event.get("daily", 0):+.1f}%{risk}',
+            ]
+            if profile:
+                lines.append('Факторы: ' + escape(profile['factors']) + '.')
+            conclusion = short_conclusion(event) if event.get('conclusion') else 'кандидат с лучшей проверенной динамикой по модели.'
+            lines.append('Почему в списке: ' + escape(conclusion))
+            return '\n'.join(lines)
+
+
+        def build_salary_candidates_message(prepared):
+            now = datetime.now(TZ)
+            state, selected = prepared if prepared else ({}, [])
+            scan = state.get('last_scan') or {}
+            pool = list(state.get('salary_candidates') or [])
+            if not pool and selected:
+                pool = [lean_salary_event(item[1]) for item in selected]
+            heading = (
+                '💰 <b>Market Radar AI · День пополнения</b>\n'
+                f'📅 {now:%d.%m.%Y} · 10% от зарплаты\n'
+                'Задача: выбрать 1 фонд для входа из 2 кандидатов.\n'
+            )
+            if not pool:
+                summary = unavailable_summary(scan) if scan.get('status') not in {None, 'ok', 'partial'} else 'проверенных кандидатов сегодня нет.'
+                return '\n'.join([
+                    heading,
+                    'Сегодня модель не нашла 2 проверенных кандидата.',
+                    escape(str(summary)),
+                    '',
+                    BOT_NAME,
+                ])
+            top = sorted(pool, key=salary_pick_score, reverse=True)[:2]
+            coverage = ''
+            if scan.get('readable_funds'):
+                coverage = f"Проверено: {scan.get('monthly_coverage', 0)}/{scan.get('readable_funds', 0)} фондов."
+            lines = [
+                heading,
+                '🧭 <b>2 кандидата на выбор</b>',
+                coverage,
+                '',
+            ]
+            lines.extend(salary_candidate_card(event, index + 1) for index, event in enumerate(top))
+            lines.extend([
+                '',
+                'Я бы выбирал один фонд с более понятной идеей и меньшим риском, а не делил сумму автоматически.',
+                '',
+                BOT_NAME,
+            ])
+            return '\n\n'.join(part for part in lines if part)
+
+
+        async def run_salary_report():
+            from modules.telegram_sender import send_to_telegram
+            prepared = await prepare_safely()
+            message = build_salary_candidates_message(prepared)
+            destination = os.getenv('PORTFOLIO_CHAT_ID') or os.getenv('CHAT_ID')
+            if os.getenv('DRY_RUN', '').lower() == 'true':
+                print(message)
+                return
+            await send_to_telegram(message, chat_id=destination)
+            state, _ = prepared
+            if state and (state.get('last_scan') or {}).get('status') != 'unavailable':
+                register_delivered(state, datetime.now(TZ))
+                saved = dict(state)
+                for key in ('news_focus','news_reviews','_delivered_focus','_delivered_reviews'):
+                    saved.pop(key,None)
+                save_state(saved)
+
+
         class DiscoveryUnavailable(RuntimeError):
             def __init__(self, code, detail):
                 super().__init__(detail)
@@ -5313,6 +5434,7 @@ jobs:
                     history, quote = data[row['fund_id']]
                     healthy_probes += int(bool(validated_event(row, history, quote, now.date())))
                 selected, verified, validated = [], 0, 0
+                salary_pool = []
                 for row in candidates[:MAX_CHECKS]:
                     history, quote = data[row['fund_id']]
                     event = validated_event(row, history, quote, now.date())
@@ -5323,11 +5445,17 @@ jobs:
                     if round(abs(event['monthly']), 6) < THRESHOLD:
                         continue
                     validated += 1
+                    event['salary_score'] = salary_pick_score(event)
+                    salary_pool.append(event)
                     key = f'month30:{event["fund_id"]}:{event["date"]}'
                     if not fresh_event(event, state) or len(selected) >= 3:
                         continue
                     event['context'] = await fund_context(session, event, now)
                     selected.append((key, event, None))
+                state['salary_candidates'] = [
+                    lean_salary_event(event)
+                    for event in sorted(salary_pool, key=salary_pick_score, reverse=True)[:8]
+                ]
                 state['last_scan'] = {
                     'at': now.isoformat(), 'readable_funds': len(listing),
                     'monthly_coverage': len(screened), 'period_days': WINDOW_DAYS,
@@ -6540,7 +6668,7 @@ jobs:
         path: portfolio_candidates.json
         key: sector-analysis-v3-${{ github.run_id }}-${{ github.run_attempt }}
     - name: Save Fund Discovery Journal
-      if: always() && steps.report.outputs.mode == 'portfolio' && hashFiles('fund_movers_state.json') != ''
+      if: always() && (steps.report.outputs.mode == 'portfolio' || steps.report.outputs.mode == 'salary') && hashFiles('fund_movers_state.json') != ''
       uses: actions/cache/save@v5
       with:
         path: fund_movers_state.json
