@@ -81,7 +81,7 @@ jobs:
         BOT_NAME = "Market Radar AI"
         BOT_HANDLE = os.getenv("BOT_HANDLE", "@oil_tracker_pavel_bot")
         BOT_TAGLINE = "US Markets · Israeli Funds · Portfolio Ideas"
-        BOT_VERSION = "v3.4"
+        BOT_VERSION = "v3.5"
         HTTP_TIMEOUT = 15
 
         HEADERS = {
@@ -4675,7 +4675,7 @@ jobs:
                                  'ytick.color': '#8398b1'}):
                 fig = plt.figure(figsize=(9, 1.9 + 3.35 * count), dpi=180, facecolor='#09121f')
                 try:
-                    fig.text(.055, .965, 'ФОНДЫ В ФОКУСЕ', fontsize=23, weight='bold')
+                    fig.text(.055, .965, 'MARKET RADAR AI · ФОНДЫ В ФОКУСЕ', fontsize=21, weight='bold')
                     fig.text(.055, .932, f'6 месяцев / {start:%d.%m.%Y} — {today:%d.%m.%Y}',
                              fontsize=11, color='#9fb1c8')
                     row_height = .82 / count
@@ -5207,40 +5207,62 @@ jobs:
             return '\n'.join(lines)
 
 
-        def build_salary_candidates_message(prepared):
-            now = datetime.now(TZ)
+        def salary_top_events(prepared, limit=3):
             state, selected = prepared if prepared else ({}, [])
-            scan = state.get('last_scan') or {}
-            pool = list(state.get('salary_candidates') or [])
+            pool = list((state or {}).get('salary_candidates') or [])
             if not pool and selected:
                 pool = [lean_salary_event(item[1]) for item in selected]
+            return sorted(pool, key=salary_pick_score, reverse=True)[:limit]
+
+
+        def salary_charts_caption(events):
+            if not events:
+                return ''
+            lines = ['<b>Графики кандидатов за 6 месяцев</b>']
+            for index, event in enumerate(events[:3], 1):
+                fid = str(event['fund_id'])
+                profile = describe_fund(event.get('name', ''))
+                name = profile['label'] if profile else shorten_title(event.get('name', 'Фонд'), 38)
+                url = f'https://www.bizportal.co.il/mutualfunds/quote/generalview/{escape(fid)}'
+                linked_name = f'<a href="{escape(url, quote=True)}">{escape(name)}</a>'
+                linked_id = f'<a href="{escape(url, quote=True)}">{escape(fid)}</a>'
+                lines.append(f'{index}. {linked_name} · {linked_id}')
+            lines.append('Период: последние 6 месяцев опубликованных цен.')
+            return '\n'.join(lines)
+
+
+        def build_salary_candidates_message(prepared):
+            now = datetime.now(TZ)
+            state, _ = prepared if prepared else ({}, [])
+            scan = state.get('last_scan') or {}
+            top = salary_top_events(prepared, limit=3)
             heading = (
                 '💰 <b>Market Radar AI · День пополнения</b>\n'
                 f'📅 {now:%d.%m.%Y} · 10% от зарплаты\n'
-                'Задача: выбрать 1 фонд для входа из 2 кандидатов.\n'
+                'Задача: выбрать 1 фонд для входа из 2–3 кандидатов.\n'
             )
-            if not pool:
+            if not top:
                 summary = unavailable_summary(scan) if scan.get('status') not in {None, 'ok', 'partial'} else 'проверенных кандидатов сегодня нет.'
                 return '\n'.join([
                     heading,
-                    'Сегодня модель не нашла 2 проверенных кандидата.',
+                    'Сегодня модель не нашла проверенных кандидатов.',
                     escape(str(summary)),
                     '',
                     BOT_NAME,
                 ])
-            top = sorted(pool, key=salary_pick_score, reverse=True)[:2]
             coverage = ''
             if scan.get('readable_funds'):
                 coverage = f"Проверено: {scan.get('monthly_coverage', 0)}/{scan.get('readable_funds', 0)} фондов."
             lines = [
                 heading,
-                '🧭 <b>2 кандидата на выбор</b>',
+                f'🧭 <b>{len(top)} кандидата на выбор</b>',
                 coverage,
                 '',
             ]
             lines.extend(salary_candidate_card(event, index + 1) for index, event in enumerate(top))
             lines.extend([
                 '',
+                'К каждому кандидату бот отправляет график движения фонда за 6 месяцев.',
                 'Я бы выбирал один фонд с более понятной идеей и меньшим риском, а не делил сумму автоматически.',
                 '',
                 BOT_NAME,
@@ -5249,14 +5271,34 @@ jobs:
 
 
         async def run_salary_report():
-            from modules.telegram_sender import send_to_telegram
+            from modules.telegram_sender import send_to_telegram, send_chart_photos
+            from modules.mover_charts import build_mover_charts
+
             prepared = await prepare_safely()
             message = build_salary_candidates_message(prepared)
+            top_events = salary_top_events(prepared, limit=3)
             destination = os.getenv('PORTFOLIO_CHAT_ID') or os.getenv('CHAT_ID')
             if os.getenv('DRY_RUN', '').lower() == 'true':
                 print(message)
+                if top_events:
+                    print('\n[DRY_RUN] Salary charts: 6-month chart requested for ' + ', '.join(str(e['fund_id']) for e in top_events))
                 return
             await send_to_telegram(message, chat_id=destination)
+            if top_events:
+                try:
+                    chart = await build_mover_charts(
+                        [(str(event['fund_id']), event, None) for event in top_events],
+                        datetime.now(TZ).date(),
+                    )
+                    if chart:
+                        await send_chart_photos(
+                            [(chart, salary_charts_caption(top_events))],
+                            chat_id=destination,
+                            title='📊 Market Radar AI · Графики salary-кандидатов',
+                            parse_mode='HTML',
+                        )
+                except Exception as error:
+                    print(f'::warning::Salary chart unavailable: {type(error).__name__}; keeping text report')
             state, _ = prepared
             if state and (state.get('last_scan') or {}).get('status') != 'unavailable':
                 register_delivered(state, datetime.now(TZ))
