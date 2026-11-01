@@ -13,7 +13,11 @@ name: Market Radar AI
         description: Report to send
         type: choice
         default: market
-        options: [market, portfolio, alert, salary]
+        options: [market, portfolio, alert, salary, ticker]
+      ticker_symbol:
+        description: Ticker for ticker report
+        type: string
+        default: TTWO
 permissions:
   contents: read
 concurrency:
@@ -81,7 +85,7 @@ jobs:
         BOT_NAME = "Market Radar AI"
         BOT_HANDLE = os.getenv("BOT_HANDLE", "@oil_tracker_pavel_bot")
         BOT_TAGLINE = "US Markets · Israeli Funds · Portfolio Ideas"
-        BOT_VERSION = "v3.5"
+        BOT_VERSION = "v3.6"
         HTTP_TIMEOUT = 15
 
         HEADERS = {
@@ -1081,12 +1085,20 @@ jobs:
             if not scored:
                 return []
             scored.sort(key=lambda value: (value[0], value[1]), reverse=True)
-            for _, published, title, link in scored[:3]:
+            results = []
+            fallback = None
+            for _, published, title, link in scored[:4]:
+                if fallback is None:
+                    fallback = (published, title, link)
                 translated = await translate_to_russian(session, title)
                 if translated:
-                    return [{"title": shorten_title(translated, 155), "published": published, "url": link}]
+                    results.append({"title": shorten_title(translated, 155), "published": published, "url": link})
+                if len(results) >= 2:
+                    return results
+            if results:
+                return results
             # Preserve a sourced headline when both translation services fail.
-            _, published, title, link = scored[0]
+            published, title, link = fallback or (scored[0][1], scored[0][2], scored[0][3])
             print(f"News {sector_name}: translation unavailable; displaying original")
             return [{"title": shorten_title(title, 155), "published": published, "url": link, "original": True}]
         EOF
@@ -1969,6 +1981,8 @@ jobs:
         cat << 'EOF' > main.py
         import asyncio
         import os
+        from datetime import datetime, timezone
+        from html import escape
 
         import aiohttp
 
@@ -1980,13 +1994,146 @@ jobs:
         )
         from modules.market import (
             analyze_entry_zone,
+            analyze_year_history,
             fetch_all_israeli_funds,
             fetch_all_year_analytics,
             fetch_all_yahoo_data,
+            fetch_ticker_history,
         )
         from modules.news import fetch_sector_news
         from modules.telegram_sender import send_to_telegram, send_chart_photos
         from modules.charts import build_radar_charts
+
+        def format_percent(value, digits: int = 2, missing: str = "—") -> str:
+            if value is None:
+                return missing
+            number = float(value)
+            return f"+{number:.{digits}f}%" if number > 0 else f"{number:.{digits}f}%"
+
+        def _ticker_sector(symbol: str):
+            target = symbol.upper().strip()
+            matches = []
+            for sector, config in SECTORS_CONFIG.items():
+                tickers = {str(t).upper() for t in config.get("tickers", [])}
+                if target in tickers:
+                    matches.append((sector, config))
+            if matches:
+                return matches[0]
+            for sector, config in SECTORS_CONFIG.items():
+                if target in {
+                    str(config.get("proxy_ticker", "")).upper(),
+                    str(config.get("news_ticker", "")).upper(),
+                }:
+                    return sector, config
+            return None, None
+
+        def _history_impulse(history: list[dict], sessions: int):
+            if len(history) <= sessions:
+                return None
+            latest = history[-1]["close"]
+            base = history[-1 - sessions]["close"]
+            if base <= 0:
+                return None
+            return round((latest / base - 1.0) * 100.0, 2)
+
+        def _ticker_verdict(row: dict) -> str:
+            entry = row.get("entry_analysis") or {}
+            status = entry.get("status_key", "unavailable")
+            candidate = bool(entry.get("candidate"))
+            if status == "ready":
+                return "✅ вход подтверждён моделью"
+            if status == "forming":
+                return "⚠️ формируется точка входа"
+            if status == "blocked":
+                return "🔻 ждать разворота самого фонда"
+            if candidate:
+                return "⚠️ наблюдать — условия частично есть"
+            if status == "watch":
+                return "⚪ наблюдать, но вход не подтверждён"
+            return "▫️ недостаточно данных по фонду"
+
+        async def run_ticker_report() -> None:
+            symbol = (os.getenv("TICKER_SYMBOL") or "TTWO").strip().upper()
+            sector, config = _ticker_sector(symbol)
+            print(f"🎯 Ticker focus: {symbol}; sector={sector or 'unknown'}")
+            tickers = [symbol]
+            if config:
+                tickers.extend([config.get("proxy_ticker"), config.get("news_ticker")])
+            tickers = sorted({ticker for ticker in tickers if ticker})
+            market_data = await fetch_all_yahoo_data(tickers)
+            history_task = None
+            proxy_task = None
+            async with aiohttp.ClientSession() as session:
+                history_task = asyncio.create_task(fetch_ticker_history(session, symbol))
+                if config and config.get("proxy_ticker"):
+                    proxy_task = asyncio.create_task(fetch_ticker_history(session, config["proxy_ticker"]))
+                ticker_row = market_data.get(symbol, {}) or {}
+                top = [(symbol, ticker_row.get("change") or 0.0)]
+                news_task = asyncio.create_task(fetch_sector_news(
+                    session,
+                    symbol,
+                    top,
+                    config["short_eng"] if config else "",
+                ))
+                ticker_history = await history_task
+                proxy_history = await proxy_task if proxy_task else []
+                news = await news_task
+
+            change_1d = ticker_row.get("change")
+            change_5d = _history_impulse(ticker_history, 5)
+            price = ticker_row.get("price")
+            price_date = ticker_row.get("market_date")
+            il_results = await fetch_all_israeli_funds(SECTORS_CONFIG) if config else {}
+            fund_data = il_results.get(sector, {}) if sector else {}
+            proxy_analysis = analyze_year_history(proxy_history, config["proxy_ticker"]) if config and proxy_history else {}
+            entry = analyze_entry_zone(fund_data, proxy_analysis)
+            row = {
+                "entry_analysis": entry,
+                "il_fund_data": fund_data,
+            }
+            stats = fund_data.get("price_stats") or {}
+            range60 = stats.get("range_position_60")
+
+            lines = [
+                "🎯 <b>Market Radar AI · Ticker Focus</b>",
+                f"<b>{escape(symbol)}</b>" + (f" · {escape(config['name'])}" if config else ""),
+                "",
+                f"1. Цена: <b>{'$' + format(float(price), '.2f') if price is not None else '—'}</b> · день {format_percent(change_1d)}" + (f" · {escape(str(price_date))}" if price_date else ""),
+                f"2. Импульс: 1д {format_percent(change_1d)} · 5с {format_percent(change_5d)}",
+            ]
+            if config:
+                lines.append(f"3. Сектор: {config['icon']} <b>{escape(config['name'])}</b>")
+                fund_url = f"https://www.bizportal.co.il/mutualfunds/quote/generalview/{config['fund_id']}"
+                fund_name = f'<a href="{fund_url}">{escape(config["il_name_eng"])}</a>'
+                fund_id = f'<a href="{fund_url}">{escape(config["fund_id"])}</a>'
+                lines.append(
+                    f"4. Фонд: {fund_name} · {fund_id}\n"
+                    f"   День {format_percent(fund_data.get('daily'))} · "
+                    f"М {format_percent(fund_data.get('mtd'))} · "
+                    f"Г {format_percent(fund_data.get('ytd'), missing='N/A')} · "
+                    f"60д диапазон {format_percent(range60, 0, '—')}\n"
+                    f"   Вердикт: {_ticker_verdict(row)}"
+                )
+            else:
+                lines.append("3. Сектор: не найден в SECTORS_CONFIG")
+                lines.append("4. Израильский фонд: не найден")
+
+            lines.append("5. Новости:")
+            if news:
+                for item in news[:2]:
+                    title = escape(item.get("title", ""))
+                    url = str(item.get("url") or "")
+                    if url.startswith(("https://", "http://")):
+                        title = f'<a href="{escape(url, quote=True)}">{title}</a>'
+                    lines.append(f"   📰 {title}")
+            else:
+                lines.append("   — свежих релевантных новостей не найдено")
+            lines.extend(["", BOT_NAME])
+            message = "\n".join(lines)
+            if os.getenv("DRY_RUN", "false").lower() == "true":
+                print(message)
+            else:
+                await send_to_telegram(message)
 
         async def run_market_analytics() -> None:
             print(f"Build: {BOT_VERSION}; commit={os.getenv('GITHUB_SHA', 'local')[:12]}")
@@ -2148,6 +2295,8 @@ jobs:
             elif mode == "salary":
                 from modules.movers import run_salary_report
                 asyncio.run(run_salary_report())
+            elif mode == "ticker":
+                asyncio.run(run_ticker_report())
             else:
                 asyncio.run(run_market_analytics())
         EOF
@@ -6668,7 +6817,7 @@ jobs:
         set -euo pipefail
         pip install -r requirements.txt
     - name: Install Chromium Fallback
-      if: steps.report.outputs.mode == 'market'
+      if: steps.report.outputs.mode == 'market' || steps.report.outputs.mode == 'ticker'
       run: playwright install --with-deps chromium
     - name: Validate Generated Python
       run: python -m compileall -q modules main.py
@@ -6680,6 +6829,7 @@ jobs:
         CHAT_ID: ${{ secrets.CHAT_ID }}
         PORTFOLIO_CHAT_ID: ${{ secrets.PORTFOLIO_CHAT_ID }}
         RUN_MODE: ${{ steps.report.outputs.mode }}
+        TICKER_SYMBOL: ${{ inputs.ticker_symbol }}
         PYTHONUNBUFFERED: '1'
       run: python main.py
     - name: Upload Audit Artifacts
