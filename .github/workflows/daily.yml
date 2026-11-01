@@ -98,7 +98,7 @@ jobs:
         BOT_NAME = "Market Radar AI"
         BOT_HANDLE = os.getenv("BOT_HANDLE", "@oil_tracker_pavel_bot")
         BOT_TAGLINE = "US Markets · Israeli Funds · Portfolio Ideas"
-        BOT_VERSION = "v3.7"
+        BOT_VERSION = "v3.8"
         HTTP_TIMEOUT = 15
 
         HEADERS = {
@@ -1991,7 +1991,7 @@ jobs:
                         raise RuntimeError(f"Telegram chart delivery failed: HTTP {response.status}")
 
 
-        async def send_ticker_choice_keyboard(tickers: list[str], *, chat_id=None) -> int | None:
+        async def send_ticker_choice_keyboard(tickers: list[str], *, chat_id=None, current_ticker: str = "TTWO") -> int | None:
             """Send a weekly ticker picker. Callback clicks are captured only while this workflow is running."""
             destination = chat_id or CHAT_ID
             if not BOT_TOKEN or not destination:
@@ -2009,8 +2009,8 @@ jobs:
                 "chat_id": destination,
                 "text": (
                     "🎛 <b>Market Radar AI · Выбор тикера</b>\n"
-                    "Выбери акцию для ежедневного Ticker Focus.\n"
-                    "Кнопки активны, пока выполняется этот weekly workflow."
+                    f"Сейчас ежедневно отслеживается: <b>{str(current_ticker).upper().strip() or 'TTWO'}</b>\n"
+                    "Нажми кнопку, чтобы выбрать другой тикер."
                 ),
                 "parse_mode": "HTML",
                 "reply_markup": {"inline_keyboard": keyboard},
@@ -2236,8 +2236,10 @@ jobs:
                 print("Choices: " + ", ".join(TICKER_CHOICES))
                 return
 
-            await send_to_telegram(message)
-            message_id = await send_ticker_choice_keyboard(TICKER_CHOICES)
+            message_id = await send_ticker_choice_keyboard(
+                TICKER_CHOICES,
+                current_ticker=current,
+            )
             selected = await poll_ticker_choice(TICKER_CHOICES, message_id=message_id)
             if selected:
                 _write_selected_ticker(selected)
