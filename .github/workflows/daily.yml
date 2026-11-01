@@ -7,13 +7,17 @@ name: Market Radar AI
     timezone: Asia/Jerusalem
   - cron: 30 8 1,10 * *
     timezone: Asia/Jerusalem
+  - cron: 5 23 * * *
+    timezone: Asia/Jerusalem
+  - cron: 0 9 * * 0
+    timezone: Asia/Jerusalem
   workflow_dispatch:
     inputs:
       report_type:
         description: Report to send
         type: choice
         default: market
-        options: [market, portfolio, alert, salary, ticker]
+        options: [market, portfolio, alert, salary, ticker, ticker_picker]
       ticker_symbol:
         description: Ticker for ticker report
         type: string
@@ -37,6 +41,8 @@ jobs:
         mode="${MANUAL_MODE:-market}"
         if [[ "$SCHEDULE" == '20 8 * * *' ]]; then mode=portfolio; fi
         if [[ "$SCHEDULE" == '30 8 1,10 * *' ]]; then mode=salary; fi
+        if [[ "$SCHEDULE" == '5 23 * * *' ]]; then mode=ticker; fi
+        if [[ "$SCHEDULE" == '0 9 * * 0' ]]; then mode=ticker_picker; fi
         echo "mode=$mode" >> "$GITHUB_OUTPUT"
     - name: Restore Portfolio History
       if: steps.report.outputs.mode == 'portfolio'
@@ -65,6 +71,13 @@ jobs:
         path: portfolio_candidates.json
         key: sector-analysis-v3-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: sector-analysis-v3-
+    - name: Restore Ticker Choice
+      if: steps.report.outputs.mode == 'ticker' || steps.report.outputs.mode == 'ticker_picker'
+      uses: actions/cache/restore@v5
+      with:
+        path: ticker_choice.json
+        key: ticker-choice-v1-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: ticker-choice-v1-
     - name: Deploy Architecture Files
       shell: bash
       run: |
@@ -85,7 +98,7 @@ jobs:
         BOT_NAME = "Market Radar AI"
         BOT_HANDLE = os.getenv("BOT_HANDLE", "@oil_tracker_pavel_bot")
         BOT_TAGLINE = "US Markets · Israeli Funds · Portfolio Ideas"
-        BOT_VERSION = "v3.6"
+        BOT_VERSION = "v3.7"
         HTTP_TIMEOUT = 15
 
         HEADERS = {
@@ -1976,11 +1989,140 @@ jobs:
                     body = await response.json()
                     if response.status != 200 or not body.get("ok"):
                         raise RuntimeError(f"Telegram chart delivery failed: HTTP {response.status}")
+
+
+        async def send_ticker_choice_keyboard(tickers: list[str], *, chat_id=None) -> int | None:
+            """Send a weekly ticker picker. Callback clicks are captured only while this workflow is running."""
+            destination = chat_id or CHAT_ID
+            if not BOT_TOKEN or not destination:
+                raise RuntimeError("BOT_TOKEN or CHAT_ID is missing")
+            clean = [str(ticker).upper().strip() for ticker in tickers if str(ticker).strip()]
+            if not clean:
+                return None
+            keyboard = []
+            for index in range(0, len(clean), 2):
+                keyboard.append([
+                    {"text": ticker, "callback_data": f"ticker:{ticker}"}
+                    for ticker in clean[index:index + 2]
+                ])
+            payload = {
+                "chat_id": destination,
+                "text": (
+                    "🎛 <b>Market Radar AI · Выбор тикера</b>\n"
+                    "Выбери акцию для ежедневного Ticker Focus.\n"
+                    "Кнопки активны, пока выполняется этот weekly workflow."
+                ),
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": keyboard},
+                "disable_web_page_preview": True,
+            }
+            timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                    json=payload,
+                ) as response:
+                    body = await response.json(content_type=None)
+                    if response.status != 200 or not body.get("ok"):
+                        raise RuntimeError(f"Telegram picker failed: HTTP {response.status}")
+                    message = body.get("result") or {}
+                    return int(message.get("message_id") or 0)
+
+
+        async def poll_ticker_choice(
+            tickers: list[str],
+            *,
+            timeout_seconds: int = 480,
+            chat_id=None,
+            message_id: int | None = None,
+        ) -> str | None:
+            """Poll callback buttons and return the selected ticker, if the user clicked in time."""
+            destination = str(chat_id or CHAT_ID)
+            if not BOT_TOKEN or not destination:
+                raise RuntimeError("BOT_TOKEN or CHAT_ID is missing")
+            allowed = {str(ticker).upper().strip() for ticker in tickers if str(ticker).strip()}
+            timeout = aiohttp.ClientTimeout(total=20)
+            offset = None
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                try:
+                    async with session.get(
+                        f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
+                        params={"timeout": 0, "allowed_updates": json.dumps(["callback_query"])},
+                    ) as response:
+                        body = await response.json(content_type=None)
+                        updates = body.get("result") or []
+                        if updates:
+                            offset = max(int(item.get("update_id", 0)) for item in updates) + 1
+                except Exception as error:
+                    print(f"⚠️ Telegram picker offset: {type(error).__name__}")
+
+                import time
+                deadline = time.monotonic() + max(15, int(timeout_seconds))
+                while time.monotonic() < deadline:
+                    params = {
+                        "timeout": 15,
+                        "allowed_updates": json.dumps(["callback_query"]),
+                    }
+                    if offset is not None:
+                        params["offset"] = offset
+                    try:
+                        async with session.get(
+                            f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
+                            params=params,
+                        ) as response:
+                            body = await response.json(content_type=None)
+                    except Exception as error:
+                        print(f"⚠️ Telegram picker poll: {type(error).__name__}")
+                        continue
+
+                    for update in body.get("result") or []:
+                        offset = int(update.get("update_id", 0)) + 1
+                        callback = update.get("callback_query") or {}
+                        data = str(callback.get("data") or "")
+                        if not data.startswith("ticker:"):
+                            continue
+                        message = callback.get("message") or {}
+                        if message_id and int(message.get("message_id") or 0) != int(message_id):
+                            continue
+                        chat = message.get("chat") or {}
+                        if destination and str(chat.get("id") or "") != destination:
+                            continue
+                        selected = data.split(":", 1)[1].upper().strip()
+                        if selected not in allowed:
+                            continue
+
+                        callback_id = callback.get("id")
+                        if callback_id:
+                            await session.post(
+                                f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery",
+                                json={
+                                    "callback_query_id": callback_id,
+                                    "text": f"{selected} выбран для ежедневного Ticker Focus",
+                                    "show_alert": False,
+                                },
+                            )
+                        if message_id:
+                            await session.post(
+                                f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText",
+                                json={
+                                    "chat_id": destination,
+                                    "message_id": message_id,
+                                    "text": (
+                                        "✅ <b>Market Radar AI · Тикер выбран</b>\n"
+                                        f"Ежедневный Ticker Focus: <b>{selected}</b>"
+                                    ),
+                                    "parse_mode": "HTML",
+                                },
+                            )
+                        return selected
+            return None
         EOF
 
         cat << 'EOF' > main.py
         import asyncio
+        import json
         import os
+        from pathlib import Path
         from datetime import datetime, timezone
         from html import escape
 
@@ -2001,7 +2143,7 @@ jobs:
             fetch_ticker_history,
         )
         from modules.news import fetch_sector_news
-        from modules.telegram_sender import send_to_telegram, send_chart_photos
+        from modules.telegram_sender import send_to_telegram, send_chart_photos, send_ticker_choice_keyboard, poll_ticker_choice
         from modules.charts import build_radar_charts
 
         def format_percent(value, digits: int = 2, missing: str = "—") -> str:
@@ -2052,8 +2194,65 @@ jobs:
                 return "⚪ наблюдать, но вход не подтверждён"
             return "▫️ недостаточно данных по фонду"
 
+        TICKER_CHOICES = [
+            "TTWO", "NVDA", "TSLA", "AMD", "PLTR",
+            "CRWD", "LLY", "GLD", "JPM", "RKLB",
+        ]
+        TICKER_CHOICE_FILE = Path("ticker_choice.json")
+
+
+        def _read_selected_ticker(default: str = "TTWO") -> str:
+            try:
+                data = json.loads(TICKER_CHOICE_FILE.read_text(encoding="utf-8"))
+                symbol = str(data.get("ticker") or "").upper().strip()
+                if symbol:
+                    return symbol
+            except (OSError, json.JSONDecodeError):
+                pass
+            return default
+
+
+        def _write_selected_ticker(symbol: str) -> None:
+            TICKER_CHOICE_FILE.write_text(
+                json.dumps({
+                    "ticker": symbol.upper().strip(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+
+        async def run_ticker_picker() -> None:
+            print("🎛 Weekly ticker picker")
+            dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+            current = _read_selected_ticker()
+            message = (
+                "🎛 <b>Market Radar AI · Выбор тикера</b>\n"
+                f"Сейчас ежедневно отслеживается: <b>{escape(current)}</b>\n"
+                "Нажми кнопку, чтобы выбрать другой тикер."
+            )
+            if dry_run:
+                print(message)
+                print("Choices: " + ", ".join(TICKER_CHOICES))
+                return
+
+            await send_to_telegram(message)
+            message_id = await send_ticker_choice_keyboard(TICKER_CHOICES)
+            selected = await poll_ticker_choice(TICKER_CHOICES, message_id=message_id)
+            if selected:
+                _write_selected_ticker(selected)
+                await send_to_telegram(
+                    "✅ <b>Market Radar AI</b>\n"
+                    f"Ежедневный Ticker Focus теперь отслеживает: <b>{escape(selected)}</b>"
+                )
+            else:
+                print("ℹ️ Ticker picker: no selection during polling window")
+
+
         async def run_ticker_report() -> None:
-            symbol = (os.getenv("TICKER_SYMBOL") or "TTWO").strip().upper()
+            env_symbol = str(os.getenv("TICKER_SYMBOL") or "").strip().upper()
+            # Scheduled ticker runs use the last weekly button selection.
+            symbol = env_symbol or _read_selected_ticker("TTWO")
             sector, config = _ticker_sector(symbol)
             print(f"🎯 Ticker focus: {symbol}; sector={sector or 'unknown'}")
             tickers = [symbol]
@@ -2297,6 +2496,8 @@ jobs:
                 asyncio.run(run_salary_report())
             elif mode == "ticker":
                 asyncio.run(run_ticker_report())
+            elif mode == "ticker_picker":
+                asyncio.run(run_ticker_picker())
             else:
                 asyncio.run(run_market_analytics())
         EOF
@@ -6844,7 +7045,14 @@ jobs:
           portfolio_signal_journal.json
           portfolio_candidates.json
           fund_movers_state.json
+          ticker_choice.json
           charts/*.png
+    - name: Save Ticker Choice
+      if: always() && steps.report.outputs.mode == 'ticker_picker' && hashFiles('ticker_choice.json') != ''
+      uses: actions/cache/save@v5
+      with:
+        path: ticker_choice.json
+        key: ticker-choice-v1-${{ github.run_id }}-${{ github.run_attempt }}
     - name: Save Portfolio History
       if: always() && steps.report.outputs.mode == 'portfolio' && hashFiles('portfolio_snapshots.json') != ''
       uses: actions/cache/save@v5
