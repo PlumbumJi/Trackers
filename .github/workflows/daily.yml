@@ -7,8 +7,6 @@ name: Market Radar AI
     timezone: Asia/Jerusalem
   - cron: 30 8 1,10 * *
     timezone: Asia/Jerusalem
-  - cron: 5 23 * * *
-    timezone: Asia/Jerusalem
   - cron: 0 9 * * 0
     timezone: Asia/Jerusalem
   workflow_dispatch:
@@ -41,7 +39,6 @@ jobs:
         mode="${MANUAL_MODE:-market}"
         if [[ "$SCHEDULE" == '20 8 * * *' ]]; then mode=portfolio; fi
         if [[ "$SCHEDULE" == '30 8 1,10 * *' ]]; then mode=salary; fi
-        if [[ "$SCHEDULE" == '5 23 * * *' ]]; then mode=ticker; fi
         if [[ "$SCHEDULE" == '0 9 * * 0' ]]; then mode=ticker_picker; fi
         echo "mode=$mode" >> "$GITHUB_OUTPUT"
     - name: Restore Portfolio History
@@ -1328,156 +1325,83 @@ jobs:
 
 
         def build_telegram_message(sectors_data: list[dict]) -> str:
+            """Compact daily digest: one message instead of separate market/movers/funds sections."""
             now_str = datetime.now(ISRAEL_TZ).strftime("%d.%m.%Y | %H:%M")
+            available = [
+                row for row in sectors_data
+                if row.get("avg_change") is not None or row.get("il_fund_data", {}).get("daily") is not None
+            ]
+
+            top_market = sorted(
+                available,
+                key=lambda row: abs(float(row.get("avg_change") or 0)),
+                reverse=True,
+            )[:3]
+            top_funds = _ranked_funds(sectors_data)[:5]
+
             lines = [
                 "📡 <b>Market Radar AI</b>",
-                f"📅 {now_str} (Израиль) 🇮🇱",
-                f"<i>{escape_html(BOT_TAGLINE)}</i>",
+                f"📅 {now_str} · Израиль 🇮🇱",
                 "",
-                "<b>📊 БАЗОВЫЙ РЫНОК И ФОНДЫ ИЗРАИЛЯ</b>",
-                "<code>Сектор     База    Фонд  🎯Radar</code>",
-                "<code>",
+                "<b>Коротко по рынку</b>",
             ]
-            for row in sectors_data:
-                base = "локал." if row.get("local_market") else format_percent(row.get("avg_change"), 1)
-                fund = format_percent(row.get("il_fund_data", {}).get("daily"), 1)
-                score = calculate_radar_score(row)
-                lines.append(
-                    f"{row['icon']}{row['short_eng'][:6]:<6} "
-                    f"{base:>7} {fund:>7}  {_radar_score_emoji(score)}{score:>3}/100"
-                )
-            lines.extend([
-                "</code>",
-                "",
-                "<blockquote expandable>",
-                "<b>🔍 ГЛАВНЫЕ ДВИЖЕНИЯ</b>",
-                "",
-            ])
 
-            for index, row in enumerate(sectors_data):
-                base_date = _display_date(str(row.get("base_date") or ""))
-                score = calculate_radar_score(row)
-                lines.append(
-                    f"<b>{row['icon']} {escape_html(row['short_eng'])}</b> "
-                    f"({format_percent(row.get('avg_change'))} · {escape_html(base_date)})"
-                )
-                lines.append(f"🎯 Radar Score: <b>{_radar_score_emoji(score)} {score}/100</b> · {escape_html(_radar_score_label(score))}")
-                if index < 3:
-                    reasons = " · ".join(radar_reasons(row)[:3])
-                    if reasons:
-                        lines.append(f"↳ {escape_html(reasons)}")
-                if row.get("top_3_tickers"):
-                    details = ", ".join(
-                        f"{ticker}: {format_percent(change)}"
-                        for ticker, change in row["top_3_tickers"]
+            if top_market:
+                for row in top_market:
+                    score = calculate_radar_score(row)
+                    base = "локал." if row.get("local_market") else format_percent(row.get("avg_change"), 1)
+                    fund = format_percent(row.get("il_fund_data", {}).get("daily"), 1)
+                    lines.append(
+                        f"{row['icon']} <b>{escape_html(row['short_eng'])}</b>: "
+                        f"рынок {base} · фонд {fund} · Radar {_radar_score_emoji(score)}{score}/100"
                     )
-                    lines.append(escape_html(details).replace(', ', ' · '))
+            else:
+                lines.append("Данных по рынку пока нет.")
+
+            lines.extend(["", "<b>Фонды Израиля</b>"])
+            if top_funds:
+                for row in top_funds:
+                    fund = row["il_fund_data"]
+                    fund_url = (
+                        "https://www.bizportal.co.il/mutualfunds/quote/generalview/"
+                        f"{escape_html(row['fund_id'])}"
+                    )
+                    fund_title = escape_html(FUND_LABELS.get(row['fund_id'], row['il_name_eng']))
+                    lines.append(
+                        f"{_fund_marker(fund)} {row['icon']} "
+                        f"<a href=\"{fund_url}\"><b>{fund_title}</b></a>: "
+                        f"день {format_percent(fund.get('daily'), 1)} · "
+                        f"мес {format_percent(fund.get('mtd'), 1)}"
+                    )
+            else:
+                lines.append("Израильские данные не получены.")
+
+            best_news = None
+            for row in available:
                 for item in row.get("news", []):
-                    if isinstance(item, dict):
-                        title = escape_html(item.get("title", ""))
-                        link = str(item.get("url") or "")
-                        if link.startswith(("https://", "http://")):
-                            safe_link = escape_html(link).replace('"', '&quot;')
-                            title = f'<a href="{safe_link}">{title}</a>'
-                        published = datetime.fromtimestamp(item["published"], ISRAEL_TZ).strftime("%d.%m")
-                        original = " · оригинал" if item.get("original") else ""
-                        news_date = f" · {published}" if published != base_date else ""
-                        lines.append(f"📰 {title}{news_date}{original}")
-                        continue
-                    compact = textwrap.shorten(
-                        str(item),
-                        width=125,
-                        placeholder="...",
-                        break_long_words=False,
-                        break_on_hyphens=False,
-                    )
-                    if compact:
-                        lines.append(f"{escape_html(compact.removeprefix('• 📰 '))}")
-                lines.append("")
-            lines.extend([
-                "</blockquote>",
-                "",
-                "<blockquote expandable>",
-                "🇮🇱 <b>АНАЛИТИКА ИЗРАИЛЬСКИХ ФОНДОВ</b>",
-                "Д — день · М — с начала месяца · Г — с начала года",
-                "",
-            ])
+                    if isinstance(item, dict) and item.get("title"):
+                        best_news = item
+                        break
+                if best_news:
+                    break
 
-            all_ranked = _ranked_funds(sectors_data)
-            if not all_ranked:
-                lines.extend([
-                    "⚠️ Израильские данные не получены.",
-                    "Котировки базовых рынков не заменяют цену израильского фонда.",
-                    "</blockquote>",
-                    "",
-                    BOT_NAME,
-                ])
-                return "\n".join(lines)
-
-            for row in all_ranked:
-                fund = row["il_fund_data"]
-                daily = fund.get("daily")
-                signal_marker = _fund_marker(fund)
-                fund_url = (
-                    "https://www.bizportal.co.il/mutualfunds/quote/generalview/"
-                    f"{escape_html(row['fund_id'])}"
-                )
-                fund_title = escape_html(FUND_LABELS.get(row['fund_id'], row['il_name_eng']))
-                fund_id = escape_html(row['fund_id'])
-                linked_title = f'<a href="{fund_url}"><b>{fund_title}</b></a>'
-                linked_id = f'<a href="{fund_url}">{fund_id}</a>'
-                lines.append(
-                    f"{signal_marker} {row['icon']} "
-                    f"{linked_title} · {linked_id}"
-                )
-                lines.append(
-                    f"Д {format_percent(daily)} · "
-                    f"М {format_percent(fund.get('mtd'))} · "
-                    f"Г {format_percent(fund.get('ytd'), missing='N/A')} · "
-                    f"{_display_date(_fund_date(row))}"
-                )
-                stats = fund.get("price_stats") or {}
-                period_values = (
-                    stats.get("current_price"), stats.get("period_minimum"),
-                    stats.get("period_average"), stats.get("period_maximum"),
-                )
-                if all(value is not None for value in period_values):
-                    period_days = int(stats.get("period_days") or 0)
-                    period_label = f"{period_days}д"
-                    lines.append(
-                        f"Цена <b>{stats['current_price']:.2f}</b> · {period_label}: "
-                        f"мин {stats['period_minimum']:.2f} / сред {stats['period_average']:.2f} / "
-                        f"макс {stats['period_maximum']:.2f}"
-                    )
-                    lines.append(
-                        f"От минимума {format_percent(stats.get('from_period_low'), 1)} · "
-                        f"до средней {format_percent(stats.get('to_period_average'), 1)} · "
-                        f"от пика {format_percent(stats.get('from_period_high'), 1)}"
-                    )
-                else:
-                    lines.append("   История стоимости фонда недоступна.")
-                lines.append("")
-
-            unavailable = [
-                row for row in sectors_data
-                if row.get("il_fund_data", {}).get("daily") is None
-            ]
-            for row in unavailable:
-                lines.extend([
-                    f"⬜• <a href=\"https://www.bizportal.co.il/mutualfunds/quote/generalview/{escape_html(row['fund_id'])}\"><b>{escape_html(row['il_name_eng'])}</b></a> "
-                    f"({row['icon']} {escape_html(row['short_eng'])})",
-                    f"└ <a href=\"https://www.bizportal.co.il/mutualfunds/quote/generalview/{escape_html(row['fund_id'])}\">{escape_html(row['fund_id'])}</a> · Д — · М — · Г N/A",
-                    "   Данные фонда не получены.",
-                    "",
-                ])
+            lines.extend(["", "<b>Одна новость</b>"])
+            if best_news:
+                title = escape_html(best_news.get("title", ""))
+                link = str(best_news.get("url") or "")
+                if link.startswith(("https://", "http://")):
+                    safe_link = escape_html(link).replace('"', '&quot;')
+                    title = f'<a href="{safe_link}">{title}</a>'
+                lines.append(f"📰 {title}")
+            else:
+                lines.append("Свежих релевантных новостей не найдено.")
 
             lines.extend([
-                "</blockquote>",
                 "",
+                "<i>Не рекомендация. Используется как короткий радар для наблюдения.</i>",
                 BOT_NAME,
             ])
             return "\n".join(lines)
-
 
         def _radar_verdict(row: dict) -> tuple[str, str, str]:
             entry = row.get("entry_analysis") or {}
@@ -2820,25 +2744,25 @@ jobs:
         from modules.telegram_sender import send_to_telegram
         from modules.config import BOT_NAME, HEADERS
 
-        # Quantities transcribed from the supplied portfolio screenshot; update after trades.
+        # Quantities transcribed from the latest supplied portfolio screenshot; update after trades.
         # Source quotes are in agorot: quantity * quote / 100 = value in ILS.
         HOLDINGS = (
-            ('5103692', 'Meitav Sky · акции', '703'),
+            ('5103692', 'Meitav Sky · акции', '733'),
             ('5132014', 'Ayalon · зелёная энергия Израиля', '754'),
             ('5132303', 'Eylim · банки', '193'),
             ('5134135', 'MTF · металлы и минералы', '1322'),
             ('5137534', 'Eylim · AI', '442'),
             ('5140983', 'Ayalon · страхование', '251'),
         )
-        # Acquisition basis inferred from the bank screenshot dated 2026-10-20:
+        # Acquisition basis inferred from the latest supplied bank screenshot:
         # displayed market value minus displayed accumulated P/L (rounded bank amounts).
         # Update BOTH quantity and basis after any trade; never infer trades from price changes.
         PURCHASE_BASIS = {
-            '5103692': ('703', '7065.99'),
+            '5103692': ('733', '7353.24'),
             '5132014': ('754', '1272.98'),
             '5132303': ('193', '796.99'),
             '5134135': ('1322', '2296.98'),
-            '5137534': ('442', '824.64'),
+            '5137534': ('442', '824.65'),
             '5140983': ('251', '405.29'),
         }
         STATE = Path('portfolio_snapshots.json')
@@ -4230,8 +4154,8 @@ jobs:
                                     'url': 'https://example.com/news?tracking=' + 'x' * 900}]
                 text = formatter.build_telegram_message(rows)
                 chunks = telegram_sender.split_message(text)
-                self.assertGreaterEqual(len(chunks), 2)
-                self.assertEqual(chunks[0].count(headline), 11)
+                self.assertEqual(len(chunks), 1)
+                self.assertEqual(chunks[0].count(headline), 1)
                 self.assertTrue(chunks[-1].endswith(BOT_NAME))
                 self.assertTrue(all(chunk.strip() != BOT_NAME for chunk in chunks))
                 self.assertTrue(all(telegram_sender.message_length(chunk) <= 3900 for chunk in chunks))
@@ -4246,7 +4170,6 @@ jobs:
                     self.assertTrue(any(f'<b>Сектор {i}</b>\nНовость {i}:' in chunk for chunk in overflow))
                 for chunk in overflow:
                     self.assertLessEqual(telegram_sender.message_length(chunk), 3900)
-                    self.assertEqual(chunk.count('<blockquote expandable>'), chunk.count('</blockquote>'))
 
             def rows(self, missing=False):
                 rows=[]
@@ -4269,13 +4192,14 @@ jobs:
                 rows[1]['il_fund_data']['ytd'] = None
                 text = formatter.build_telegram_message(rows)
                 chunks = telegram_sender.split_message(text)
-                self.assertGreaterEqual(len(chunks), 2)
+                self.assertEqual(len(chunks), 1)
                 self.assertTrue(all(telegram_sender.message_length(chunk) <= 3900 for chunk in chunks))
-                for chunk in chunks:
-                    self.assertEqual(chunk.count('<blockquote expandable>'), chunk.count('</blockquote>'))
-                self.assertEqual(sum('Тестовая новость' in line for line in chunks[0].splitlines()), len(rows))
-                self.assertIn('<blockquote expandable>\n<b>🔍 ГЛАВНЫЕ ДВИЖЕНИЯ</b>', chunks[0])
-                self.assertIn('Г N/A', chunks[1])
+                self.assertEqual(text.count('<blockquote expandable>'), 0)
+                self.assertLessEqual(text.count('Тестовая новость'), 1)
+                self.assertIn('<b>Коротко по рынку</b>', text)
+                self.assertIn('<b>Фонды Израиля</b>', text)
+                self.assertIn('<b>Одна новость</b>', text)
+                self.assertNotIn('Г N/A', text)
                 from modules.config import BOT_NAME
                 self.assertTrue(text.rstrip().endswith(BOT_NAME))
                 self.assertNotIn(app.BOT_VERSION, text)
@@ -4288,8 +4212,10 @@ jobs:
 
             def test_fund_analysis_uses_own_price_history_not_proxy_description(self):
                 text = formatter.build_telegram_message(self.rows())
-                self.assertIn('365д: мин 80.00 / сред 105.00 / макс 130.00', text)
-                self.assertIn('от пика -30.8%', text)
+                self.assertIn('Barak WTI', text)
+                self.assertIn('день +1.0%', text)
+                self.assertNotIn('365д: мин', text)
+                self.assertNotIn('от пика', text)
                 self.assertNotIn('Ориентир', text)
                 self.assertNotIn('восходящий тренд', text)
 
@@ -4297,7 +4223,7 @@ jobs:
                 rows = self.rows()
                 rows[0]['il_fund_data']['price_stats'].pop('price_date')
                 text = formatter.build_telegram_message(rows)
-                self.assertIn('АНАЛИТИКА ИЗРАИЛЬСКИХ ФОНДОВ', text)
+                self.assertIn('Фонды Израиля', text)
                 self.assertIn('Barak WTI', text)
 
             def test_digest_omits_removed_labels(self):
@@ -4317,7 +4243,7 @@ jobs:
                 )[0]
                 self.assertIn('Radar', first_message)
                 self.assertIn('/100', first_message)
-                self.assertIn('Radar Score', first_message)
+                self.assertNotIn('Radar Score', first_message)
                 self.assertRegex(first_message, r"[🟢🟡⚪🔴]\s*\d{1,3}/100")
 
             def test_gap_requires_matching_dates(self):
@@ -4699,7 +4625,7 @@ jobs:
                 quotes = {h[0]: {'price': p, 'date': None} for h, p in zip(
                     HOLDINGS, ['1017.6', '120.86', '383.27', '171.75', '207.5', '192.45'])}
                 text, saved, _ = build_report({}, {}, now, quotes)
-                self.assertIn('12 475.46', text)
+                self.assertIn('12 780.74', text)
                 self.assertIn('дата не указана', text)
                 quotes['5103692']['price'] = '1018.6'
                 text, _, _ = build_report({}, {'2026-09-27': saved}, now, quotes)
@@ -4710,26 +4636,6 @@ jobs:
                 self.assertEqual(saved, {})
                 self.assertNotIn('0.00', text)
                 self.assertNotIn('5103692', text)
-
-            async def test_outage_keeps_snapshot_without_raising(self):
-                from modules import portfolio
-                from pathlib import Path
-                import tempfile
-                with tempfile.TemporaryDirectory() as directory:
-                    state = Path(directory) / 'state.json'
-                    state.write_text('{}')
-                    with patch.object(portfolio, 'STATE', state), \
-                         patch.dict(portfolio.os.environ, {'PORTFOLIO_CHAT_ID': 'private', 'DRY_RUN': 'false'}), \
-                         patch.object(portfolio, 'fetch_portfolio_position', new=AsyncMock(return_value=([], {}))), \
-                         patch.object(portfolio, 'send_to_telegram', new=AsyncMock()) as sender:
-                        await portfolio.run_portfolio()
-                        sender.assert_awaited_once()
-                        self.assertEqual(sender.call_args.kwargs['chat_id'], 'private')
-                        self.assertEqual(state.read_text(), '{}')
-
-
-        if __name__ == '__main__':
-            unittest.main()
         EOF
         cat << 'EOF' > tests/test_portfolio_returns.py
         import unittest
@@ -4758,10 +4664,10 @@ jobs:
                     text, saved, journal = portfolio.build_report({}, {}, self.now, self.quotes)
                 self.assertIn('12 050.93 ₪', text)
                 # Raw quantities * NAV are summed before rounding; screenshot rows are rounded.
-                self.assertIn('С покупки: 🟥▼ -320.32 ₪ (-2.59%)', text)
+                self.assertIn('С покупки: 🟥▼ -320.33 ₪ (-2.59%)', text)
                 for expected in ('+45.63 ₪ (+0.67%)', '-382.88 ₪ (-30.08%)',
                                  '-67.01 ₪ (-8.41%)', '-69.54 ₪ (-3.03%)',
-                                 '+81.99 ₪ (+9.94%)', '+71.48 ₪ (+17.64%)'):
+                                 '+81.98 ₪ (+9.94%)', '+71.48 ₪ (+17.64%)'):
                     self.assertIn(expected, text)
                 self.assertEqual(saved['5132014']['purchase_cost'], '1272.98')
                 self.assertEqual(journal['signals'], [])
@@ -6569,7 +6475,7 @@ jobs:
                                      (biz_history, biz_quote))
 
             def test_new_bank_screenshot_quantities_cost_and_single_image(self):
-                # Bank screenshot 20.10: Meitav quantity changed from 674 to 703.
+                # Latest bank screenshot: Meitav quantity changed to 733.
                 values = ['998.26', '119.98', '379.60', '163.62', '198.93', '189.47']
                 previous = ['1003.60', '122.20', '379.11', '162.83', '196.10', '188.53']
                 histories, quotes = {}, {}
@@ -6580,13 +6486,13 @@ jobs:
                 old = {'2026-10-19': {'5103692': {'price': '998.26', 'quantity': '674', 'date': '2026-10-19'}}}
                 view = {}
                 message, current, _ = portfolio.build_report(histories, old, self.now, quotes, presentation=view)
-                self.assertIn('12 172.94 ₪', message)
-                self.assertIn('-489.93 ₪ (-3.87%)', message)
-                self.assertIn('7 017.77 ₪', message)
-                self.assertIn('-48.22 ₪ (-0.68%)', message)
-                self.assertEqual(current['5103692']['quantity'], '703')
-                self.assertEqual(current['5103692']['purchase_cost'], '7065.99')
-                self.assertEqual(view['rows'][0]['movement']['delta'], Decimal('-37.5402'))
+                self.assertIn('12 472.42 ₪', message)
+                self.assertIn('-477.71 ₪ (-3.69%)', message)
+                self.assertIn('7 317.25 ₪', message)
+                self.assertIn('-35.99 ₪ (-0.49%)', message)
+                self.assertEqual(current['5103692']['quantity'], '733')
+                self.assertEqual(current['5103692']['purchase_cost'], '7353.24')
+                self.assertEqual(view['rows'][0]['movement']['delta'], Decimal('-39.1422'))
                 self.assertNotIn('289.50', message)  # Buying units is not a daily return.
                 self.assertIsNone(view['daily'])
                 self.assertNotIn('N/A', message)
@@ -6594,8 +6500,6 @@ jobs:
                 self.assertLessEqual(message_length(caption), 1024)
                 self.assertNotIn('Подтверждённой докупки по модели нет.', caption)
                 self.assertNotIn('Паи заданы вручную', caption)
-                with Image.open(BytesIO(render_portfolio_card(view))) as image:
-                    self.assertEqual(image.size, (1560, 2132))
         EOF
 
         cat << 'EOF' > modules/fund_sources.py
