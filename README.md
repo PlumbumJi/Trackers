@@ -1,2 +1,2 @@
-# Trackers
-Trackers
+# Market Radar AI
+Market Radar AI
