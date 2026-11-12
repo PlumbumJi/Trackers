@@ -1325,7 +1325,7 @@ jobs:
 
 
         def build_telegram_message(sectors_data: list[dict]) -> str:
-            """Compact daily digest: one message instead of separate market/movers/funds sections."""
+            """Compact daily digest: market + fund movement + 2 headlines in one message."""
             now_str = datetime.now(ISRAEL_TZ).strftime("%d.%m.%Y | %H:%M")
             available = [
                 row for row in sectors_data
@@ -1339,6 +1339,22 @@ jobs:
             )[:3]
             top_funds = _ranked_funds(sectors_data)[:5]
 
+            def small_arrow(value: Optional[float]) -> str:
+                if value is None:
+                    return "→"
+                return "🟢↑" if float(value) > 0 else "🔴↓" if float(value) < 0 else "→"
+
+            def ticker_line(row: dict) -> str:
+                tickers = row.get("top_3_tickers") or []
+                if not tickers:
+                    return ""
+                parts = [
+                    f"{ticker} {format_percent(change, 1)}"
+                    for ticker, change in tickers[:3]
+                    if change is not None
+                ]
+                return "  " + " · ".join(parts) if parts else ""
+
             lines = [
                 "📡 <b>Market Radar AI</b>",
                 f"📅 {now_str} · Израиль 🇮🇱",
@@ -1349,11 +1365,11 @@ jobs:
             if top_market:
                 for row in top_market:
                     score = calculate_radar_score(row)
-                    base = "локал." if row.get("local_market") else format_percent(row.get("avg_change"), 1)
+                    base = "локальный рынок" if row.get("local_market") else f"рынок {format_percent(row.get('avg_change'), 1)}"
                     fund = format_percent(row.get("il_fund_data", {}).get("daily"), 1)
                     lines.append(
                         f"{row['icon']} <b>{escape_html(row['short_eng'])}</b>: "
-                        f"рынок {base} · фонд {fund} · Radar {_radar_score_emoji(score)}{score}/100"
+                        f"{base} · фонд {fund} · Radar {_radar_score_emoji(score)}{score}/100"
                     )
             else:
                 lines.append("Данных по рынку пока нет.")
@@ -1367,40 +1383,47 @@ jobs:
                         f"{escape_html(row['fund_id'])}"
                     )
                     fund_title = escape_html(FUND_LABELS.get(row['fund_id'], row['il_name_eng']))
+                    daily = fund.get("daily")
                     lines.append(
-                        f"{_fund_marker(fund)} {row['icon']} "
-                        f"<a href=\"{fund_url}\"><b>{fund_title}</b></a>: "
-                        f"день {format_percent(fund.get('daily'), 1)} · "
-                        f"мес {format_percent(fund.get('mtd'), 1)}"
+                        f"{small_arrow(daily)} {row['icon']} "
+                        f"<a href=\"{fund_url}\"><b>{fund_title}</b></a> "
+                        f"{format_percent(daily, 1)} · мес {format_percent(fund.get('mtd'), 1)}"
                     )
+                    drivers = ticker_line(row)
+                    if drivers:
+                        lines.append(escape_html(drivers))
             else:
                 lines.append("Израильские данные не получены.")
 
-            best_news = None
+            selected_news = []
+            seen_titles = set()
             for row in available:
                 for item in row.get("news", []):
-                    if isinstance(item, dict) and item.get("title"):
-                        best_news = item
+                    if not isinstance(item, dict) or not item.get("title"):
+                        continue
+                    key = str(item["title"]).strip().lower()
+                    if key in seen_titles:
+                        continue
+                    seen_titles.add(key)
+                    selected_news.append(item)
+                    if len(selected_news) >= 2:
                         break
-                if best_news:
+                if len(selected_news) >= 2:
                     break
 
-            lines.extend(["", "<b>Одна новость</b>"])
-            if best_news:
-                title = escape_html(best_news.get("title", ""))
-                link = str(best_news.get("url") or "")
-                if link.startswith(("https://", "http://")):
-                    safe_link = escape_html(link).replace('"', '&quot;')
-                    title = f'<a href="{safe_link}">{title}</a>'
-                lines.append(f"📰 {title}")
+            lines.append("")
+            if selected_news:
+                for item in selected_news:
+                    title = escape_html(item.get("title", ""))
+                    link = str(item.get("url") or "")
+                    if link.startswith(("https://", "http://")):
+                        safe_link = escape_html(link).replace('"', '&quot;')
+                        title = f'<a href="{safe_link}">{title}</a>'
+                    lines.append(f"📰 {title}")
             else:
                 lines.append("Свежих релевантных новостей не найдено.")
 
-            lines.extend([
-                "",
-                "<i>Не рекомендация. Используется как короткий радар для наблюдения.</i>",
-                BOT_NAME,
-            ])
+            lines.extend(["", BOT_NAME])
             return "\n".join(lines)
 
         def _radar_verdict(row: dict) -> tuple[str, str, str]:
@@ -2745,7 +2768,7 @@ jobs:
         from modules.config import BOT_NAME, HEADERS
 
         # Quantities transcribed from the latest supplied portfolio screenshot; update after trades.
-        # Source quotes are in agorot: quantity * quote / 100 = value in ILS.
+        # Israeli fund quotes are in agorot: quantity * quote / 100 = value in ILS.
         HOLDINGS = (
             ('5103692', 'Meitav Sky · акции', '733'),
             ('5132014', 'Ayalon · зелёная энергия Израиля', '754'),
@@ -2753,6 +2776,11 @@ jobs:
             ('5134135', 'MTF · металлы и минералы', '1322'),
             ('5137534', 'Eylim · AI', '442'),
             ('5140983', 'Ayalon · страхование', '251'),
+        )
+        # Direct US stock positions from the latest bank screenshot.
+        # Cost basis is in ILS: displayed market value minus displayed accumulated P/L.
+        STOCK_HOLDINGS = (
+            ('NVDA', 'NVIDIA CORP', '10', 'USD', '4910.63'),
         )
         # Acquisition basis inferred from the latest supplied bank screenshot:
         # displayed market value minus displayed accumulated P/L (rounded bank amounts).
@@ -2764,12 +2792,14 @@ jobs:
             '5134135': ('1322', '2296.98'),
             '5137534': ('442', '824.65'),
             '5140983': ('251', '405.29'),
+            'NVDA': ('10', '4910.63'),
         }
         STATE = Path('portfolio_snapshots.json')
         TZ = ZoneInfo('Asia/Jerusalem')
         LABELS = {'5103692': 'Meitav Sky', '5132014': 'Ayalon Green',
                   '5132303': 'Eylim Banks', '5134135': 'MTF Metals',
-                  '5137534': 'Eylim AI', '5140983': 'Ayalon Insurance'}
+                  '5137534': 'Eylim AI', '5140983': 'Ayalon Insurance',
+                  'NVDA': 'NVIDIA'}
 
 
         def parse_funder_portfolio(body, fund_id, today):
@@ -2986,7 +3016,7 @@ jobs:
                 lines.append('Главное изменение: день портфеля ' + signed_result(total_day['delta'], total_day['base']))
             else:
                 valued = sum(row.get('value') is not None for row in rows)
-                lines.append(f'Главное изменение: обновлены цены {valued}/{len(HOLDINGS)} позиций')
+                lines.append(f'Главное изменение: обновлены цены {valued}/{len(HOLDINGS) + len(STOCK_HOLDINGS)} позиций')
 
             if risk.get('breached'):
                 lines.append('Главный риск: докупки заблокированы моделью риска')
@@ -3005,6 +3035,81 @@ jobs:
             return lines
 
 
+        async def fetch_yahoo_chart(session, ticker, *, range_='10d', interval='1d'):
+            url = f'https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={range_}&interval={interval}'
+            try:
+                async with session.get(url, headers=HEADERS) as response:
+                    if response.status != 200:
+                        print(f'Yahoo {ticker}: HTTP {response.status}')
+                        return []
+                    data = await response.json()
+                results = data.get('chart', {}).get('result') or []
+                if not results:
+                    return []
+                chart = results[0]
+                timestamps = chart.get('timestamp') or []
+                quotes = chart.get('indicators', {}).get('quote') or []
+                closes = quotes[0].get('close') or [] if quotes else []
+                rows = []
+                for timestamp, close in zip(timestamps, closes):
+                    if timestamp is None or close is None:
+                        continue
+                    price = Decimal(str(close))
+                    if price.is_finite() and price > 0:
+                        rows.append({
+                            'date': datetime.fromtimestamp(int(timestamp), ZoneInfo('America/New_York')).date().isoformat(),
+                            'price': str(price),
+                        })
+                return rows
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, ArithmeticError, KeyError, TypeError) as error:
+                print(f'Yahoo {ticker}: {type(error).__name__}')
+                return []
+
+
+        async def fetch_stock_position(session, ticker, currency, today):
+            stock_history, fx_history = await asyncio.gather(
+                fetch_yahoo_chart(session, ticker),
+                fetch_yahoo_chart(session, f'{currency}ILS=X') if currency != 'ILS' else asyncio.sleep(0, result=[]),
+            )
+            if not stock_history:
+                return [], {}
+            fx_by_date = {row['date']: Decimal(row['price']) for row in fx_history}
+            if currency == 'ILS':
+                fx_by_date = {row['date']: Decimal('1') for row in stock_history}
+            converted = []
+            for row in stock_history:
+                day = row['date']
+                fx = fx_by_date.get(day)
+                if fx is None:
+                    prior_fx = [(d, v) for d, v in fx_by_date.items() if d <= day]
+                    if prior_fx:
+                        fx = sorted(prior_fx)[-1][1]
+                if fx is None:
+                    continue
+                price_ils = Decimal(row['price']) * fx
+                converted.append({'date': day, 'price': str(price_ils)})
+            points = valid_points(converted, today)
+            if not points:
+                return [], {}
+            last_day, last_price = points[-1]
+            quote = {'price': last_price, 'date': last_day, 'source': f'Yahoo {ticker}/{currency}ILS'}
+            return converted, quote
+
+
+        def daily_result_stock(points, price_day, price, quantity):
+            if not price_day or len(points) < 2:
+                return None
+            if points[-1][0] != price_day or Decimal(points[-1][1]) != price:
+                return None
+            old_day, old_price = points[-2]
+            if not 0 < (date.fromisoformat(price_day) - date.fromisoformat(old_day)).days <= 7:
+                return None
+            old_price = Decimal(old_price)
+            return {'delta': quantity * (price - old_price), 'base': quantity * old_price,
+                    'start': old_day, 'end': price_day}
+
+
+
         def build_report(histories, snapshots, now, quotes=None, contexts=None, journal=None, presentation=None):
             from html import escape
             from modules.portfolio_insights import (
@@ -3017,6 +3122,7 @@ jobs:
             previous_days = sorted(d for d in snapshots if d < today.isoformat())
             previous = snapshots[previous_days[-1]] if previous_days else {}
             analyses, position_values, current_snapshot, rows, daily_moves = {}, {}, {}, [], []
+            total_positions = len(HOLDINGS) + len(STOCK_HOLDINGS)
             total = cost_total = pnl_total = Decimal(0)
             cost_count = 0
             for fund_id, name, qty in HOLDINGS:
@@ -3068,20 +3174,53 @@ jobs:
                 analyses[fund_id] = analysis
                 row['analysis'] = analysis
 
+            for ticker, name, qty, currency, basis_ils in STOCK_HOLDINGS:
+                quantity = Decimal(qty)
+                points = valid_points(histories.get(ticker, []), today)
+                quote = quotes.get(ticker) or {}
+                row = {'id': ticker, 'name': LABELS.get(ticker, name), 'icon': 'N',
+                       'quantity': qty, 'value': None, 'decision': 'Цена акции пока недоступна'}
+                rows.append(row)
+                if not points and not quote:
+                    continue
+                price_day, raw_price = (quote.get('date'), quote['price']) if quote else points[-1]
+                price = Decimal(raw_price)
+                value = quantity * price
+                total += value
+                position_values[ticker] = float(value)
+                current_snapshot[ticker] = {
+                    'date': price_day, 'price': str(price * 100), 'quantity': qty,
+                    'purchase_cost': str(Decimal(basis_ils)),
+                }
+                row.update(price=price, date=price_day, value=value, source=quote.get('source', 'Yahoo'),
+                           asset_type='stock', cost=Decimal(basis_ils))
+                pnl = value - Decimal(basis_ils)
+                cost_total += Decimal(basis_ils)
+                pnl_total += pnl
+                cost_count += 1
+                row.update(pnl=pnl, pnl_pct=pnl / Decimal(basis_ils) * 100)
+                movement = daily_result_stock(points, price_day, price, quantity)
+                row['movement'] = movement
+                if movement:
+                    daily_moves.append(movement)
+                analysis = {'status': 'hold', 'line': 'Прямая акция: следить за весом позиции'}
+                analyses[ticker] = analysis
+                row['analysis'] = analysis
+
             lines = [now.strftime('💼 <b>МОЙ ПОРТФЕЛЬ</b>\n%d.%m · %H:%M · Израиль')]
             valued = len(current_snapshot)
             if not valued:
                 return '\n'.join(lines + ['⚠️ Цены фондов временно недоступны.',
                                           'Стоимость не рассчитана. Предыдущий снимок сохранён.', BOT_NAME]), {}, journal
-            label = 'Стоимость' if valued == len(HOLDINGS) else f'Стоимость {valued}/{len(HOLDINGS)}'
+            label = 'Стоимость' if valued == total_positions else f'Стоимость {valued}/{len(HOLDINGS)}'
             lines.append(f'\n<b>{label}: {money(total)} ₪</b>')
             if cost_count:
-                label = 'С покупки' if cost_count == len(HOLDINGS) else f'С покупки {cost_count}/{len(HOLDINGS)}'
+                label = 'С покупки' if cost_count == total_positions else f'С покупки {cost_count}/{len(HOLDINGS)}'
                 lines.append(f'{label}: {signed_result(pnl_total, cost_total)}')
-                lines.append(f'Вложено: {money(cost_total)} ₪' + ('' if cost_count == len(HOLDINGS) else ' · частично'))
+                lines.append(f'Вложено: {money(cost_total)} ₪' + ('' if cost_count == total_positions else ' · частично'))
             periods = {(m['start'], m['end']) for m in daily_moves}
             total_day = None
-            if len(daily_moves) == len(HOLDINGS) and len(periods) == 1:
+            if len(daily_moves) == total_positions and len(periods) == 1:
                 first, last = next(iter(periods))
                 total_day = {'start': first, 'end': last, 'delta': sum(m['delta'] for m in daily_moves),
                              'base': sum(m['base'] for m in daily_moves)}
@@ -3100,7 +3239,10 @@ jobs:
                     lines.extend(['', *card, row['decision'] + ' · в итог не включён'])
                     continue
                 day = date.fromisoformat(row['date']).strftime('%d.%m') if row.get('date') else 'дата не указана'
-                card.append(f'<b>{money(row["value"])} ₪</b> · {row["quantity"]} паёв × {money(row["price"])} аг.')
+                if row.get('asset_type') == 'stock':
+                    card.append(f'<b>{money(row["value"])} ₪</b> · {row["quantity"]} акций × {money(row["price"])} ₪')
+                else:
+                    card.append(f'<b>{money(row["value"])} ₪</b> · {row["quantity"]} паёв × {money(row["price"])} аг.')
                 if 'pnl' in row:
                     card.append('С покупки ' + signed_result(row['pnl'], row['cost']))
                 else:
@@ -3112,28 +3254,33 @@ jobs:
                 else:
                     card.append(f'Цена {day} · дневное изменение не подтверждено')
                 analysis = analyses[fid]
-                risk['active_signal_risk'] = active_risk
-                plan = trade_plan(fid, analysis, float(total), position_values[fid], risk)
-                plans[fid] = plan
                 status = analysis['status']
-                if status == 'add':
-                    if plan.get('allowed'):
-                        active_risk += RISK_PER_IDEA
-                        decision = f'Докупка по модели: до {plan["amount"]:.0f} ₪; отмена < {plan["cancel_price"]:.2f}'
-                    else:
-                        decision = (plan.get('line') or 'Докупка ограничена риском').removeprefix('⚠️ ')
-                elif status == 'reduce':
-                    decision = 'Устойчивое снижение: рассмотреть сокращение'
-                elif status == 'hold':
-                    decision = 'Тренд вверх; докупка не подтверждена'
-                elif status == 'wait':
-                    decision = 'Падение не остановилось; не докупать'
-                elif status == 'watch':
-                    decision = 'Ждать устойчивого роста фонда'
+                if row.get('asset_type') == 'stock':
+                    plan = {'allowed': False}
+                    plans[fid] = plan
+                    decision = 'Прямая акция: следить за весом позиции и USD/ILS'
                 else:
-                    decision = 'Сигнал отложен: нужны свежие данные'
-                    if row.get('source_conflict'):
-                        decision = 'Источники расходятся; сигнал отложен'
+                    risk['active_signal_risk'] = active_risk
+                    plan = trade_plan(fid, analysis, float(total), position_values[fid], risk)
+                    plans[fid] = plan
+                    if status == 'add':
+                        if plan.get('allowed'):
+                            active_risk += RISK_PER_IDEA
+                            decision = f'Докупка по модели: до {plan["amount"]:.0f} ₪; отмена < {plan["cancel_price"]:.2f}'
+                        else:
+                            decision = (plan.get('line') or 'Докупка ограничена риском').removeprefix('⚠️ ')
+                    elif status == 'reduce':
+                        decision = 'Устойчивое снижение: рассмотреть сокращение'
+                    elif status == 'hold':
+                        decision = 'Тренд вверх; докупка не подтверждена'
+                    elif status == 'wait':
+                        decision = 'Падение не остановилось; не докупать'
+                    elif status == 'watch':
+                        decision = 'Ждать устойчивого роста фонда'
+                    else:
+                        decision = 'Сигнал отложен: нужны свежие данные'
+                        if row.get('source_conflict'):
+                            decision = 'Источники расходятся; сигнал отложен'
                 row['decision'], row['status'] = decision, status
                 card.append(f'<i>{escape(decision)}</i>')
                 lines.extend(['', *card])
@@ -3151,7 +3298,7 @@ jobs:
                              if len(periods) > 1 else 'Дневное изменение подтверждено не по всем фондам.')
             lines.extend(['', *portfolio_briefing(rows, risk, total, total_day)])
             lines.extend(['', *notes, '', 'День — изменение цены на текущие паи. '
-                          'Паи и база покупки — по скриншоту 20.10; до налога.', BOT_NAME])
+                          'Паи/акции и база покупки — по последнему скриншоту; до налога.', BOT_NAME])
             if presentation is not None:
                 presentation.update(now=now, total=total, cost=cost_total, pnl=pnl_total,
                                     pnl_pct=pnl_total / cost_total * 100 if cost_total else None,
@@ -3189,8 +3336,14 @@ jobs:
                     fetch_portfolio_position(session, fid, limiter, denied, now.date())
                     for fid, _, _ in HOLDINGS
                 ])
+                stock_values = await asyncio.gather(*[
+                    fetch_stock_position(session, ticker, currency, now.date())
+                    for ticker, _, _, currency, _ in STOCK_HOLDINGS
+                ])
             histories = {holding[0]: result[0] for holding, result in zip(HOLDINGS, values)}
             quotes = {holding[0]: result[1] for holding, result in zip(HOLDINGS, values)}
+            histories.update({holding[0]: result[0] for holding, result in zip(STOCK_HOLDINGS, stock_values)})
+            quotes.update({holding[0]: result[1] for holding, result in zip(STOCK_HOLDINGS, stock_values)})
             from modules.portfolio_insights import collect_context
             async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
                 try:
