@@ -93,8 +93,6 @@ jobs:
         BOT_TOKEN = os.getenv("BOT_TOKEN")
         CHAT_ID = os.getenv("CHAT_ID")
         BOT_NAME = "Market Radar AI"
-        BOT_HANDLE = os.getenv("BOT_HANDLE", "@oil_tracker_pavel_bot")
-        BOT_TAGLINE = "US Markets · Israeli Funds · Portfolio Ideas"
         BOT_VERSION = "v3.8"
         HTTP_TIMEOUT = 15
 
@@ -1115,11 +1113,10 @@ jobs:
 
         cat << 'EOF' > modules/formatter.py
         from datetime import date, datetime
-        import textwrap
         from typing import Optional
         from zoneinfo import ZoneInfo
 
-        from modules.config import BOT_NAME, BOT_TAGLINE
+        from modules.config import BOT_NAME
 
         ISRAEL_TZ = ZoneInfo("Asia/Jerusalem")
         FUND_LABELS = {
@@ -1149,9 +1146,6 @@ jobs:
             return parsed.strftime("%d.%m")
 
 
-        def _fund_date(row: dict) -> str:
-            return str((row.get("il_fund_data", {}).get("price_stats") or {}).get("price_date") or "")
-
 
         def _ranked_funds(rows: list[dict]) -> list[dict]:
             available = [row for row in rows if row.get("il_fund_data", {}).get("daily") is not None]
@@ -1162,39 +1156,7 @@ jobs:
             )
 
 
-        def _directional_gaps(rows: list[dict], threshold: float = 1.5) -> list[tuple[float, dict]]:
-            gaps = []
-            for row in rows:
-                fund_change = row.get("il_fund_data", {}).get("daily")
-                base_change = row.get("avg_change")
-                base_date = row.get("base_date")
-                fund_date = _fund_date(row)
-                if (
-                    fund_change is None or base_change is None
-                    or not base_date or not fund_date or base_date != fund_date
-                ):
-                    continue
-                gap = float(fund_change) - float(base_change)
-                if abs(gap) >= threshold:
-                    gaps.append((gap, row))
-            return sorted(gaps, key=lambda item: abs(item[0]), reverse=True)
 
-
-        def _day_strength(change: Optional[float]) -> str:
-            if change is None:
-                return "⚪"
-            if float(change) > 0.0:
-                return "🟢"
-            if float(change) < 0.0:
-                return "🔴"
-            return "🟡"
-
-
-        def _fund_marker(fund_data: dict) -> str:
-            daily = fund_data.get("daily")
-            if daily is None:
-                return "⬜•"
-            return "🟩▲" if daily > 0 else "🟥▼" if daily < 0 else "🟨→"
 
 
         def _clamp(value: float, low: float, high: float) -> float:
@@ -1240,15 +1202,6 @@ jobs:
 
             return int(round(_clamp(score, 0, 100)))
 
-
-        def _radar_score_label(score: int) -> str:
-            if score >= 75:
-                return "🟢 сильный фокус"
-            if score >= 60:
-                return "🟡 наблюдать"
-            if score >= 40:
-                return "⚪ нейтрально"
-            return "🔴 слабый фон"
 
 
         def _radar_score_emoji(score: int) -> str:
@@ -1301,27 +1254,6 @@ jobs:
 
             return reasons[:4]
 
-
-        def data_quality_lines(rows: list[dict]) -> list[str]:
-            total = len(rows) or 1
-            yahoo = sum(row.get("avg_change") is not None for row in rows)
-            il_daily = sum(row.get("il_fund_data", {}).get("daily") is not None for row in rows)
-            history = sum(bool((row.get("il_fund_data", {}).get("price_stats") or {}).get("current_price")) for row in rows)
-            news = sum(bool(row.get("news")) for row in rows)
-            source_warnings = sum(
-                bool(row.get("il_fund_data", {}).get("errors"))
-                or bool(row.get("il_fund_data", {}).get("access_denied"))
-                for row in rows
-            )
-            lines = [
-                f"Yahoo/base: {yahoo}/{total}",
-                f"IL funds daily: {il_daily}/{total}",
-                f"История цен фондов: {history}/{total}",
-                f"Новости: {news}/{total}",
-            ]
-            if source_warnings:
-                lines.append(f"Предупреждения источников: {source_warnings}")
-            return lines
 
 
         def build_telegram_message(sectors_data: list[dict]) -> str:
@@ -2465,7 +2397,6 @@ jobs:
 
         ICONS = {'5103692': '📊', '5132014': '🌱', '5132303': '🏦',
                  '5134135': '⛏️', '5137534': '🤖', '5140983': '🛡️'}
-        HORIZON_MONTHS = 6
         MAX_DRAWDOWN = 10
         MAX_SIGNAL_AGE_DAYS = 4  # Conservative calendar-age gate; holidays may suppress signals.
         CONCENTRATION_LIMIT = 35  # Model policy; not the user's loss limit.
@@ -3491,13 +3422,6 @@ jobs:
             for fid in closed[:-100]:
                 del watches[fid]
 
-
-        def review_card(item):
-            label = 'итог' if item['stage'] == 30 else 'наблюдение'
-            fid = item['fund_id']
-            name = escape(shorten_title(item['name'],18))
-            return (f'<a href="https://funder.co.il/fund/{fid}">{name}</a> · {fid} · {label} {item["elapsed"]}д: '
-                    + item['line'])
 
 
         def canonical(text):
@@ -5215,8 +5139,8 @@ jobs:
         from modules.portfolio import fetch_portfolio_fund
         from modules.news import translate_to_russian, shorten_title
         from modules.telegram_sender import message_length
-        from modules.fund_news import (fetch_mentions, prepare_focus, focus_card, watch_jobs,
-                                       build_reviews, register_delivered, review_card)
+        from modules.fund_news import (fetch_mentions, prepare_focus, watch_jobs,
+                                       build_reviews, register_delivered)
         from modules.fund_sources import PublicFundSources
         from modules.fund_profile import describe_fund, short_conclusion
 
@@ -5626,21 +5550,6 @@ jobs:
                 pool = [lean_salary_event(item[1]) for item in selected]
             return sorted(pool, key=salary_pick_score, reverse=True)[:limit]
 
-
-        def salary_charts_caption(events):
-            if not events:
-                return ''
-            lines = ['<b>Графики кандидатов за 6 месяцев</b>']
-            for index, event in enumerate(events[:3], 1):
-                fid = str(event['fund_id'])
-                profile = describe_fund(event.get('name', ''))
-                name = profile['label'] if profile else shorten_title(event.get('name', 'Фонд'), 38)
-                url = f'https://www.bizportal.co.il/mutualfunds/quote/generalview/{escape(fid)}'
-                linked_name = f'<a href="{escape(url, quote=True)}">{escape(name)}</a>'
-                linked_id = f'<a href="{escape(url, quote=True)}">{escape(fid)}</a>'
-                lines.append(f'{index}. {linked_name} · {linked_id}')
-            lines.append('Период: последние 6 месяцев опубликованных цен.')
-            return '\n'.join(lines)
 
 
         def build_salary_candidates_message(prepared):
@@ -6586,12 +6495,10 @@ jobs:
         import unittest
         from datetime import datetime
         from decimal import Decimal
-        from io import BytesIO
         from unittest.mock import AsyncMock, patch
 
-        from PIL import Image
         from modules import portfolio
-        from modules.portfolio_card import portfolio_caption, render_portfolio_card
+        from modules.portfolio_card import portfolio_caption
         from modules.telegram_sender import message_length
 
 
