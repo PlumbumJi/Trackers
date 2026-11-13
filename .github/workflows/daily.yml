@@ -1903,7 +1903,8 @@ jobs:
                 raise RuntimeError("BOT_TOKEN or CHAT_ID is missing")
             charts = charts[:3]
             captions = [caption for _, caption in charts if caption.strip()]
-            album_caption = title + "\n\n" + "\n\n".join(captions)
+            parts = ([title] if title else []) + captions
+            album_caption = "\n\n".join(parts)
             from html import unescape
             visible = unescape(re.sub(r'<[^>]*>', '', album_caption)) if parse_mode == 'HTML' else album_caption
             if len(visible.encode("utf-16-le")) // 2 > 1024:
@@ -5615,8 +5616,6 @@ jobs:
             ]
             if profile:
                 lines.append('Факторы: ' + escape(profile['factors']) + '.')
-            conclusion = short_conclusion(event) if event.get('conclusion') else 'кандидат с лучшей проверенной динамикой по модели.'
-            lines.append('Почему в списке: ' + escape(conclusion))
             return '\n'.join(lines)
 
 
@@ -5675,9 +5674,6 @@ jobs:
             lines.extend(salary_candidate_card(event, index + 1) for index, event in enumerate(top))
             lines.extend([
                 '',
-                'К каждому кандидату бот отправляет график движения фонда за 6 месяцев.',
-                'Я бы выбирал один фонд с более понятной идеей и меньшим риском, а не делил сумму автоматически.',
-                '',
                 BOT_NAME,
             ])
             return '\n\n'.join(part for part in lines if part)
@@ -5696,22 +5692,24 @@ jobs:
                 if top_events:
                     print('\n[DRY_RUN] Salary charts: 6-month chart requested for ' + ', '.join(str(e['fund_id']) for e in top_events))
                 return
-            await send_to_telegram(message, chat_id=destination)
+            chart = None
             if top_events:
                 try:
                     chart = await build_mover_charts(
                         [(str(event['fund_id']), event, None) for event in top_events],
                         datetime.now(TZ).date(),
                     )
-                    if chart:
-                        await send_chart_photos(
-                            [(chart, salary_charts_caption(top_events))],
-                            chat_id=destination,
-                            title='📊 Market Radar AI · Графики salary-кандидатов',
-                            parse_mode='HTML',
-                        )
                 except Exception as error:
                     print(f'::warning::Salary chart unavailable: {type(error).__name__}; keeping text report')
+            if chart:
+                await send_chart_photos(
+                    [(chart, message)],
+                    chat_id=destination,
+                    title='',
+                    parse_mode='HTML',
+                )
+            else:
+                await send_to_telegram(message, chat_id=destination)
             state, _ = prepared
             if state and (state.get('last_scan') or {}).get('status') != 'unavailable':
                 register_delivered(state, datetime.now(TZ))
@@ -6473,8 +6471,12 @@ jobs:
 
 
         def render_portfolio_card(data):
-            width, height = 1200, 1640
-            fig = plt.figure(figsize=(12, 16.4), dpi=130, facecolor=BG)
+            width = 1200
+            rows_count = (len(data.get('rows', [])) + 1) // 2
+            card_top, card_h, card_gap = 340, 326, 20
+            footer_top = card_top + rows_count * (card_h + card_gap) + 36
+            height = max(1640, footer_top + 235)
+            fig = plt.figure(figsize=(12, height / 100), dpi=130, facecolor=BG)
             ax = fig.add_axes([0, 0, 1, 1])
             ax.set(xlim=(0, width), ylim=(height, 0))
             ax.axis('off')
@@ -6488,12 +6490,14 @@ jobs:
                 text(52, 34, 'МОЙ ПОРТФЕЛЬ', 20, MUTED, 'bold')
                 text(1148, 35, data['now'].strftime('%d.%m.%Y · %H:%M Израиль'), 15, MUTED, ha='right')
                 text(52, 88, f'{money(data["total"])} ₪', 49, INK, 'bold')
-                if data['valued'] < 6:
-                    text(54, 164, f'Частичная стоимость · {data["valued"]}/6 фондов', 16, AMBER)
+                total_items = len(data.get('rows', [])) or 1
+                portfolio_label = '6 фондов + 1 акция' if total_items == 7 else f'{total_items} позиций'
+                if data['valued'] < total_items:
+                    text(54, 164, f'Частичная стоимость · {data["valued"]}/{total_items} позиций', 16, AMBER)
                 else:
-                    text(54, 164, 'Текущая стоимость · 6 фондов', 16, MUTED)
+                    text(54, 164, f'Текущая стоимость · {portfolio_label}', 16, MUTED)
                 panel(52, 209, 1096, 107)
-                text(76, 227, 'С ПОКУПКИ' + ('' if data['cost_count'] == 6 else f' · {data["cost_count"]}/6'), 13, MUTED)
+                text(76, 227, 'С ПОКУПКИ' + ('' if data['cost_count'] == total_items else f' · {data["cost_count"]}/{total_items}'), 13, MUTED)
                 if data['pnl_pct'] is not None:
                     text(76, 256, f'{money(data["pnl"], True)} ₪  /  {money(data["pnl_pct"], True)}%',
                          23, result_color(data['pnl']), 'bold')
@@ -6501,7 +6505,7 @@ jobs:
                 text(1122, 256, f'{money(data["cost"])} ₪', 23, INK, ha='right')
 
                 for i, row in enumerate(data['rows']):
-                    x, y = 52 + (i % 2) * 560, 340 + (i // 2) * 346
+                    x, y = 52 + (i % 2) * 560, card_top + (i // 2) * (card_h + card_gap)
                     panel(x, y, 536, 326)
                     text(x + 22, y + 20, row['name'], 21, INK, 'bold')
                     text(x + 22, y + 54, row['id'], 13, MUTED)
@@ -6510,7 +6514,9 @@ jobs:
                         text(x + 22, y + 150, 'В итог не включён', 16, MUTED)
                         continue
                     text(x + 22, y + 91, f'{money(row["value"])} ₪', 28, INK, 'bold')
-                    text(x + 22, y + 135, f'{row["quantity"]} паёв × {money(row["price"])} аг.', 15, MUTED)
+                    unit = 'акций' if row.get('asset_type') == 'stock' else 'паёв'
+                    price_unit = '₪' if row.get('asset_type') == 'stock' else 'аг.'
+                    text(x + 22, y + 135, f'{row["quantity"]} {unit} × {money(row["price"])} {price_unit}', 15, MUTED)
                     if 'pnl' in row:
                         text(x + 22, y + 169, 'С покупки', 14, MUTED)
                         text(x + 510, y + 167, f'{money(row["pnl"], True)} ₪  ({money(row["pnl_pct"], True)}%)',
@@ -6532,17 +6538,18 @@ jobs:
                     text(x + 22, y + 253, '\n'.join(textwrap.wrap(row['decision'], width=38)), 14, decision_color)
 
                 # Dates stay visible per publication; stale returns are never today's returns.
-                y = 1390
+                y = footer_top
                 notes = [note.removeprefix('⚠️ ') for note in data['notes'] if note.startswith('⚠️')]
                 if notes:
                     panel(52, y, 1096, 62, '#263047')
                     text(76, y + 18, notes[0], 17, AMBER)
-                text(52, 1474, 'День — изменение цены на текущие паи; даты указаны в карточках.', 14, MUTED)
-                text(52, 1508, 'Разные даты публикаций не складываются в общий дневной результат.'
+                    y += 88
+                text(52, y, 'День — изменение цены на текущие паи/акции; даты указаны в карточках.', 14, MUTED)
+                text(52, y + 34, 'Разные даты публикаций не складываются в общий дневной результат.'
                      if data['daily'] is None else 'Дневные изменения рассчитаны за один и тот же период.', 14, MUTED)
-                text(52, 1542, 'Паи и база покупки — по скриншоту 20.10.2026 · до налога', 14, MUTED)
-                text(52, 1591, 'BIZPORTAL / FUNDER', 12, MUTED, 'bold')
-                text(1148, 1591, BOT_NAME, 13, MUTED, ha='right')
+                text(52, y + 68, 'Паи, акции и база покупки — по последнему скриншоту · до налога', 14, MUTED)
+                text(52, height - 52, 'BIZPORTAL / FUNDER / YAHOO', 12, MUTED, 'bold')
+                text(1148, height - 52, BOT_NAME, 13, MUTED, ha='right')
                 stream = BytesIO()
                 fig.savefig(stream, format='png', facecolor=BG, dpi=130)
                 return stream.getvalue()
@@ -6552,11 +6559,12 @@ jobs:
 
         def portfolio_caption(data):
             from modules.portfolio import signed_result
+            total_items = len(data.get('rows', [])) or 1
             lines = [data['now'].strftime('%d.%m · %H:%M · Израиль'),
-                     f'<b>{money(data["total"])} ₪</b>' + ('' if data['valued'] == 6 else f' · {data["valued"]}/6 фондов')]
+                     f'<b>{money(data["total"])} ₪</b>' + ('' if data['valued'] == total_items else f' · {data["valued"]}/{total_items} позиций')]
             if data['pnl_pct'] is not None:
                 lines.append('С покупки: ' + signed_result(data['pnl'], data['cost'])
-                             + ('' if data['cost_count'] == 6 else f' · {data["cost_count"]}/6'))
+                             + ('' if data['cost_count'] == total_items else f' · {data["cost_count"]}/{total_items}'))
             if data['daily']:
                 day = data['daily']
                 lines.append(f'День {date.fromisoformat(day["start"]):%d.%m}→{date.fromisoformat(day["end"]):%d.%m}: '
