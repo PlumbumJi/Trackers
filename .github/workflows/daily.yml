@@ -4352,7 +4352,7 @@ jobs:
                 self.assertIn('<b>Коротко по рынку</b>', text)
                 self.assertIn('<b>Фонды Израиля</b>', text)
                 self.assertNotIn('<b>Одна новость</b>', text)
-        self.assertLessEqual(text.count('📰'), 2)
+                self.assertLessEqual(text.count('📰'), 2)
                 self.assertNotIn('Г N/A', text)
                 from modules.config import BOT_NAME
                 self.assertTrue(text.rstrip().endswith(BOT_NAME))
