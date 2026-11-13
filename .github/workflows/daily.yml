@@ -4351,7 +4351,8 @@ jobs:
                 self.assertLessEqual(text.count('Тестовая новость'), 1)
                 self.assertIn('<b>Коротко по рынку</b>', text)
                 self.assertIn('<b>Фонды Израиля</b>', text)
-                self.assertIn('<b>Одна новость</b>', text)
+                self.assertNotIn('<b>Одна новость</b>', text)
+        self.assertLessEqual(text.count('📰'), 2)
                 self.assertNotIn('Г N/A', text)
                 from modules.config import BOT_NAME
                 self.assertTrue(text.rstrip().endswith(BOT_NAME))
@@ -4366,7 +4367,7 @@ jobs:
             def test_fund_analysis_uses_own_price_history_not_proxy_description(self):
                 text = formatter.build_telegram_message(self.rows())
                 self.assertIn('Barak WTI', text)
-                self.assertIn('день +1.0%', text)
+                self.assertIn('+1.0% · мес +2.0%', text)
                 self.assertNotIn('365д: мин', text)
                 self.assertNotIn('от пика', text)
                 self.assertNotIn('Ориентир', text)
@@ -4806,6 +4807,7 @@ jobs:
                 old_holdings = list(portfolio.HOLDINGS)
                 old_holdings[0] = (old_holdings[0][0], old_holdings[0][1], '674')
                 self.enterContext(patch.object(portfolio, 'HOLDINGS', old_holdings))
+                self.enterContext(patch.object(portfolio, 'STOCK_HOLDINGS', ()))
                 self.enterContext(patch.dict(portfolio.PURCHASE_BASIS, {'5103692': ('674', '6774.37')}))
                 self.now = datetime(2026, 10, 5, 8, 20, tzinfo=portfolio.TZ)
                 self.prices = ['1011.87', '118.05', '378.23', '168.49', '205.12', '189.95']
